@@ -42,6 +42,8 @@ When a legacy positional app disagrees with `--app` or `MIREN_APP`, `app delete`
 
 All app-centric commands follow the same [deployment target selection rules](./deployment.md#deployment-targets). `-C` and `MIREN_CLUSTER` select a target when `deploy.toml` exists. Target order no longer supplies a default, and per-app pins in `app-state.toml` are ignored but not deleted.
 
+If `-a`, `MIREN_APP`, or a legacy positional app names a different app from the directory's `app.toml`, the command ignores that directory's deploy targets. `-C` then names a configured cluster or direct address, and ordinary app commands may use the global active cluster. Explicitly naming the directory's own app keeps its target selection rules.
+
 Without targets, other app commands may use the global active cluster. Deploy requires explicit selection, a sole configured cluster, or a picker; ambiguous unattended deploys fail rather than silently using the global active cluster. `cluster switch` changes only the global active cluster.
 
 With no configured clusters, cluster-backed commands explain how to run `miren cluster add` rather than implicitly dialing the default local development address. For direct-address development without client configuration, pass `--server-address 127.0.0.1:8443` explicitly. This does not bypass an invalid or ambiguous deployment-target selection. JSON deploy modes require an unambiguous selection and never open a picker, even on a terminal.

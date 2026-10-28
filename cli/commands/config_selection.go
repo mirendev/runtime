@@ -36,9 +36,14 @@ func pickCluster(names []string, useSole, interactive bool) (string, error) {
 }
 
 func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string, error) {
-	dc, err := appconfig.LoadDeployConfigUnder(a.ResolvedDir())
-	if err != nil {
-		return "", fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
+	var dc *appconfig.DeployConfig
+	// A directory's targets belong to its app, not another explicitly named app.
+	if a.config == nil || a.App == a.config.Name {
+		var err error
+		dc, err = appconfig.LoadDeployConfigUnder(a.ResolvedDir())
+		if err != nil {
+			return "", fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
+		}
 	}
 	if dc == nil {
 		if targetName != "" {

@@ -3,14 +3,18 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -70,6 +74,67 @@ func TestAppClusterSelection(t *testing.T) {
 	_, name, err = clusterWide.LoadCluster()
 	require.NoError(t, err)
 	require.Equal(t, "prod", name, "cluster-wide selection ignores deploy targets")
+}
+
+func TestExplicitOtherAppIgnoresLocalTargets(t *testing.T) {
+	t.Setenv("CI", "1")
+	t.Setenv("MIREN_APP", "")
+	t.Setenv("MIREN_CLUSTER", "")
+	t.Setenv("MIREN_RUNTIME_APP", "")
+	dir := t.TempDir()
+	writeAppToml(t, dir, `name = "local-app"`)
+	writeDeployToml(t, dir, "[[targets]]\nname = 'dev'\ncluster = 'staging'\n")
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"), rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(&rfdCrudRPC{}))
+	server.Server().ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(&rfdDeploymentRPC{}))
+	server.Server().ExposeValue(rpcAppStatus, app_v1alpha.AdaptAppStatus(&rfdOutputRPC{}))
+	cfg := clientconfig.NewConfig()
+	for _, name := range []string{"staging", "dev", "outside"} {
+		cfg.SetCluster(name, &clientconfig.ClusterConfig{Hostname: server.ListenAddr(), Insecure: true})
+	}
+	require.NoError(t, cfg.SetActiveCluster("outside"))
+	path := filepath.Join(t.TempDir(), "clientconfig.yaml")
+	require.NoError(t, cfg.SaveTo(path))
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  string
+		want string
+	}{
+		{name: "implicit local app", want: "staging"},
+		{name: "explicit local app", args: []string{"-a", "local-app"}, want: "staging"},
+		{name: "other app uses active cluster", args: []string{"-a", "other-app"}, want: "outside"},
+		{name: "other app accepts unrelated cluster", args: []string{"-a", "other-app", "-C", "outside"}, want: "outside"},
+		{name: "other app uses cluster not target name", args: []string{"-a", "other-app", "-C", "dev"}, want: "dev"},
+		{name: "environment selects other app", env: "other-app", want: "outside"},
+		{name: "flag overrides environment", args: []string{"-a", "local-app"}, env: "other-app", want: "staging"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MIREN_APP", tc.env)
+			cmd := Infer("app status", "test", AppStatus)
+			require.NoError(t, cmd.fs.Parse(append([]string{"--config", path, "-d", dir, "--json"}, tc.args...)))
+			output := captureOutputJSON(t, func() { require.NoError(t, cmd.Invoke()) })
+			var status struct {
+				Cluster string `json:"cluster"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(output), &status))
+			require.Equal(t, tc.want, status.Cluster)
+		})
+	}
+
+	writeDeployToml(t, dir, "invalid toml =")
+	cmd := Infer("app status", "test", AppStatus)
+	require.NoError(t, cmd.fs.Parse([]string{"--config", filepath.Join(t.TempDir(), "missing"), "-d", dir, "-a", "other-app", "--server-address", server.ListenAddr(), "--json"}))
+	output := captureOutputJSON(t, func() {
+		require.NoError(t, cmd.Invoke(), "another app's deploy config must not be read, even with a direct server address")
+	})
+	var status struct {
+		App string `json:"app"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output), &status))
+	require.Equal(t, "other-app", status.App)
 }
 
 func TestDeployWithoutTargetsSelection(t *testing.T) {
@@ -186,12 +251,20 @@ func TestAppClusterSelectionFromParent(t *testing.T) {
 	chdir(t, subdir)
 	cfg := clientconfig.NewConfig()
 	cfg.SetCluster("staging", &clientconfig.ClusterConfig{})
+	cfg.SetCluster("outside", &clientconfig.ClusterConfig{})
+	require.NoError(t, cfg.SetActiveCluster("outside"))
 	app := AppCentric{Dir: ".", ConfigCentric: ConfigCentric{cfg: cfg}}
 	require.NoError(t, app.Validate(&GlobalFlags{}))
 	_, name, err := app.LoadCluster()
 	require.NoError(t, err)
 	require.Equal(t, "staging", name)
 	require.Equal(t, dir, app.ResolvedDir())
+
+	app.App = "other-app"
+	require.NoError(t, app.Validate(&GlobalFlags{}))
+	_, name, err = app.LoadCluster()
+	require.NoError(t, err)
+	require.Equal(t, "outside", name, "another app ignores targets found in a parent directory")
 }
 
 func TestTargetSetDefaultWarning(t *testing.T) {

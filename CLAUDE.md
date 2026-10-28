@@ -295,6 +295,10 @@ optional Cloud-name/xid lookup recommendations as though they already exist.
   `-C`, then `MIREN_CLUSTER`. Otherwise use the sole target, or prompt/error when
   several exist. Target order is never a default. Apply the same selection rules
   to deploy, status, logs, and other app-centric commands.
+- When an explicitly selected app differs from the directory's `app.toml` name,
+  ignore that directory's deploy targets and use ordinary cluster selection.
+  This applies to `-a`, `MIREN_APP`, and legacy positional app selectors. Naming
+  the directory's own app explicitly still uses its targets.
 - Cluster-wide commands ignore deploy targets. Without deploy targets, resolve
   `-C`, then `MIREN_CLUSTER`, then the global active cluster. If nothing selects
   a cluster, offer a picker on a terminal or require `-C` otherwise. With no

@@ -102,6 +102,8 @@ cluster_id = "cluster-def456"
 
 All app-centric commands use these targets, including `deploy`, `logs`, `app status`, and `env`. With one target, Miren selects it automatically. With several, choose a target with `-C` or `MIREN_CLUSTER`; an interactive terminal offers a picker when neither is set. Scripts fail with an actionable error rather than choosing the first target.
 
+These targets belong to the app named in the directory's `app.toml`. If you select a different app with `-a`, `MIREN_APP`, or a legacy positional argument, the command ignores the directory's targets and uses normal cluster selection instead. For example, `miren logs -a otherapp -C another-cluster` can read another app's logs without adding that cluster as a target of the local app. Explicitly selecting the local app still uses its targets.
+
 For example, select production for this invocation:
 
 <CliCommand context="client">
