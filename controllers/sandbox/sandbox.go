@@ -1864,7 +1864,7 @@ func (c *SandboxController) BuildSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.ensureImage(ctx, sb, meta.ShortId(), sandboxImage)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), sandboxImage, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2222,12 +2222,13 @@ func (c *SandboxController) BootContainers(
 	cgroups map[string]string,
 	meta *entity.Meta,
 	volumeMounts map[string]string,
-) ([]WaitPort, error) {
+) ([]WaitPort, []ContainerStartupTiming, error) {
 	c.Log.Info("booting containers", "count", len(sb.Spec.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	var ret []WaitPort
+	var timings []ContainerStartupTiming
 	var createdContainers []containerd.Container
 
 	// Clean up any created containers on failure
@@ -2242,10 +2243,15 @@ func (c *SandboxController) BootContainers(
 	c.registerSandboxDNS(ctx, sb, ep, meta)
 
 	for _, container := range sb.Spec.Container {
-		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts)
+		timings = append(timings, ContainerStartupTiming{
+			Name: container.Name, Image: container.Image,
+			DurationsNS: make(map[string]time.Duration),
+		})
+		timing := &timings[len(timings)-1]
+		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts, timing)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, fmt.Errorf("failed to build container spec: %w", err)
+			return nil, timings, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
 		id := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
@@ -2255,17 +2261,19 @@ func (c *SandboxController) BootContainers(
 
 		c.Log.Info("creating container", "id", id)
 
+		start := time.Now()
 		cc, err := c.CC.NewContainer(ctx, id, opts...)
+		timing.DurationsNS["container_create"] = time.Since(start)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, errors.Wrapf(err, "failed to create container %s", sb.ID)
+			return nil, timings, errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
 		createdContainers = append(createdContainers, cc)
 
 		spec, err := cc.Spec(ctx)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, fmt.Errorf("failed to get container spec: %w", err)
+			return nil, timings, fmt.Errorf("failed to get container spec: %w", err)
 		}
 
 		cgroups[container.Name] = spec.Linux.CgroupsPath
@@ -2296,18 +2304,22 @@ func (c *SandboxController) BootContainers(
 			cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
 		}
 
+		start = time.Now()
 		task, err := cc.NewTask(ctx, cio.NewCreator(cioOpts...))
+		timing.DurationsNS["task_create"] = time.Since(start)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, err
+			return nil, timings, err
 		}
 
+		start = time.Now()
 		err = task.Start(ctx)
+		timing.DurationsNS["task_start"] = time.Since(start)
 		if err != nil {
 			// Try to delete the task first if it was created but not started
 			task.Delete(ctx, containerd.WithProcessKill)
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, err
+			return nil, timings, err
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
@@ -2335,7 +2347,7 @@ func (c *SandboxController) BootContainers(
 		}
 	}
 
-	return ret, nil
+	return ret, timings, nil
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {
@@ -2355,11 +2367,12 @@ func (c *SandboxController) buildSubContainerSpec(
 	sbPid int,
 	meta *entity.Meta,
 	volumeMounts map[string]string,
+	timing *ContainerStartupTiming,
 ) (
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.ensureImage(ctx, sb, meta.ShortId(), co.Image)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), co.Image, timing)
 	if err != nil {
 		return nil, err
 	}

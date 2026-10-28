@@ -208,10 +208,14 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 	registry := NewRegistry()
 
 	ctrl := &testController{failMultiply: true}
+	failWithEvidence := func(ctx context.Context, in MultiplyIn) (MultiplyOut, error) {
+		_, err := Multiply(ctx, in)
+		return MultiplyOut{Result: 17}, err
+	}
 	err := Define("calc-fail").
 		Using(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
-		Action("multiply", Multiply).Undo(UndoMultiply).
+		Action("multiply", failWithEvidence).Undo(UndoMultiply).
 		RegisterTo(registry)
 	require.NoError(t, err)
 
@@ -237,13 +241,20 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 	assert.Len(t, ctrl.undoAddCalls, 1)
 	assert.Equal(t, AddNumbersOut{Sum: 5}, ctrl.undoAddCalls[0])
 
-	// Multiply doesn't produce output on failure, so no undo
+	// Diagnostic output must not make a failed action eligible for undo.
 	assert.Empty(t, ctrl.undoMultCalls)
 
 	// Verify final state
 	exec, err := storage.Get(ctx, "test-exec-2")
 	require.NoError(t, err)
 	assert.Equal(t, StatusFailed, exec.Status)
+	var evidence MultiplyOut
+	require.NoError(t, json.Unmarshal(exec.ExecutedActions["multiply"].Output, &evidence))
+	assert.Equal(t, 17, evidence.Result)
+	// Re-entry must retain evidence and not retry failed work or its undo.
+	require.Error(t, executor.Start("calc-fail").WithID(exec.ID).Execute(ctx))
+	assert.Len(t, ctrl.multiplyCalls, 1)
+	assert.Empty(t, ctrl.undoMultCalls)
 }
 
 func TestExecutor_ActionCancellationStillCompensates(t *testing.T) {
@@ -1066,6 +1077,7 @@ func TestExecutor_RecoveryAfterActionFailure(t *testing.T) {
 				ExecutedAt: time.Now(),
 			},
 			"multiply": {
+				Output:     []byte(`{"Result":17}`),
 				ExecutedAt: time.Now(),
 				Error:      "multiply failed",
 			},
@@ -1088,12 +1100,43 @@ func TestExecutor_RecoveryAfterActionFailure(t *testing.T) {
 	assert.Equal(t, StatusFailed, exec.Status,
 		"Saga with failed action should be Failed after recovery, not %s", exec.Status)
 	assert.Len(t, ctrl.undoAddCalls, 1, "add should have been undone during recovery")
+	assert.Empty(t, ctrl.undoMultCalls, "diagnostic output must not trigger undo during recovery")
+	assert.JSONEq(t, `{"Result":17}`, string(exec.ExecutedActions["multiply"].Output))
 }
 
 // UnserializableOut contains a channel which json.Marshal cannot serialize.
 type UnserializableOut struct {
 	Value int
 	Ch    chan int // channels can't be serialized
+}
+
+func TestExecutor_FailedDiagnosticSerialization(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	cause := errors.New("operation failed")
+	failedUndo := false
+	err := Define("failed-diagnostic").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("fail", func(context.Context, MultiplyIn) (UnserializableOut, error) {
+			return UnserializableOut{Ch: make(chan int)}, cause
+		}).Undo(func(context.Context, MultiplyIn, UnserializableOut) error {
+		failedUndo = true
+		return nil
+	}).RegisterTo(registry)
+	require.NoError(t, err)
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Start("failed-diagnostic").WithID("diagnostic").
+		Input("a", 2).Input("b", 3).Input("factor", 4).Execute(context.Background())
+	require.ErrorIs(t, err, cause)
+	exec, err := storage.Get(context.Background(), "diagnostic")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status)
+	assert.Equal(t, cause.Error(), exec.ExecutedActions["fail"].Error)
+	assert.Empty(t, exec.ExecutedActions["fail"].Output)
+	assert.False(t, failedUndo)
+	assert.Equal(t, []AddNumbersOut{{Sum: 5}}, ctrl.undoAddCalls)
 }
 
 type unserializableController struct {

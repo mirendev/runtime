@@ -98,10 +98,14 @@ func TestEnsureImageEmitsPullFailure(t *testing.T) {
 
 	const ref = "127.0.0.1:1/nope:latest"
 	ctx = namespaces.WithNamespace(ctx, co.Namespace)
-	img, err := co.ensureImage(ctx, sb, "abc123", ref)
+	timing := ContainerStartupTiming{DurationsNS: make(map[string]time.Duration)}
+	img, err := co.ensureImage(ctx, sb, "abc123", ref, &timing)
 	r.Error(err)
 	r.Nil(img)
 	assert.Contains(t, err.Error(), "failed to pull image "+ref)
+	assert.Equal(t, "miss", timing.ImageCache)
+	assert.Positive(t, timing.DurationsNS["image_lookup"])
+	assert.Positive(t, timing.DurationsNS["image_pull_unpack"])
 
 	r.Len(lw.entries, 1)
 	got := lw.entries[0]
@@ -119,10 +123,14 @@ func TestEnsureImageEmitsPullFailure(t *testing.T) {
 	// written.
 	cancelledCtx, cancelNow := context.WithCancel(ctx)
 	cancelNow()
-	img, err = co.ensureImage(cancelledCtx, sb, "abc123", ref)
+	timing = ContainerStartupTiming{DurationsNS: make(map[string]time.Duration)}
+	img, err = co.ensureImage(cancelledCtx, sb, "abc123", ref, &timing)
 	r.Error(err)
 	r.Nil(img)
 	assert.Contains(t, err.Error(), "failed to get image "+ref)
 	assert.NotContains(t, err.Error(), "failed to pull image")
 	assert.Len(t, lw.entries, 1, "cancelled lookup must not add a log entry")
+	assert.Empty(t, timing.ImageCache)
+	assert.Positive(t, timing.DurationsNS["image_lookup"])
+	assert.NotContains(t, timing.DurationsNS, "image_pull_unpack")
 }

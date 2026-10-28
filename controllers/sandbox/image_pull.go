@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
@@ -23,8 +24,18 @@ import (
 // this the reason lives only in that node's journal: the sandbox is marked
 // DEAD, the pool crash-loops, and `miren logs` shows nothing because no
 // container ever produced output (MIR-1541).
-func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox, shortID, ref string) (containerd.Image, error) {
+func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox, shortID, ref string, timing *ContainerStartupTiming) (containerd.Image, error) {
+	start := time.Now()
 	img, err := c.CC.GetImage(ctx, ref)
+	if timing != nil {
+		timing.DurationsNS["image_lookup"] = time.Since(start)
+		switch {
+		case err == nil:
+			timing.ImageCache = "hit"
+		case errdefs.IsNotFound(err):
+			timing.ImageCache = "miss"
+		}
+	}
 	if err == nil {
 		return c.logImageReady(ctx, img)
 	}
@@ -35,7 +46,11 @@ func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox
 		return nil, fmt.Errorf("failed to get image %s: %w", ref, err)
 	}
 
+	start = time.Now()
 	_, err = containerdx.PullImage(ctx, c.Log, c.CC, ref, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
+	if timing != nil {
+		timing.DurationsNS["image_pull_unpack"] = time.Since(start)
+	}
 	if err != nil {
 		// A cancelled context means we were superseded or are shutting down,
 		// not that the pull failed. Skip the event so the app's logs don't
@@ -47,7 +62,11 @@ func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox
 		return nil, fmt.Errorf("failed to pull image %s: %w", ref, err)
 	}
 
+	start = time.Now()
 	img, err = c.CC.GetImage(ctx, ref)
+	if timing != nil {
+		timing.DurationsNS["image_lookup"] += time.Since(start)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get image %s: %w", ref, err)
 	}

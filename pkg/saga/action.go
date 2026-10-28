@@ -12,6 +12,8 @@ import (
 type Action interface {
 	// Execute performs the action and returns an output that can be used
 	// by subsequent actions. The output must be JSON-serializable.
+	// On error, output is retained only for diagnostics; it supplies no inputs
+	// and Undo is not called. Failed actions must clean up their own work.
 	Execute(ctx context.Context, inputs ActionInputs) (output any, err error)
 
 	// Undo reverses the action. It receives the same inputs and the output
