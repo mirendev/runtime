@@ -36,14 +36,25 @@ func CheckDeployAllowed(dir string) (string, error) {
 	}
 
 	// Validate appconfig syntax if present
-	_, err = appconfig.LoadAppConfigUnder(absDir)
+	ac, err := appconfig.LoadAppConfigUnder(absDir)
 	if err != nil {
 		return fmt.Sprintf("Fix the configuration error in %s.", appconfig.AppConfigPath),
 			fmt.Errorf("invalid app configuration: %w", err)
 	}
 
+	sourceDir := ac.SourceDir(absDir)
+	if sourceDir != absDir {
+		info, err := os.Stat(sourceDir)
+		if err != nil {
+			return "Check build.source_root in .miren/app.toml.", fmt.Errorf("failed to access source root %s: %w", sourceDir, err)
+		}
+		if !info.IsDir() {
+			return "Set build.source_root to a directory.", fmt.Errorf("source root is not a directory: %s", sourceDir)
+		}
+	}
+
 	// Validate Procfile syntax if present
-	procfilePath := filepath.Join(absDir, "Procfile")
+	procfilePath := filepath.Join(sourceDir, "Procfile")
 	_, err = tasks.ParseFile(procfilePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "Fix the syntax error in Procfile.",

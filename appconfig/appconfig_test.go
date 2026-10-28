@@ -1,14 +1,144 @@
 package appconfig
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/tarx"
 )
+
+func TestSourceRoot(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "services", "api")
+	for _, tc := range []struct {
+		root string
+		want string
+	}{
+		{"", configDir},
+		{".", configDir},
+		{"../..", dir},
+		{"src", filepath.Join(configDir, "src")},
+		{dir, dir},
+	} {
+		t.Run(tc.root, func(t *testing.T) {
+			ac, err := Parse([]byte("[build]\nsource_root = " + strconv.Quote(tc.root)))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ac.SourceDir(configDir))
+			if tc.want == configDir {
+				require.Empty(t, ac.UploadFiles(configDir))
+			}
+		})
+	}
+	var absent *AppConfig
+	require.Equal(t, configDir, absent.SourceDir(configDir))
+	require.Empty(t, absent.UploadFiles(configDir))
+}
+
+func TestSourceRootUploads(t *testing.T) {
+	for _, layout := range []string{"with default", "without default", "gitignored", "included"} {
+		t.Run(layout, func(t *testing.T) {
+			dir := t.TempDir()
+			files := map[string]string{
+				"main.go":                         "package main\n",
+				"services/api/.miren/app.toml":    "name = 'api-app'\n[build]\nsource_root = '../..'\n",
+				"services/worker/.miren/app.toml": "name = 'background-worker'\n[build]\nsource_root = '../..'\n",
+			}
+			if layout != "without default" {
+				files[".miren/app.toml"] = "name = 'default-app'\n"
+			}
+			if layout == "gitignored" {
+				files[".gitignore"] = ".miren/\n"
+			}
+			var include []string
+			if layout == "included" {
+				include = []string{"main.go"}
+			}
+			for name, body := range files {
+				path := filepath.Join(dir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+				require.NoError(t, os.WriteFile(path, []byte(body), 0644))
+			}
+			for _, app := range []string{"api", "worker"} {
+				configDir := filepath.Join(dir, "services", app)
+				ac, err := LoadAppConfigUnder(configDir)
+				require.NoError(t, err)
+				want := files["services/"+app+"/.miren/app.toml"]
+				manifest, err := tarx.ComputeManifest(ac.SourceDir(configDir), include, ac.UploadFiles(configDir)...)
+				require.NoError(t, err)
+				count := 0
+				for _, entry := range manifest {
+					if entry.Path == ".miren/app.toml" {
+						count++
+						hash := sha256.Sum256([]byte(want))
+						require.Equal(t, hex.EncodeToString(hash[:]), entry.Hash)
+						require.Equal(t, int64(len(want)), entry.Size)
+						require.Equal(t, int32(0644), entry.Mode)
+					}
+				}
+				require.Equal(t, 1, count, "manifest must replace, not duplicate, the default config")
+				for _, mode := range []string{"full", "delta config", "cached config"} {
+					var written atomic.Int64
+					var archive io.ReadCloser
+					if mode == "full" {
+						archive, err = tarx.MakeTar(ac.SourceDir(configDir), include, &written, ac.UploadFiles(configDir)...)
+					} else {
+						needed := map[string]bool{".miren/app.toml": mode == "delta config", "main.go": mode == "cached config"}
+						archive, err = tarx.MakeFilteredTar(ac.SourceDir(configDir), include, needed, &written, ac.UploadFiles(configDir)...)
+					}
+					require.NoError(t, err)
+					gz, err := gzip.NewReader(archive)
+					require.NoError(t, err)
+					tr := tar.NewReader(gz)
+					entries := make(map[string]string)
+					var totalBytes int64
+					for {
+						header, err := tr.Next()
+						if err == io.EOF {
+							break
+						}
+						require.NoError(t, err)
+						if header.Typeflag != tar.TypeReg {
+							continue
+						}
+						body, err := io.ReadAll(tr)
+						require.NoError(t, err)
+						require.NotContains(t, entries, header.Name, "archive must not contain duplicate files")
+						entries[header.Name] = string(body)
+						totalBytes += int64(len(body))
+					}
+					require.NoError(t, gz.Close())
+					require.NoError(t, archive.Close())
+					require.Equal(t, totalBytes, written.Load())
+					if mode == "cached config" {
+						require.Equal(t, map[string]string{"main.go": files["main.go"]}, entries)
+					} else {
+						require.Equal(t, want, entries[".miren/app.toml"])
+						if mode == "delta config" {
+							require.Len(t, entries, 1)
+						} else {
+							require.Equal(t, files["main.go"], entries["main.go"])
+						}
+					}
+				}
+			}
+			for name, want := range files {
+				body, err := os.ReadFile(filepath.Join(dir, name))
+				require.NoError(t, err)
+				require.Equal(t, want, string(body), "upload must not modify %s", name)
+			}
+		})
+	}
+}
 
 func TestCloneAddonsConfig(t *testing.T) {
 	for _, tc := range []struct {

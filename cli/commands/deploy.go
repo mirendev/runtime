@@ -311,7 +311,7 @@ func jsonlExitError(deployErr, streamErr error) error {
 // app is routable) so the caller can report a partial result on failure.
 func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, events *deployEventStream) error {
 	name := opts.App
-	dir := opts.ResolvedDir()
+	configDir := opts.ResolvedDir()
 
 	// A nil *deployEventStream must not become a non-nil interface.
 	var healthObs healthObserver
@@ -409,7 +409,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		}
 
 		bc := build_v1alpha.NewBuilderClient(cl)
-		return analyzeApp(ctx, bc, dir)
+		return analyzeApp(ctx, bc, configDir)
 	}
 
 	// Handle --version flag: deploy an existing version (skip build)
@@ -524,6 +524,12 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		return nil
 	}
 
+	ac, err := appconfig.LoadAppConfigUnder(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to load app config: %w", err)
+	}
+	dir := ac.SourceDir(configDir)
+
 	// Set up OTel tracing via the server's telemetry proxy.
 	// Spans are shipped through the existing RPC connection — no client-side
 	// OTLP config needed. If the server isn't reachable, tracing is a no-op.
@@ -561,7 +567,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	needsConfirm := opts.foundInParent || !hasSingleCluster
 	if !opts.Force && isInteractive && needsConfirm {
 		if opts.foundInParent {
-			ctx.Printf("  ℹ App config found in parent directory %s\n", dir)
+			ctx.Printf("  ℹ App config found in parent directory %s\n", configDir)
 		}
 		message := fmt.Sprintf("Deploy app '%s' to cluster '%s'?", name, ctx.ClusterName)
 		confirmed, err := ui.Confirm(
@@ -600,7 +606,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	serverOwnsDeployment := ephemeralLabel == "" && cl.HasMethodParam(ctx.Context, "buildFromTar", "deployment")
 
 	// Check if deployment is allowed before proceeding
-	remedy, err := deploygating.CheckDeployAllowed(dir)
+	remedy, err := deploygating.CheckDeployAllowed(configDir)
 	if err != nil {
 		if remedy != "" {
 			ctx.Printf("Error: %s\n%s\n\n", err, remedy)
@@ -947,11 +953,6 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 
 	// Load AppConfig to get include patterns
 	var includePatterns []string
-	ac, err := appconfig.LoadAppConfigUnder(dir)
-	if err != nil {
-		updateDeploymentOnError(fmt.Sprintf("Failed to load app config: %v", err))
-		return err
-	}
 	if ac != nil && ac.Include != nil {
 		// Validate patterns before using them
 		for _, pattern := range ac.Include {
@@ -978,7 +979,8 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		neededPaths  map[string]bool
 	)
 
-	manifest, manifestErr := tarx.ComputeManifest(dir, includePatterns)
+	uploadFiles := ac.UploadFiles(configDir)
+	manifest, manifestErr := tarx.ComputeManifest(dir, includePatterns, uploadFiles...)
 	if manifestErr == nil {
 		totalFiles = len(manifest)
 
@@ -1036,11 +1038,11 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	var uncompressedWritten atomic.Int64
 	var r io.ReadCloser
 	if useOptimized && len(neededPaths) > 0 {
-		r, err = tarx.MakeFilteredTar(dir, includePatterns, neededPaths, &uncompressedWritten)
+		r, err = tarx.MakeFilteredTar(dir, includePatterns, neededPaths, &uncompressedWritten, uploadFiles...)
 	} else if useOptimized {
 		r = tarx.MakeEmptyTar()
 	} else {
-		r, err = tarx.MakeTar(dir, includePatterns, &uncompressedWritten)
+		r, err = tarx.MakeTar(dir, includePatterns, &uncompressedWritten, uploadFiles...)
 	}
 	if err != nil {
 		uploadSpan.RecordError(err)
@@ -2242,7 +2244,9 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		includePatterns = ac.Include
 	}
 
-	r, err := tarx.MakeTar(dir, includePatterns, nil)
+	configDir := dir
+	dir = ac.SourceDir(configDir)
+	r, err := tarx.MakeTar(dir, includePatterns, nil, ac.UploadFiles(configDir)...)
 	if err != nil {
 		return fmt.Errorf("failed to create tar: %w", err)
 	}
