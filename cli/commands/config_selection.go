@@ -37,8 +37,9 @@ func pickCluster(names []string, useSole, interactive bool) (string, error) {
 
 func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string, error) {
 	var dc *appconfig.DeployConfig
-	// A directory's targets belong to its app, not another explicitly named app.
-	if a.config == nil || a.App == a.config.Name {
+	// Deploy ships this directory's source even when the destination app differs.
+	// Other app commands can leave its targets only when its app is known to differ.
+	if deploying || a.config == nil || a.config.Name == "" || a.App == a.config.Name {
 		var err error
 		dc, err = appconfig.LoadDeployConfigUnder(a.ResolvedDir())
 		if err != nil {

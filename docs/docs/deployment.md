@@ -104,6 +104,8 @@ All app-centric commands use these targets, including `deploy`, `logs`, `app sta
 
 These targets belong to the app named in the directory's `app.toml`. If you select a different app with `-a`, `MIREN_APP`, or a legacy positional argument, the command ignores the directory's targets and uses normal cluster selection instead. For example, `miren logs -a otherapp -C another-cluster` can read another app's logs without adding that cluster as a target of the local app. Explicitly selecting the local app still uses its targets.
 
+Deploy is an exception: because it ships this directory's source, its deploy targets still apply when `-a` names a different app. For example, `miren deploy -a myapp-staging --target staging` retains its existing behavior. An `app.toml` without a default `name` also keeps the directory's targets when you supply an app explicitly.
+
 For example, select production for this invocation:
 
 <CliCommand context="client">

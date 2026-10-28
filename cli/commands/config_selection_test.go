@@ -124,10 +124,21 @@ func TestExplicitOtherAppIgnoresLocalTargets(t *testing.T) {
 		})
 	}
 
-	writeDeployToml(t, dir, "invalid toml =")
+	writeAppToml(t, dir, "# No default app name; select one explicitly.\n")
 	cmd := Infer("app status", "test", AppStatus)
+	require.NoError(t, cmd.fs.Parse([]string{"--config", path, "-d", dir, "-a", "selected-app", "--json"}))
+	output := captureOutputJSON(t, func() { require.NoError(t, cmd.Invoke()) })
+	var selected struct {
+		Cluster string `json:"cluster"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output), &selected))
+	require.Equal(t, "staging", selected.Cluster, "an unnamed app config still owns its targets")
+
+	writeAppToml(t, dir, `name = "local-app"`)
+	writeDeployToml(t, dir, "invalid toml =")
+	cmd = Infer("app status", "test", AppStatus)
 	require.NoError(t, cmd.fs.Parse([]string{"--config", filepath.Join(t.TempDir(), "missing"), "-d", dir, "-a", "other-app", "--server-address", server.ListenAddr(), "--json"}))
-	output := captureOutputJSON(t, func() {
+	output = captureOutputJSON(t, func() {
 		require.NoError(t, cmd.Invoke(), "another app's deploy config must not be read, even with a direct server address")
 	})
 	var status struct {

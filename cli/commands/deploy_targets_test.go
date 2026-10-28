@@ -70,6 +70,22 @@ cluster_id = "cluster-prod-id"
 		require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "not a deploy target")
 	})
 
+	t.Run("different app still uses source directory targets", func(t *testing.T) {
+		opts := deployOpts{
+			AppCentric: AppCentric{App: "other-app", Dir: dir, ConfigCentric: ConfigCentric{cfg: cfg}},
+			Target:     "staging",
+		}
+		require.NoError(t, opts.Validate(&GlobalFlags{}))
+		_, name, err := opts.LoadCluster()
+		require.NoError(t, err)
+		require.Equal(t, "miren-staging", name)
+		require.Equal(t, "other-app", opts.App)
+
+		opts.Target = ""
+		opts.Cluster = "outside"
+		require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "not a deploy target")
+	})
+
 	t.Run("target and explicit cluster conflict", func(t *testing.T) {
 		opts := deployOpts{
 			AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other"}},

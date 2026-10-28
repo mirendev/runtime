@@ -298,7 +298,9 @@ optional Cloud-name/xid lookup recommendations as though they already exist.
 - When an explicitly selected app differs from the directory's `app.toml` name,
   ignore that directory's deploy targets and use ordinary cluster selection.
   This applies to `-a`, `MIREN_APP`, and legacy positional app selectors. Naming
-  the directory's own app explicitly still uses its targets.
+  the directory's own app explicitly still uses its targets. Deploy is an
+  exception: it ships this directory's source, so its targets still apply even
+  with a different `-a`. An unnamed `app.toml` also keeps its directory's targets.
 - Cluster-wide commands ignore deploy targets. Without deploy targets, resolve
   `-C`, then `MIREN_CLUSTER`, then the global active cluster. If nothing selects
   a cluster, offer a picker on a terminal or require `-C` otherwise. With no
