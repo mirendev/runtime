@@ -68,6 +68,92 @@ miren deploy -d path/to/app
 
 Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](./app-configuration.md#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
 
+### Monorepos: independent deployment strategies
+
+In a monorepo, give each independently deployed service its own `.miren` directory and app name. Services can share source code while choosing their own Dockerfile, commands, environment variables, scaling settings, and deployment targets. Unlike defining several services in one `app.toml`, these are separate Miren apps: deploying or rolling back one does not deploy or roll back the others.
+
+Set `build.source_root` when an app needs source outside its own directory. Miren resolves it relative to the **config root**, the directory containing `.miren`, and uses the resulting **source root** as the upload root and build context. Dockerfile and top-level `include` paths are relative to the source root. Without `source_root`, the config root and source root are the same, as before.
+
+For example, keep the API and background worker configurations alongside their shared source tree:
+
+```text
+services/
+  api/
+    .miren/
+      app.toml
+      deploy.toml
+    Dockerfile
+  worker/
+    .miren/
+      app.toml
+      deploy.toml
+    Dockerfile
+packages/
+  shared/
+```
+
+The API builds with its own Dockerfile and autoscales with incoming requests:
+
+```toml title="services/api/.miren/app.toml"
+name = "my-api"
+
+[build]
+source_root = "../.."
+dockerfile = "services/api/Dockerfile"
+
+[services.web]
+command = "./bin/api"
+port = 8080
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 20
+```
+
+The worker builds a different binary and runs two fixed instances:
+
+```toml title="services/worker/.miren/app.toml"
+name = "my-worker"
+
+[build]
+source_root = "../.."
+dockerfile = "services/worker/Dockerfile"
+
+[services.worker]
+command = "./bin/worker"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+```
+
+Here, `../..` is relative to `services/api/` or `services/worker/`, not to the `.miren` directory itself. Both apps upload and build from the repository root, so their Dockerfiles can copy code from `packages/shared/`. These Dockerfiles should build the corresponding `bin/api` and `bin/worker` executables.
+
+Deploy from the repository root by selecting the app directory, or change into that directory and run `miren deploy`:
+
+```miren
+miren deploy -d services/api
+miren deploy -d services/worker
+```
+
+The CLI projects the chosen `app.toml` into `.miren/app.toml` at the upload root without changing your repository. The server receives the usual layout and needs no new configuration-selection or path behavior.
+
+Give the apps their own [deployment targets](#deployment-targets). For example, the API can have a staging-to-production workflow while the worker deploys to a separate jobs cluster. Run these commands from the repository root, using cluster names already configured in your client:
+
+```miren
+miren deploy target add staging api-staging-cluster -d services/api
+miren deploy target add prod api-prod-cluster -d services/api
+miren deploy target add prod jobs-cluster -d services/worker
+
+miren deploy -d services/api --target staging
+miren deploy -d services/api --target prod
+miren deploy -d services/worker --target prod
+```
+
+Targets stay alongside each app's configuration in `services/api/.miren/deploy.toml` and `services/worker/.miren/deploy.toml`, not at the shared source root.
+
+Each deploy command deploys only the selected app. CI jobs can use `-d services/api` or `-d services/worker` and run on independent release schedules. If CI uses path-based triggers, include shared-package changes in every dependent service's triggers; selecting an app directory does not determine which source changes affect that app.
+
 ### Deployment targets
 
 To keep deployment destinations in the repository, add a target from the app directory:
@@ -118,6 +204,16 @@ miren deploy target add qa          # add via cluster picker
 miren deploy target set-default prod
 miren deploy target remove qa
 ```
+
+Deployment target commands also accept `-d` to manage another app's local targets:
+
+```miren
+miren deploy target add prod my-prod-cluster -d services/api
+miren deploy target list -d services/api
+miren deploy -d services/api --target prod
+```
+
+These commands use `services/api/.miren/deploy.toml`, even when `build.source_root` points to the repository root. Other apps' targets are unchanged.
 
 An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with either explicit cluster selection.
 
