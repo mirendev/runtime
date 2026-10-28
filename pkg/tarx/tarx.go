@@ -26,6 +26,14 @@ type FileManifest struct {
 	Mode int32
 }
 
+// FileOverride adds a local file at Path in the upload, replacing any existing
+// entry there. Source is a local filesystem path. Overrides bypass gitignore,
+// but filtered archives include them only when their destination is requested.
+type FileOverride struct {
+	Path   string
+	Source string
+}
+
 // vcsDirs are version-control metadata directories that never belong in a
 // build context. jj writes .jj/.gitignore in a main repo but not in a
 // secondary workspace, so relying on gitignore alone would ship jj's
@@ -99,8 +107,8 @@ func ValidatePattern(pattern string) error {
 	return nil
 }
 
-func MakeTar(dir string, includePatterns []string, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
-	return makeTarWithFilter(dir, includePatterns, func(string) bool { return true }, uncompressedBytes)
+func MakeTar(dir string, includePatterns []string, uncompressedBytes *atomic.Int64, overrides ...FileOverride) (io.ReadCloser, error) {
+	return makeTarWithFilter(dir, includePatterns, func(string) bool { return true }, uncompressedBytes, overrides)
 }
 
 func TarToMap(r io.Reader) (map[string][]byte, error) {
@@ -139,7 +147,7 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 
 // ComputeManifest walks a directory using the same gitignore/include logic as MakeTar
 // and returns a manifest of all regular files with their SHA-256 hashes.
-func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, error) {
+func ComputeManifest(dir string, includePatterns []string, overrides ...FileOverride) ([]FileManifest, error) {
 	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
 	if err != nil {
 		return nil, err
@@ -196,6 +204,11 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 		if !info.Mode().IsRegular() {
 			return nil
 		}
+		for _, override := range overrides {
+			if rp == override.Path {
+				return nil
+			}
+		}
 
 		hash, hashErr := hashFile(path)
 		if hashErr != nil {
@@ -213,6 +226,23 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	for _, override := range overrides {
+		info, err := os.Stat(override.Source)
+		if err != nil {
+			return nil, err
+		}
+		hash, err := hashFile(override.Source)
+		if err != nil {
+			return nil, err
+		}
+		manifest = append(manifest, FileManifest{
+			Path: override.Path,
+			Hash: hash,
+			Size: info.Size(),
+			Mode: int32(info.Mode().Perm()),
+		})
 	}
 
 	return manifest, nil
@@ -246,17 +276,27 @@ func MakeEmptyTar() io.ReadCloser {
 // whose relative paths are in the onlyPaths set. Directory entries are included
 // as needed to contain the requested files. If uncompressedBytes is non-nil,
 // each file's uncompressed size is atomically added after it is written.
-func MakeFilteredTar(dir string, includePatterns []string, onlyPaths map[string]bool, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
-	return makeTarWithFilter(dir, includePatterns, func(rp string) bool { return onlyPaths[rp] }, uncompressedBytes)
+func MakeFilteredTar(dir string, includePatterns []string, onlyPaths map[string]bool, uncompressedBytes *atomic.Int64, overrides ...FileOverride) (io.ReadCloser, error) {
+	return makeTarWithFilter(dir, includePatterns, func(rp string) bool { return onlyPaths[rp] }, uncompressedBytes, overrides)
 }
 
 // makeTarWithFilter creates a gzipped tar of dir, applying gitignore/include logic,
 // and only including regular files for which accept returns true. Directory entries
 // are emitted lazily as needed to contain accepted files.
-func makeTarWithFilter(dir string, includePatterns []string, accept func(string) bool, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
+func makeTarWithFilter(dir string, includePatterns []string, accept func(string) bool, uncompressedBytes *atomic.Int64, overrides []FileOverride) (io.ReadCloser, error) {
 	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
 	if err != nil {
 		return nil, err
+	}
+	overrideInfo := make([]os.FileInfo, len(overrides))
+	for i, override := range overrides {
+		if !accept(override.Path) {
+			continue
+		}
+		overrideInfo[i], err = os.Stat(override.Source)
+		if err != nil {
+			return nil, err
+		}
 	}
 	ignorePatterns = append(ignorePatterns, vcsIgnorePatterns()...)
 	includes := parseStringPatterns(includePatterns)
@@ -273,51 +313,7 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 	go func() {
 		emittedDirs := make(map[string]bool)
 
-		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-
-			if dir == path {
-				return nil
-			}
-
-			rp, _ := filepath.Rel(dir, path)
-
-			if filepath.Base(rp) == ".gitignore" {
-				return nil
-			}
-
-			segs := pathSegments(rp)
-
-			isIncluded := len(includes) > 0 && includesMatcher.Match(segs, info.IsDir())
-
-			if !isIncluded {
-				if ignoreMatcher.Match(segs, info.IsDir()) {
-					if info.IsDir() {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-			}
-
-			if info.IsDir() {
-				nestedGitignore := filepath.Join(path, ".gitignore")
-				more, err := parseGitignoreFile(nestedGitignore, segs)
-				if err != nil {
-					return err
-				}
-				if more != nil {
-					ignorePatterns = append(ignorePatterns, more...)
-					ignoreMatcher = gitignore.NewMatcher(ignorePatterns)
-				}
-				return nil
-			}
-
-			if !accept(rp) {
-				return nil
-			}
-
+		writeFile := func(path, rp string, info os.FileInfo) error {
 			// Emit parent directories if not yet emitted
 			parts := strings.Split(filepath.Dir(rp), string(filepath.Separator))
 			for i := range parts {
@@ -366,7 +362,60 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 			}
 
 			return nil
+		}
+
+		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if dir == path {
+				return nil
+			}
+			rp, _ := filepath.Rel(dir, path)
+			if filepath.Base(rp) == ".gitignore" {
+				return nil
+			}
+			segs := pathSegments(rp)
+			isIncluded := len(includes) > 0 && includesMatcher.Match(segs, info.IsDir())
+			if !isIncluded && ignoreMatcher.Match(segs, info.IsDir()) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.IsDir() {
+				more, err := parseGitignoreFile(filepath.Join(path, ".gitignore"), segs)
+				if err != nil {
+					return err
+				}
+				if more != nil {
+					ignorePatterns = append(ignorePatterns, more...)
+					ignoreMatcher = gitignore.NewMatcher(ignorePatterns)
+				}
+				return nil
+			}
+			if !accept(rp) {
+				return nil
+			}
+			for _, override := range overrides {
+				if rp == override.Path {
+					return nil
+				}
+			}
+			return writeFile(path, rp, info)
 		})
+
+		if walkErr == nil {
+			for i, override := range overrides {
+				if !accept(override.Path) {
+					continue
+				}
+				if err := writeFile(override.Source, override.Path, overrideInfo[i]); err != nil {
+					walkErr = err
+					break
+				}
+			}
+		}
 
 		// Close the tar/gzip writers before the pipe so their trailers
 		// flush. Order matters: tw must close before gzw, gzw before w.

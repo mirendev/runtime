@@ -42,6 +42,7 @@ type AppEnvVar struct {
 
 type BuildConfig struct {
 	Dockerfile string   `toml:"dockerfile"`
+	SourceRoot string   `toml:"source_root,omitempty"`
 	OnBuild    []string `toml:"onbuild"`
 	Version    string   `toml:"version"`
 
@@ -385,8 +386,7 @@ func LoadAppConfig() (*AppConfig, error) {
 
 // LoadAppConfigWithPath loads the app config and returns the file path it was
 // loaded from. The path is also returned alongside a parse error, so a caller
-// can tell which file was at fault. Returns (nil, "", nil) if no config file
-// is found.
+// can tell which file was at fault. Returns (nil, "", nil) if no config is found.
 func LoadAppConfigWithPath() (*AppConfig, string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
