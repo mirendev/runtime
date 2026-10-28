@@ -55,6 +55,9 @@ var (
 	mixAppRe      = regexp.MustCompile(`\bapp:\s*:([a-z_][a-zA-Z0-9_]*)`)
 	mixReleasesRe = regexp.MustCompile(`\breleases:\s*\[\s*([a-z_][a-zA-Z0-9_]*):`)
 	mixElixirRe   = regexp.MustCompile(`\belixir:\s*"([^"]+)"`)
+	// Only list depth and keyword names matter for literal release lists.
+	// Skip strings and comments so their brackets and names cannot interfere.
+	mixReleaseTokenRe = regexp.MustCompile(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\n]*|[\[\]]|([a-z_][a-zA-Z0-9_]*):`)
 )
 
 // ElixirStack implements Stack for Mix projects. It builds a Mix release on a
@@ -113,9 +116,30 @@ func (s *ElixirStack) Init(opts BuildOptions) {
 
 	// A releases: block names the release explicitly, and is the only option
 	// for an umbrella; otherwise mix release uses the OTP app name.
-	if m := mixReleasesRe.FindSubmatch(s.mixExs); m != nil {
-		s.releaseName = string(m[1])
+	if m := mixReleasesRe.FindSubmatchIndex(s.mixExs); m != nil {
+		s.releaseName = string(s.mixExs[m[2]:m[3]])
 		s.namedRelease = true
+		if opts.Name != "" {
+			// Prefer the app's declared release, not an application nested in
+			// another release's options. Keep the first release as the fallback.
+			start := m[0] + bytes.IndexByte(s.mixExs[m[0]:m[1]], '[') + 1
+			depth := 1
+			for _, token := range mixReleaseTokenRe.FindAllSubmatch(s.mixExs[start:], -1) {
+				switch string(token[0]) {
+				case "[":
+					depth++
+				case "]":
+					depth--
+				default:
+					if depth == 1 && string(token[1]) == opts.Name {
+						s.releaseName = opts.Name
+					}
+				}
+				if depth == 0 {
+					break
+				}
+			}
+		}
 	} else if m := mixAppRe.FindSubmatch(s.mixExs); m != nil && !s.umbrella {
 		s.releaseName = string(m[1])
 	}

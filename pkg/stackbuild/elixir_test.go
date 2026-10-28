@@ -92,14 +92,16 @@ func TestElixirDetect(t *testing.T) {
 
 func TestElixirReleaseName(t *testing.T) {
 	cases := []struct {
-		name   string
-		mixExs string
-		want   string
+		name    string
+		mixExs  string
+		appName string
+		want    string
 	}{
 		{
-			name:   "app name",
-			mixExs: `def project, do: [app: :my_app, version: "0.1.0"]`,
-			want:   "my_app",
+			name:    "app name",
+			mixExs:  `def project, do: [app: :my_app, version: "0.1.0"]`,
+			appName: "deployment",
+			want:    "my_app",
 		},
 		{
 			name: "explicit release wins",
@@ -118,13 +120,54 @@ end`,
 			mixExs: `def project, do: [apps_path: "apps", deps: [{:credo, "~> 1.7", app: false}]]`,
 			want:   "",
 		},
+		{
+			name: "umbrella release matching app is not first",
+			mixExs: `def project, do: [apps_path: "apps", releases: [
+  worker: [applications: [shop: :permanent], cookie: "[worker]"],
+  # ] shop: []
+  shop: [applications: [shop: :permanent, shop_web: :permanent]]
+]]`,
+			appName: "shop",
+			want:    "shop",
+		},
+		{
+			name: "nested application is not a release",
+			mixExs: `def project, do: [apps_path: "apps", releases: [
+  worker: [applications: [shop: :permanent]],
+  web: [applications: [shop_web: :permanent]]
+]]`,
+			appName: "shop",
+			want:    "worker",
+		},
+		{
+			name:    "single release with a different app name",
+			mixExs:  `def project, do: [apps_path: "apps", releases: [platform: []]]`,
+			appName: "shop",
+			want:    "platform",
+		},
+		{
+			name:   "multiple releases without app name keep first",
+			mixExs: `def project, do: [apps_path: "apps", releases: [worker: [], shop: []]]`,
+			want:   "worker",
+		},
+		{
+			name:    "matching key outside releases is ignored",
+			mixExs:  `def project, do: [apps_path: "apps", releases: [worker: []], aliases: [shop: []]]`,
+			appName: "shop",
+			want:    "worker",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "mix.exs"), []byte(tc.mixExs), 0o644))
-			s := initElixir(t, dir)
-			assert.Equal(t, tc.want, s.releaseName)
+			s, err := DetectStack(dir, BuildOptions{Name: tc.appName})
+			require.NoError(t, err)
+			if tc.want == "" {
+				assert.Empty(t, s.WebCommand())
+			} else {
+				assert.Equal(t, "/app/bin/"+tc.want+" start", s.WebCommand())
+			}
 		})
 	}
 
