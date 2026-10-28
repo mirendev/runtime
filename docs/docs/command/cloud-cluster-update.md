@@ -11,14 +11,17 @@ Update cloud cluster metadata (admin only)
 ## Usage
 
 ```bash
-miren cloud cluster update [flags]
+miren cloud cluster update [cluster] [flags]
 ```
+
+## Arguments
+
+- `cluster` — Cloud cluster XID (not a local config name)
 
 ## Flags
 
 - `--anywhere-mode` — Miren Anywhere mode (choices: `default`, `never`, `auto`, `always`)
 - `--clear-description` — Remove the cluster description
-- `--cluster` — Cloud cluster XID (not a local config name)
 - `--description` — New description as plain text; omitted preserves it
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)

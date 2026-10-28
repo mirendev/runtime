@@ -16,12 +16,20 @@ miren cloud app show [flags]
 
 ## Flags
 
-- `--app` — Application name
-- `--cluster` — Cloud cluster XID (not a local config name)
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
 - `--organization, -o` — Organization name or org- ID (defaults to your only organization)
+
+## Config Options
+
+- `--cluster, -C` — Cloud cluster XID (not a local config name)
+- `--config` — Path to the config file
+
+## App Options
+
+- `--app, -a` — Application name
+- `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
 

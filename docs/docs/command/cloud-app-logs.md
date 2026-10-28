@@ -16,8 +16,6 @@ miren cloud app logs [flags]
 
 ## Flags
 
-- `--app` — Application name
-- `--cluster` — Cloud cluster XID (not a local config name)
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
@@ -27,6 +25,16 @@ miren cloud app logs [flags]
 - `--service` — Service to filter
 - `--since` — Lookback duration (e.g. 30m, 2h)
 - `--version` — Build version name (e.g. v3)
+
+## Config Options
+
+- `--cluster, -C` — Cloud cluster XID (not a local config name)
+- `--config` — Path to the config file
+
+## App Options
+
+- `--app, -a` — Application name
+- `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
 

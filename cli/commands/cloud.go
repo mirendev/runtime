@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 
 	"miren.dev/mflags"
@@ -25,21 +26,21 @@ func (o CloudOptions) CloudSettings() CloudOptions { return o }
 
 type CloudDeleteOptions struct {
 	CloudOptions
-	Force bool `short:"f" long:"force" description:"Skip confirmation of this destructive operation"`
+	Yes bool `short:"y" long:"yes" description:"Confirm this destructive operation without prompting"`
 }
 
-func (o CloudDeleteOptions) CloudForce() bool { return o.Force }
+func (o CloudDeleteOptions) CloudYes() bool { return o.Yes }
 
 // CloudEndpoint maps a CLI command to an HTTP operation. URL placeholders name
-// required flags. Inputs maps other long flag names to "query:name" or
-// "body:name"; "json:name" decodes a JSON value into the body, allowing arrays,
+// required inputs. Inputs maps long option names (including positional fields)
+// to "query:name" or "body:name"; "json:name" decodes a JSON value into the body, allowing arrays,
 // objects, false, zero and explicit null. Add ",required" to require input, or
 // ",include-empty" to send an empty string rather than omit it.
 // "clear:name" maps a true boolean flag to an empty string in the body.
 // Preserve maps omitted body fields to GET response selectors for replacement
 // APIs. It preserves the fetched snapshot, not concurrent changes.
 // JSON output retains the API document, including pagination/sync metadata.
-// List and Columns select the text table; without Columns, text is pretty JSON.
+// List and Columns select the text table; other responses use named values.
 // Text selects a string to emit verbatim, suitable for scripts and config files.
 type CloudEndpoint struct {
 	Name, Synopsis string
@@ -61,7 +62,7 @@ type CloudColumn struct {
 // CloudCommand lets an endpoint and its conversions live in one definition
 // file without a per-command authentication, HTTP, or rendering handler.
 func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEndpoint) *Cmd {
-	return Infer(endpoint.Name, endpoint.Synopsis, func(ctx *Context, opts O) error {
+	cmd := Infer(endpoint.Name, endpoint.Synopsis, func(ctx *Context, opts O) error {
 		// Validate inputs before organization resolution can send an HTTP request.
 		if _, _, _, err := cloudInput(endpoint, reflect.ValueOf(opts), nil); err != nil {
 			return err
@@ -74,7 +75,15 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		if settings.IsJSON() || endpoint.Text != "" {
 			defer ctx.ProgressToStderr()()
 		}
-		config, err := clientconfig.LoadConfig()
+		var config *clientconfig.Config
+		var err error
+		if loader, ok := any(&opts).(interface {
+			LoadConfig() (*clientconfig.Config, error)
+		}); ok {
+			config, err = loader.LoadConfig()
+		} else {
+			config, err = clientconfig.LoadConfig()
+		}
 		if err != nil && err != clientconfig.ErrNoConfig {
 			return fmt.Errorf("failed to load configuration: %w", err)
 		}
@@ -92,13 +101,13 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		}
 		needsConfirmation := false
 		if endpoint.Confirmation != "" {
-			force, ok := any(opts).(interface{ CloudForce() bool })
+			confirmation, ok := any(opts).(interface{ CloudYes() bool })
 			if !ok {
 				return fmt.Errorf("destructive cloud endpoint requires CloudDeleteOptions")
 			}
-			if !force.CloudForce() {
+			if !confirmation.CloudYes() {
 				if !ui.IsInteractive() {
-					return fmt.Errorf("%s requires confirmation; use --force to authorize it non-interactively", endpoint.Name)
+					return fmt.Errorf("%s requires confirmation; use --yes to authorize it non-interactively", endpoint.Name)
 				}
 				needsConfirmation = true
 			}
@@ -120,7 +129,21 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 				case 1:
 					return response.Organizations[0].ID, nil
 				default:
-					return "", fmt.Errorf("multiple Cloud organizations available; specify --organization (-o)")
+					if !ui.IsInteractive() {
+						return "", fmt.Errorf("multiple Cloud organizations available; specify --organization (-o)")
+					}
+					items := make([]ui.PickerItem, 0, len(response.Organizations))
+					for _, org := range response.Organizations {
+						items = append(items, ui.TablePickerItem{ItemID: org.ID, Columns: []string{org.Name, org.ID}})
+					}
+					selected, err := ui.RunPicker(items, ui.WithTitle("Select a Cloud organization"), ui.WithHeaders([]string{"NAME", "ID"}))
+					if err != nil {
+						return "", err
+					}
+					if selected == nil {
+						return "", fmt.Errorf("organization selection cancelled")
+					}
+					return selected.ID(), nil
 				}
 			}
 			var id string
@@ -203,11 +226,12 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		if endpoint.Render != nil {
 			return endpoint.Render(ctx, response)
 		}
-		if len(endpoint.Columns) == 0 {
-			return PrintJSONTo(stdout, response)
-		}
 		return endpoint.render(ctx, response)
 	}, WithGroup(GroupClient))
+	if cluster := cmd.FlagSet().Lookup("cluster"); cluster != nil {
+		cluster.Usage = "Cloud cluster XID (not a local config name)"
+	}
+	return cmd
 }
 
 func cloudInput(endpoint CloudEndpoint, opts reflect.Value, resolveOrganization func(string) (string, error)) (string, url.Values, any, error) {
@@ -239,6 +263,9 @@ func cloudInput(endpoint CloudEndpoint, opts reflect.Value, resolveOrganization 
 			}
 			if field.IsZero() && flag != "organization" {
 				if required == "required" || kind == "path" {
+					if info.Tag.Get("position") != "" {
+						return fmt.Errorf("%s argument is required", flag)
+					}
 					return fmt.Errorf("--%s is required", info.Tag.Get("long"))
 				}
 				if required != "include-empty" {
@@ -317,6 +344,12 @@ func cloudField(value any, path string) any {
 }
 
 func (e CloudEndpoint) render(ctx *Context, response any) error {
+	if len(e.Columns) == 0 {
+		if e.List != "" {
+			response = cloudField(response, e.List)
+		}
+		return renderCloudValue(ctx, response)
+	}
 	items := []any{response}
 	if e.List != "" {
 		value := cloudField(response, e.List)
@@ -367,6 +400,67 @@ func (e CloudEndpoint) render(ctx *Context, response any) error {
 	return nil
 }
 
+func renderCloudValue(ctx *Context, value any) error {
+	switch value := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		var fields []ui.NamedValue
+		for _, key := range keys {
+			switch value[key].(type) {
+			case map[string]any, []any:
+				continue
+			}
+			fields = append(fields, ui.NewNamedValue(strings.ReplaceAll(key, "_", " "), value[key]))
+		}
+		if len(fields) > 0 {
+			ctx.Printf("%s\n", ui.NewNamedValueList(fields).Render())
+		}
+		for _, key := range keys {
+			switch child := value[key].(type) {
+			case map[string]any, []any:
+				ctx.Printf("\n%s\n", strings.ReplaceAll(key, "_", " "))
+				if err := renderCloudValue(ctx, child); err != nil {
+					return err
+				}
+			}
+		}
+	case []any:
+		keys := make(map[string]bool)
+		for _, item := range value {
+			if object, ok := item.(map[string]any); ok {
+				for key := range object {
+					keys[key] = true
+				}
+			}
+		}
+		var headers []string
+		for key := range keys {
+			headers = append(headers, key)
+		}
+		sort.Strings(headers)
+		if len(headers) > 0 {
+			columns := make([]CloudColumn, 0, len(headers))
+			for _, key := range headers {
+				columns = append(columns, CloudColumn{strings.ToUpper(strings.ReplaceAll(key, "_", " ")), key})
+			}
+			return (CloudEndpoint{List: "items", Columns: columns}).render(ctx, map[string]any{"items": value})
+		}
+		if len(value) == 0 {
+			ctx.Printf("No results\n")
+		}
+		for _, item := range value {
+			ctx.Printf("%s\n", ui.NewNamedValueList([]ui.NamedValue{ui.NewNamedValue("Value", item)}).Render())
+		}
+	default:
+		ctx.Printf("%s\n", ui.NewNamedValueList([]ui.NamedValue{ui.NewNamedValue("Result", value)}).Render())
+	}
+	return nil
+}
+
 type CloudOrganizationOptions struct {
 	CloudOptions
 	Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
@@ -374,8 +468,7 @@ type CloudOrganizationOptions struct {
 
 type CloudAppOptions struct {
 	CloudOrganizationOptions
-	Cluster string `long:"cluster" description:"Cloud cluster XID (not a local config name)"`
-	App     string `long:"app" description:"Application name"`
+	AppCentric
 }
 
 const cloudAppPath = "/api/v1/organizations/{organization}/apps/{cluster}/{app}"
@@ -383,13 +476,19 @@ const cloudAppPath = "/api/v1/organizations/{organization}/apps/{cluster}/{app}"
 func registerCloudCommands(d *mflags.Dispatcher) {
 	registerCloudResourceCommands(d)
 	d.Dispatch("cloud", Section("cloud", "Miren Cloud HTTP API commands", "", WithSectionGroup(GroupClient)))
-	d.Dispatch("cloud org", Section("cloud org", "Cloud organization commands", ""))
+	d.Dispatch("org", Section("org", "Cloud organization commands", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("cloud cluster", Section("cloud cluster", "Cloud cluster commands", ""))
 	d.Dispatch("cloud app", Section("cloud app", "Cloud app visibility commands", ""))
-	d.Dispatch("cloud org list", CloudCommand[CloudOptions](CloudEndpoint{
-		Name: "cloud org list", Synopsis: "List your Miren Cloud organizations",
+	d.Dispatch("org list", CloudCommand[CloudOptions](CloudEndpoint{
+		Name: "org list", Synopsis: "List your Miren Cloud organizations",
 		Path: "/api/v1/organizations", List: "organizations",
 		Columns: []CloudColumn{{"ID", "id"}, {"NAME", "name"}, {"ROLE", "role"}},
+	}))
+	d.Dispatch("org show", CloudCommand[struct {
+		CloudOptions
+		Organization string `position:"0" long:"organization" usage:"Organization name or org- ID (defaults to your only organization)"`
+	}](CloudEndpoint{
+		Name: "org show", Synopsis: "Show an organization and its members", Path: cloudOrgPath,
 	}))
 	d.Dispatch("cloud cluster list", CloudCommand[CloudOptions](CloudEndpoint{
 		Name: "cloud cluster list", Synopsis: "List your clusters in Miren Cloud",
@@ -398,7 +497,7 @@ func registerCloudCommands(d *mflags.Dispatcher) {
 	}))
 	d.Dispatch("cloud cluster approve", CloudCommand[struct {
 		CloudOptions
-		Registration string `long:"registration" description:"Registration ID from the server approval URL"`
+		Registration string `position:"0" long:"registration" usage:"Registration ID from the server approval URL"`
 		Token        string `long:"registration-token" description:"Signed token from the server approval URL"`
 		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		Name         string `long:"name" description:"Optional cluster name override"`
@@ -413,10 +512,7 @@ func registerCloudCommands(d *mflags.Dispatcher) {
 		Name: "cloud app list", Synopsis: "List mirrored apps across an organization",
 		Path: "/api/v1/organizations/{organization}/apps", List: "apps", Columns: appColumns,
 	}))
-	d.Dispatch("cloud cluster apps", CloudCommand[struct {
-		CloudOrganizationOptions
-		Cluster string `long:"cluster" description:"Cloud cluster XID"`
-	}](CloudEndpoint{
+	d.Dispatch("cloud cluster apps", CloudCommand[CloudClusterOptions](CloudEndpoint{
 		Name: "cloud cluster apps", Synopsis: "List mirrored apps in a cloud cluster",
 		Path: "/api/v1/organizations/{organization}/clusters/{cluster}/apps", List: "apps", Columns: appColumns,
 	}))
@@ -424,16 +520,16 @@ func registerCloudCommands(d *mflags.Dispatcher) {
 		Name: "cloud app show", Synopsis: "Show mirrored app details, deployments and health",
 		Path: cloudAppPath,
 	}))
-	d.Dispatch("cloud app deployments", CloudCommand[CloudAppOptions](CloudEndpoint{
-		Name: "cloud app deployments", Synopsis: "List mirrored app deployment history (latest 50)",
+	d.Dispatch("cloud app history", CloudCommand[CloudAppOptions](CloudEndpoint{
+		Name: "cloud app history", Synopsis: "List mirrored app deployment history (latest 50)",
 		Path: cloudAppPath + "/deployments", List: "deployments",
 		Columns: []CloudColumn{{"ID", "id"}, {"VERSION", "app_version_name"}, {"STATUS", "status"}, {"OPERATION", "operation"}, {"DEPLOYED", "deployed_at"}},
 	}))
-	d.Dispatch("cloud app deployment", CloudCommand[struct {
+	d.Dispatch("cloud deployment show", CloudCommand[struct {
 		CloudAppOptions
-		Deployment string `long:"deployment" description:"Deployment ID"`
+		Deployment string `position:"0" long:"deployment" usage:"Deployment ID"`
 	}](CloudEndpoint{
-		Name: "cloud app deployment", Synopsis: "Show a mirrored app deployment",
+		Name: "cloud deployment show", Synopsis: "Show a mirrored app deployment",
 		Path: cloudAppPath + "/deployments/{deployment}",
 	}))
 	d.Dispatch("cloud app routes", CloudCommand[CloudAppOptions](CloudEndpoint{

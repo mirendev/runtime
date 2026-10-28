@@ -46,36 +46,44 @@ The [Getting Started](../getting-started.md) guide covers the full install-and-f
 
 ## Using Cloud from the CLI
 
-The `miren cloud` commands call Cloud's HTTP API using your logged-in identity.
+Cloud commands call Cloud's HTTP API using your logged-in identity.
 They do not require adding a cluster to your local configuration. If you have
 multiple identities, select one with `--identity <name>`; its issuer determines
 which Cloud instance receives the request.
 
+Cloud-only resources have top-level categories, such as `org`, `account`, and
+`group`. Cluster records and mirrored app data stay under `cloud` to distinguish
+them from the runtime `app` commands and local `cluster` configuration commands.
+Bare categories print help rather than performing an operation.
+
 ```bash
-miren cloud org list
+miren org list
 miren cloud cluster list
 miren cloud app list --organization <org-id>
-miren cloud cluster apps --organization <org-id> --cluster <cluster-id>
-miren cloud app show --organization <org-id> --cluster <cluster-id> --app myapp
+miren cloud cluster apps <cluster-id> --organization <org-id>
+miren cloud app show -o <org-id> -C <cluster-id> -a myapp
 ```
 
 `--organization` (or `-o`) accepts an `org-` ID or an exact organization name from
-`cloud org list`. Values without the `org-` prefix are looked up by name using
+`org list`. Values without the `org-` prefix are looked up by name using
 your selected Cloud identity. If you belong to exactly one organization, you can
-omit the flag; otherwise specify it explicitly. Duplicate names require an ID.
-Cluster flags still take Cloud cluster IDs, not local configuration names.
+omit the flag; otherwise select one interactively or specify it explicitly.
+Duplicate names require an ID. `org show <name-or-id>` takes its organization as
+an argument. Cluster arguments and `-C` flags take Cloud cluster IDs, not local
+configuration names. App commands use the usual app selection: `-a`,
+`MIREN_APP`, then the name in `.miren/app.toml` (or the directory given with `-d`).
 App detail includes deployment metadata and any available incidents.
 
 ```bash
 miren cloud app list -o "My Team"
 miren cloud app list # Uses your only organization, if you have exactly one
-miren cloud me
+miren account show
 ```
 
-`cloud me` shows a readable profile, organization memberships and enabled
+`account show` shows a readable profile, organization memberships and enabled
 features, and linked sign-in identities by default. Missing membership or
 identity data is marked as not reported, since Cloud can return a partial
-profile. Use `cloud me --json` for the complete API response.
+profile. Use `account show --json` for the complete API response.
 
 :::info[Mirrored app state]
 App visibility is Cloud's mirrored state, not a live runtime query. Check
@@ -83,12 +91,12 @@ observation timestamps, and treat missing health samples as unknown.
 :::
 
 For a specific app, the following commands accept the same `--organization`,
-`--cluster`, and `--app` flags:
+`--cluster` (`-C`), and `--app` (`-a`) flags:
 
 | Command | Result |
 | --- | --- |
-| `miren cloud app deployments` | Latest 50 deployments, with a truncation indication |
-| `miren cloud app deployment --deployment <id>` | Full details of one deployment |
+| `miren cloud app history` | Latest 50 deployments, with a truncation indication |
+| `miren cloud deployment show <id>` | Full details of one deployment |
 | `miren cloud app routes` | Routes and their sync state |
 | `miren cloud app logs` | A bounded snapshot of live app logs |
 
@@ -101,7 +109,7 @@ registration ID and signed token from the approval URL printed by
 `miren server register`, then run:
 
 ```bash
-miren cloud cluster approve --registration <registration-id> \
+miren cloud cluster approve <registration-id> \
   --registration-token <token> --organization <org-id>
 ```
 
@@ -111,46 +119,46 @@ its requested name. Treat the signed token as a credential.
 Every Cloud command supports `--format json` (or `--json`). JSON output preserves
 the complete API response, including list envelopes, null values, observation
 timestamps, and sync/truncation metadata; progress goes to stderr. List commands
-default to tables. Detailed app, deployment, and route responses default to
-formatted JSON so nested information is not lost.
+default to tables. Detail responses use named values and tables for nested
+data. Use JSON when consuming the full document programmatically.
 
 ### Organization and infrastructure APIs
 
-The [Cloud command reference](../command/cloud.md) includes the following
-additional API families. Every organization-scoped command takes an
-`--organization <name-or-id>` / `-o` flag, defaulting to your only organization;
-group detail and membership commands take `--group`
-instead, because group IDs are globally addressable.
+The [command reference](../commands.md) includes the following API families.
+Organization-scoped commands take an `--organization <name-or-id>` / `-o` flag,
+defaulting to your only organization, except `org show`, whose subject is an
+argument. Group detail commands take a group ID argument instead, because group
+IDs are globally addressable. Membership changes take a user ID argument and
+`--group <id>` as context.
 
 | Command family | Capabilities |
 | --- | --- |
-| `cloud me` | Profile, organization membership, and enabled Cloud features |
-| `cloud account` | Update your profile; list/unlink sign-in identities; list/revoke keys; revoke all tokens |
-| `cloud user` | Find existing Cloud users to add to an organization |
-| `cloud org` | Create/show organizations, search users, list organization clusters |
-| `cloud org member` | List, add, remove, and set member roles |
-| `cloud group` | Create, show, list, update, and delete access groups; manage their members |
+| `account` | Show/update your profile; list/unlink sign-in identities; list/revoke keys; revoke all tokens |
+| `user` | Find existing Cloud users to add to an organization |
+| `org` | Create/show organizations, search members, list organization clusters; list/add/remove members and set roles |
+| `group` | Create, show, list, update, and delete access groups; manage their members |
 | `cloud cluster` | Delete records, metadata, nodes, routes, connectivity, server status, operation history, upgrade policy |
-| `cloud invite` | Manage shared links; inspect and accept invitations as a recipient |
-| `cloud enroll-token` | Create, list, inspect, and revoke single-use cluster enrollment credentials |
-| `cloud subdomain` | List base domains, claim hostnames, assign/unassign clusters, release claims |
-| `cloud volume` | Paginated volume/lease inventory and snapshot/update artifacts |
+| `cloud operation` | List and show server operation history with `-C <cluster-id>` |
+| `invite` | Manage shared links; inspect and accept invitations as a recipient |
+| `enroll-token` | Create, list, inspect, and revoke single-use cluster enrollment credentials |
+| `subdomain` | List base domains, claim hostnames, assign/unassign clusters, delete claims |
+| `volume` | Paginated volume/lease inventory and snapshot/update artifacts |
 
 Admin-only operations are marked in command help. Cloud enforces membership,
 admin roles, and feature availability; a disabled or unconfigured API can return
 404. Server commands inspect status and history; they do not trigger restarts or
-upgrades. `cloud cluster online` requires `--cluster` but not `--organization`, and
+upgrades. `cloud cluster online <cluster-id>` does not require `--organization`, and
 Cloud checks the caller's cluster access rules as well as membership.
 
 ```bash
-miren cloud org member list --organization <org-id>
-miren cloud cluster show --organization <org-id> --cluster <cluster-id>
-miren cloud cluster update --organization <org-id> --cluster <cluster-id> \
+miren org member-list --organization <org-id>
+miren cloud cluster show <cluster-id> --organization <org-id>
+miren cloud cluster update <cluster-id> --organization <org-id> \
   --tags '{"environment":"production"}' --anywhere-mode auto
-miren cloud enroll-token create --organization <org-id> --ttl-hours 24 \
+miren enroll-token create --organization <org-id> --ttl-hours 24 \
   --default-tags '{"environment":"staging"}' --json
-miren cloud subdomain claim --organization <org-id> --name myteam
-miren cloud volume list --organization <org-id> --limit 50 --json
+miren subdomain claim myteam --organization <org-id>
+miren volume list --organization <org-id> --limit 50 --json
 ```
 
 ### Cloud-init for a new cluster
@@ -210,7 +218,7 @@ invitation creation/copy returns a credential-bearing link. Keep that output
 private. Enrollment creation can reuse an existing live token when no custom
 settings are supplied. Revokes, group deletion, member removal, and subdomain
 unassignment/release, identity unlinking, and cluster deletion require interactive
-confirmation or `--force` in scripts.
+confirmation or `--yes` (`-y`) in scripts. `--force` is not a confirmation flag.
 :::
 
 ### Invitations, accounts, and cluster records
@@ -219,8 +227,8 @@ Recipient actions use the credential token from an invitation URL, not an invite
 link ID, and do not require `--organization` or organization-admin access:
 
 ```bash
-miren cloud invite show --token <invitation-token>
-miren cloud invite accept --token <invitation-token>
+miren invite show <invitation-token>
+miren invite accept <invitation-token>
 ```
 
 Acceptance is successful if you already belong to the organization. To decline,
@@ -229,26 +237,26 @@ simply leave the invitation unaccepted; the shared link remains live.
 To add an existing account directly, first discover its user XID:
 
 ```bash
-miren cloud user search --query you@example.com
-miren cloud org member add --organization <org-id> --user <user-xid>
+miren user search you@example.com
+miren org add-member <user-xid> --organization <org-id>
 ```
 
-Global user search finds candidates across Cloud; `cloud org user-search`
+Global user search finds candidates across Cloud; `org member-search <query>`
 searches only existing organization members for group membership management.
 For someone without a Cloud account, create an invitation link instead.
 
 ```bash
-miren cloud account update --name "Your Name"
-miren cloud account update --clear-avatar
-miren cloud account identity list
-miren cloud account identity unlink --provider github --provider-id <github-id>
-miren cloud account key list
-miren cloud account key revoke --key <key-xid>
-miren cloud account token revoke-all --reason "Lost device"
+miren account update --name "Your Name"
+miren account update --clear-avatar
+miren account identity list
+miren account identity unlink <github-id> --provider github
+miren account key list
+miren account key revoke <key-xid>
+miren account token revoke-all --reason "Lost device"
 ```
 
 Profile and group updates preserve omitted fields. Use `--clear-avatar` to remove
-an avatar, or `cloud group update --group <id> --clear-description` to remove a
+an avatar, or `group update <id> --clear-description` to remove a
 group description. At least one update field is required; empty string values
 are treated as omitted, so use the explicit clear flags.
 
@@ -262,6 +270,8 @@ same profile or group.
 Identity unlinking takes the provider account ID shown in its listing,
 and Cloud refuses to unlink your last sign-in identity. Key revocation takes the
 key's XID, not its numeric database ID; the listing includes revoked keys.
+These account credentials are remote Cloud resources, not the locally
+configured identity selected by `--identity`.
 
 `revoke-all` invalidates all previously issued tokens for your account, including
 refresh tokens. It does not delete local credentials. Revocation may require
@@ -271,7 +281,7 @@ remove a local login and revoke its refresh token.
 ```bash
 miren server register -n my-cluster
 miren cloud cluster online-batch --clusters '["<cluster-id>","<other-cluster-id>"]'
-miren cloud cluster delete --organization <org-id> --cluster <cluster-id>
+miren cloud cluster delete <cluster-id> --organization <org-id>
 ```
 
 Use `miren server register` or enrollment tokens to register a server rather than

@@ -11,17 +11,20 @@ Delete a Cloud cluster record (admin only); leaves server registration files unc
 ## Usage
 
 ```bash
-miren cloud cluster delete [flags]
+miren cloud cluster delete [cluster] [flags]
 ```
+
+## Arguments
+
+- `cluster` — Cloud cluster XID
 
 ## Flags
 
-- `--cluster` — Cloud cluster XID
-- `--force, -f` — Skip confirmation of this destructive operation
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
 - `--organization, -o` — Organization name or org- ID (defaults to your only organization)
+- `--yes, -y` — Confirm this destructive operation without prompting
 
 ## Global Options
 

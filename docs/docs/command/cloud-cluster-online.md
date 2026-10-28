@@ -11,12 +11,15 @@ Check cluster connectivity under your Cloud access rules
 ## Usage
 
 ```bash
-miren cloud cluster online [flags]
+miren cloud cluster online [cluster] [flags]
 ```
+
+## Arguments
+
+- `cluster` — Cloud cluster XID
 
 ## Flags
 
-- `--cluster` — Cloud cluster XID
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json

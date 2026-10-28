@@ -11,8 +11,12 @@ Approve a pending cluster registration in Miren Cloud
 ## Usage
 
 ```bash
-miren cloud cluster approve [flags]
+miren cloud cluster approve [registration] [flags]
 ```
+
+## Arguments
+
+- `registration` — Registration ID from the server approval URL
 
 ## Flags
 
@@ -21,7 +25,6 @@ miren cloud cluster approve [flags]
 - `--json` — Shorthand for --format json
 - `--name` — Optional cluster name override
 - `--organization, -o` — Organization name or org- ID (defaults to your only organization)
-- `--registration` — Registration ID from the server approval URL
 - `--registration-token` — Signed token from the server approval URL
 
 ## Global Options

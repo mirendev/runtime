@@ -1,6 +1,27 @@
 [
   {
     "type": "category",
+    "label": "account",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/account"
+    },
+    "items": [
+      "command/account-identity",
+      "command/account-identity-list",
+      "command/account-identity-unlink",
+      "command/account-key",
+      "command/account-key-list",
+      "command/account-key-revoke",
+      "command/account-show",
+      "command/account-token",
+      "command/account-token-revoke-all",
+      "command/account-update"
+    ]
+  },
+  {
+    "type": "category",
     "label": "addon",
     "collapsed": true,
     "link": {
@@ -85,19 +106,8 @@
       "id": "command/cloud"
     },
     "items": [
-      "command/cloud-account",
-      "command/cloud-account-identity",
-      "command/cloud-account-identity-list",
-      "command/cloud-account-identity-unlink",
-      "command/cloud-account-key",
-      "command/cloud-account-key-list",
-      "command/cloud-account-key-revoke",
-      "command/cloud-account-token",
-      "command/cloud-account-token-revoke-all",
-      "command/cloud-account-update",
       "command/cloud-app",
-      "command/cloud-app-deployment",
-      "command/cloud-app-deployments",
+      "command/cloud-app-history",
       "command/cloud-app-list",
       "command/cloud-app-logs",
       "command/cloud-app-routes",
@@ -111,60 +121,16 @@
       "command/cloud-cluster-nodes",
       "command/cloud-cluster-online",
       "command/cloud-cluster-online-batch",
-      "command/cloud-cluster-operation",
-      "command/cloud-cluster-operations",
       "command/cloud-cluster-routes",
       "command/cloud-cluster-server",
       "command/cloud-cluster-show",
       "command/cloud-cluster-update",
       "command/cloud-cluster-upgrade-policy",
-      "command/cloud-enroll-token",
-      "command/cloud-enroll-token-create",
-      "command/cloud-enroll-token-list",
-      "command/cloud-enroll-token-revoke",
-      "command/cloud-enroll-token-show",
-      "command/cloud-group",
-      "command/cloud-group-create",
-      "command/cloud-group-delete",
-      "command/cloud-group-list",
-      "command/cloud-group-member",
-      "command/cloud-group-member-add",
-      "command/cloud-group-member-list",
-      "command/cloud-group-member-remove",
-      "command/cloud-group-show",
-      "command/cloud-group-update",
-      "command/cloud-invite",
-      "command/cloud-invite-accept",
-      "command/cloud-invite-create",
-      "command/cloud-invite-list",
-      "command/cloud-invite-revoke",
-      "command/cloud-invite-show",
-      "command/cloud-invite-update",
-      "command/cloud-invite-url",
-      "command/cloud-me",
-      "command/cloud-org",
-      "command/cloud-org-clusters",
-      "command/cloud-org-create",
-      "command/cloud-org-list",
-      "command/cloud-org-member",
-      "command/cloud-org-member-add",
-      "command/cloud-org-member-list",
-      "command/cloud-org-member-remove",
-      "command/cloud-org-member-set-role",
-      "command/cloud-org-show",
-      "command/cloud-org-user-search",
-      "command/cloud-subdomain",
-      "command/cloud-subdomain-assign",
-      "command/cloud-subdomain-claim",
-      "command/cloud-subdomain-domains",
-      "command/cloud-subdomain-list",
-      "command/cloud-subdomain-release",
-      "command/cloud-subdomain-unassign",
-      "command/cloud-user",
-      "command/cloud-user-search",
-      "command/cloud-volume",
-      "command/cloud-volume-list",
-      "command/cloud-volume-updates"
+      "command/cloud-deployment",
+      "command/cloud-deployment-show",
+      "command/cloud-operation",
+      "command/cloud-operation-list",
+      "command/cloud-operation-show"
     ]
   },
   {
@@ -310,6 +276,21 @@
   },
   {
     "type": "category",
+    "label": "enroll-token",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/enroll-token"
+    },
+    "items": [
+      "command/enroll-token-create",
+      "command/enroll-token-list",
+      "command/enroll-token-revoke",
+      "command/enroll-token-show"
+    ]
+  },
+  {
+    "type": "category",
     "label": "env",
     "collapsed": true,
     "link": {
@@ -323,8 +304,45 @@
       "command/env-set"
     ]
   },
+  {
+    "type": "category",
+    "label": "group",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/group"
+    },
+    "items": [
+      "command/group-add-member",
+      "command/group-create",
+      "command/group-delete",
+      "command/group-list",
+      "command/group-member-list",
+      "command/group-remove-member",
+      "command/group-show",
+      "command/group-update"
+    ]
+  },
   "command/help",
   "command/init",
+  {
+    "type": "category",
+    "label": "invite",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/invite"
+    },
+    "items": [
+      "command/invite-accept",
+      "command/invite-create",
+      "command/invite-list",
+      "command/invite-revoke",
+      "command/invite-show",
+      "command/invite-update",
+      "command/invite-url"
+    ]
+  },
   "command/login",
   "command/logout",
   {
@@ -341,6 +359,26 @@
       "command/logs-run",
       "command/logs-sandbox",
       "command/logs-system"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "org",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/org"
+    },
+    "items": [
+      "command/org-add-member",
+      "command/org-cluster-list",
+      "command/org-create",
+      "command/org-list",
+      "command/org-member-list",
+      "command/org-member-search",
+      "command/org-remove-member",
+      "command/org-set-member-role",
+      "command/org-show"
     ]
   },
   "command/rollback",
@@ -484,8 +522,50 @@
       "command/server-upgrade-rollback"
     ]
   },
+  {
+    "type": "category",
+    "label": "subdomain",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/subdomain"
+    },
+    "items": [
+      "command/subdomain-assign",
+      "command/subdomain-base-domain-list",
+      "command/subdomain-claim",
+      "command/subdomain-delete",
+      "command/subdomain-list",
+      "command/subdomain-unassign"
+    ]
+  },
   "command/top",
   "command/upgrade",
+  {
+    "type": "category",
+    "label": "user",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/user"
+    },
+    "items": [
+      "command/user-search"
+    ]
+  },
   "command/version",
+  {
+    "type": "category",
+    "label": "volume",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/volume"
+    },
+    "items": [
+      "command/volume-list",
+      "command/volume-updates"
+    ]
+  },
   "command/whoami"
 ]

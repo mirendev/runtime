@@ -11,12 +11,15 @@ Show server lifecycle status and supported actions
 ## Usage
 
 ```bash
-miren cloud cluster server [flags]
+miren cloud cluster server [cluster] [flags]
 ```
+
+## Arguments
+
+- `cluster` — Cloud cluster XID (not a local config name)
 
 ## Flags
 
-- `--cluster` — Cloud cluster XID (not a local config name)
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json

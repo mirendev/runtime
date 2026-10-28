@@ -11,12 +11,15 @@ List mirrored apps in a cloud cluster
 ## Usage
 
 ```bash
-miren cloud cluster apps [flags]
+miren cloud cluster apps [cluster] [flags]
 ```
+
+## Arguments
+
+- `cluster` — Cloud cluster XID (not a local config name)
 
 ## Flags
 
-- `--cluster` — Cloud cluster XID
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json

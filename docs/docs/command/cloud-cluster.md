@@ -24,8 +24,6 @@ miren cloud cluster [flags]
 - [`miren cloud cluster nodes`](./cloud-cluster-nodes.md) — Show mirrored node inventory and sync state
 - [`miren cloud cluster online`](./cloud-cluster-online.md) — Check cluster connectivity under your Cloud access rules
 - [`miren cloud cluster online-batch`](./cloud-cluster-online-batch.md) — Check connectivity for multiple accessible clusters
-- [`miren cloud cluster operation`](./cloud-cluster-operation.md) — Show a server operation's progress and outcome
-- [`miren cloud cluster operations`](./cloud-cluster-operations.md) — List server restart and upgrade operation history
 - [`miren cloud cluster routes`](./cloud-cluster-routes.md) — Show mirrored cluster routes and sync state
 - [`miren cloud cluster server`](./cloud-cluster-server.md) — Show server lifecycle status and supported actions
 - [`miren cloud cluster show`](./cloud-cluster-show.md) — Show cloud cluster metadata and mirrored status
