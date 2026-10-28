@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/example"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -109,8 +110,10 @@ func TestServerVerifiesClientCertChain(t *testing.T) {
 		// admits certless connections -- JWT/OIDC callers authenticate via the
 		// Authorization header and must not be forced to present a cert.
 		err := callEmit()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "401")
+		var denial cond.ErrRemote
+		require.ErrorAs(t, err, &denial)
+		require.Equal(t, "permission", denial.Category)
+		require.Equal(t, "unauthorized", denial.Code)
 	})
 }
 

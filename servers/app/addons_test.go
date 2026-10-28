@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
@@ -139,8 +140,10 @@ func TestAddonCatalogAccess(t *testing.T) {
 				if tc.allowed {
 					require.NoError(t, err)
 				} else {
-					require.Error(t, err)
-					assert.Contains(t, err.Error(), "403")
+					var denial cond.ErrRemote
+					require.ErrorAs(t, err, &denial)
+					assert.Equal(t, "permission", denial.Category)
+					assert.Equal(t, "forbidden", denial.Code)
 				}
 			}
 			if tc.method == rpc.AuthMethodWorkload && tc.allowed {

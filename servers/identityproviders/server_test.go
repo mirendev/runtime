@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
@@ -358,7 +359,10 @@ func TestProviderRPCWithoutEntityAccess(t *testing.T) {
 			c := ingress_v1alpha.NewIdentityProvidersClient(conn)
 			_, err = c.AddPassword(ctx, "shared", "network-credential", false)
 			if deny {
-				require.ErrorContains(t, err, "403")
+				var denial cond.ErrRemote
+				require.ErrorAs(t, err, &denial)
+				require.Equal(t, "permission", denial.Category)
+				require.Equal(t, "forbidden", denial.Code)
 				return
 			}
 			require.NoError(t, err)
@@ -375,7 +379,10 @@ func TestProviderRPCWithoutEntityAccess(t *testing.T) {
 			entities, err := cs.Connect(ss.ListenAddr(), "entities")
 			require.NoError(t, err)
 			_, err = entityserver_v1alpha.NewEntityAccessClient(entities).Get(ctx, "password_provider/shared")
-			require.ErrorContains(t, err, "403")
+			var denial cond.ErrRemote
+			require.ErrorAs(t, err, &denial)
+			require.Equal(t, "permission", denial.Category)
+			require.Equal(t, "forbidden", denial.Code)
 			_, err = c.Remove(ctx, "shared", false)
 			require.NoError(t, err)
 		})

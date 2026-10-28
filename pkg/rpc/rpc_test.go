@@ -350,8 +350,10 @@ func TestRPC(t *testing.T) {
 
 		// Should fail with auth error since Emit is not a public method
 		_, err = mc.Emit(ctx, recv)
-		r.Error(err)
-		r.Contains(err.Error(), "401")
+		var denial cond.ErrRemote
+		r.ErrorAs(err, &denial)
+		r.Equal("permission", denial.Category)
+		r.Equal("unauthorized", denial.Code)
 	})
 
 	t.Run("can reresolve a capability", func(t *testing.T) {

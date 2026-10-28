@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
@@ -144,7 +145,10 @@ func TestSandboxLifecycleCommandsUseRPC(t *testing.T) {
 func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 	ctx, _, server := sandboxCommandServer(t, true)
 	_, _, err := selectAppSandbox(ctx, "shop", "")
-	require.ErrorContains(t, err, "403")
+	var denial cond.ErrRemote
+	require.ErrorAs(t, err, &denial)
+	require.Equal(t, "permission", denial.Category)
+	require.Equal(t, "forbidden", denial.Code)
 	for _, tc := range []struct {
 		command any
 		flags   []string
@@ -152,7 +156,9 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
 		args = append(args, tc.flags...)
 		out, err := RunCommand(tc.command, append(args, "target")...)
-		require.ErrorContains(t, err, "403")
+		require.ErrorAs(t, err, &denial)
+		require.Equal(t, "permission", denial.Category)
+		require.Equal(t, "forbidden", denial.Code)
 		require.Empty(t, out.Stdout.String())
 	}
 }

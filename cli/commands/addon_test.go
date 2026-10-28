@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
@@ -169,7 +170,10 @@ func testAddonCatalogCLI(t *testing.T, mode ...string) {
 
 			deniedAddress := addonCLIServer(t, registry, workloadroles.RoleAppReadonly)
 			output, err := runAddonCLI(t, deniedAddress, func(ctx *Context) error { return cmd.call(ctx, FormatOptions{JSON: true}) })
-			require.ErrorContains(t, err, "403")
+			var denial cond.ErrRemote
+			require.ErrorAs(t, err, &denial)
+			require.Equal(t, "permission", denial.Category)
+			require.Equal(t, "forbidden", denial.Code)
 			assert.Empty(t, output)
 
 			emptyAddress := addonCLIServer(t, addon.NewRegistry(), workloadroles.RoleClusterReadonly, mode...)
