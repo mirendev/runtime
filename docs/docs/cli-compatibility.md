@@ -32,6 +32,8 @@ Miren commands use singular categories with explicit verbs. Categories such as `
 | `route set HOST APP` | `route set HOST -a APP` | Positional app retained with warning |
 | `app delete APP` | `app delete -a APP` | Positional app retained with warning |
 
+When a legacy positional app disagrees with `--app` or `MIREN_APP`, `app delete` and `route set` refuse to run. Remove the conflicting selector rather than relying on one to silently override the other.
+
 `app status --graph` adds a one-time resource snapshot. `app watch` is live only when stdout is a terminal; piped output prints once and exits. `app pool-size [COUNT] --service web` shows or changes an active service's desired sandbox count. Autoscaling can subsequently change that count; use fixed concurrency in `app.toml` for a persistent setting.
 
 `app history --ephemeral` lists preview versions, including versions without deployment records. Existing `app versions` JSON retains its shape, with an optional `short_id` added when available. List output includes short IDs for use in subsequent commands, falling back to full IDs for older servers.
@@ -41,6 +43,8 @@ Miren commands use singular categories with explicit verbs. Categories such as `
 All app-centric commands follow the same [deployment target selection rules](./deployment.md#deployment-targets). `-C` and `MIREN_CLUSTER` select a target when `deploy.toml` exists. Target order no longer supplies a default, and per-app pins in `app-state.toml` are ignored but not deleted.
 
 Without targets, other app commands may use the global active cluster. Deploy requires explicit selection, a sole configured cluster, or a picker; ambiguous unattended deploys fail rather than silently using the global active cluster. `cluster switch` changes only the global active cluster.
+
+With no configured clusters, cluster-backed commands explain how to run `miren cluster add` rather than implicitly dialing the default local development address. For direct-address development without client configuration, pass `--server-address 127.0.0.1:8443` explicitly. This does not bypass an invalid or ambiguous deployment-target selection. JSON deploy modes require an unambiguous selection and never open a picker, even on a terminal.
 
 ## Confirmation and JSON
 

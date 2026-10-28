@@ -11,14 +11,14 @@ import (
 )
 
 // pickCluster never lets an implicit global selection decide a deployment.
-func pickCluster(names []string, useSole bool) (string, error) {
+func pickCluster(names []string, useSole, interactive bool) (string, error) {
 	if len(names) == 0 {
 		return "", fmt.Errorf("no clusters configured; add one with 'miren cluster add': %w", ErrNoConfig)
 	}
 	if useSole && len(names) == 1 {
 		return names[0], nil
 	}
-	if !ui.IsInteractive() {
+	if !interactive {
 		return "", fmt.Errorf("cluster selection required; pass -C <cluster> or set MIREN_CLUSTER (choices: %v)", names)
 	}
 	items := make([]ui.PickerItem, len(names))
@@ -57,7 +57,7 @@ func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string
 		if !deploying && cfg.ActiveCluster() != "" {
 			return cfg.ActiveCluster(), nil
 		}
-		return pickCluster(cfg.GetClusterNames(), deploying)
+		return pickCluster(cfg.GetClusterNames(), deploying, a.isInteractive())
 	}
 	if targetName != "" {
 		target, err := dc.Target(targetName)
@@ -94,7 +94,7 @@ func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string
 		return "", fmt.Errorf("cluster %q is not a deploy target in %s; choices: %v", a.Cluster, appconfig.DeployConfigPath, names)
 	}
 	// Count targets, not distinct clusters: target order is not a default.
-	selected, err := pickCluster(names, true)
+	selected, err := pickCluster(names, true, a.isInteractive())
 	if err != nil {
 		return "", err
 	}
@@ -103,4 +103,16 @@ func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string
 		return "", err
 	}
 	return a.clusterNameForTarget(target)
+}
+
+func clusterSelectionError(err error) error {
+	summary := "cluster selection failed"
+	if errors.Is(err, ErrNoConfig) {
+		summary = "no clusters configured"
+	}
+	return &ui.Diagnostic{
+		Summary: summary,
+		Detail:  err.Error(),
+		Cause:   err,
+	}
 }

@@ -16,12 +16,20 @@ type RouteSetOptions struct {
 }
 
 func (o *RouteSetOptions) Validate(flags *GlobalFlags) error {
-	// Resolve the legacy argument before AppCentric requires an app. An
-	// explicit --app (or MIREN_APP) takes precedence over that argument.
-	if o.App == "" && o.AppName != "" {
+	if o.AppName != "" {
+		if o.App != "" && o.App != o.AppName {
+			return fmt.Errorf("positional app %q disagrees with --app or MIREN_APP %q", o.AppName, o.App)
+		}
 		o.App = o.AppName
 	}
-	return o.AppCentric.Validate(flags)
+	if err := o.AppCentric.Validate(flags); err != nil {
+		return err
+	}
+	if o.AppName != "" {
+		// Sandbox-injected app variables must not replace an explicit argument.
+		o.App = o.AppName
+	}
+	return nil
 }
 
 func RouteSet(ctx *Context, opts RouteSetOptions) error {

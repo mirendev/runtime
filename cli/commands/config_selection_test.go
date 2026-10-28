@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func TestAppClusterSelection(t *testing.T) {
@@ -109,11 +111,50 @@ func TestDirectAddressDoesNotBypassTargetSelection(t *testing.T) {
 	writeDeployToml(t, dir, "[[targets]]\nname = 'dev'\ncluster = 'staging'\n[[targets]]\nname = 'production'\ncluster = 'prod'\n")
 	for _, args := range [][]string{nil, {"-C", "outside"}} {
 		_, err := RunCommand(AppStatus, append([]string{"-d", dir, "-a", "shop", "--server-address", "127.0.0.1:1"}, args...)...)
+		diagnostic, ok := errors.AsType[*ui.Diagnostic](err)
+		require.True(t, ok, "%v", err)
+		require.Equal(t, "cluster selection failed", diagnostic.Summary)
 		if len(args) == 0 {
 			require.ErrorContains(t, err, "pass -C")
 		} else {
 			require.ErrorContains(t, err, "not a deploy target")
+			require.NotContains(t, diagnostic.Detail, "reachable address")
 		}
+	}
+}
+
+func TestClusterSelectionDiagnostics(t *testing.T) {
+	t.Setenv("CI", "1")
+	t.Setenv("MIREN_CLUSTER", "")
+	path := filepath.Join(t.TempDir(), "clientconfig.yaml")
+	t.Setenv("MIREN_CONFIG", path)
+	for _, tc := range []struct {
+		name    string
+		cfg     *clientconfig.Config
+		summary string
+		detail  string
+	}{
+		{name: "missing config", summary: "no clusters configured", detail: "miren cluster add"},
+		{name: "empty config", cfg: clientconfig.NewConfig(), summary: "no clusters configured", detail: "miren cluster add"},
+		{name: "no active cluster", cfg: clientconfig.NewConfig(), summary: "cluster selection failed", detail: "pass -C"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.cfg != nil {
+				if tc.name == "no active cluster" {
+					tc.cfg.SetCluster("staging", &clientconfig.ClusterConfig{Hostname: "staging"})
+				}
+				require.NoError(t, tc.cfg.SaveTo(path))
+			}
+			_, err := RunCommand(RouteList, "--config", path)
+			diagnostic, ok := errors.AsType[*ui.Diagnostic](err)
+			require.True(t, ok, "%v", err)
+			require.Equal(t, tc.summary, diagnostic.Summary)
+			require.Contains(t, diagnostic.Detail, tc.detail)
+			require.NotContains(t, diagnostic.Detail, "active cluster we can't resolve")
+			if tc.summary == "no clusters configured" {
+				require.ErrorIs(t, err, ErrNoConfig)
+			}
+		})
 	}
 }
 

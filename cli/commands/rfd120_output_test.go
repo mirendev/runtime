@@ -68,17 +68,28 @@ func TestRFD120RouteSetSelection(t *testing.T) {
 	writeAppToml(t, dir, `name = "local-app"`)
 	chdir(t, dir)
 	for _, tc := range []struct {
-		args []string
-		want string
+		args    []string
+		env     string
+		runtime string
+		want    string
+		wantErr bool
 	}{
-		{[]string{"example.com"}, "local-app"},
-		{[]string{"example.com", "legacy"}, "legacy"},
-		{[]string{"example.com", "legacy", "--app", "explicit"}, "explicit"},
-		{[]string{"example.com", "--app", "explicit"}, "explicit"},
+		{args: []string{"example.com"}, want: "local-app"},
+		{args: []string{"example.com", "legacy"}, want: "legacy"},
+		{args: []string{"example.com", "legacy", "--app", "explicit"}, wantErr: true},
+		{args: []string{"example.com", "--app", "explicit"}, want: "explicit"},
+		{args: []string{"example.com", "legacy"}, env: "other", wantErr: true},
+		{args: []string{"example.com", "legacy"}, env: "legacy", runtime: "legacy", want: "legacy"},
 	} {
+		t.Setenv("MIREN_APP", tc.env)
+		t.Setenv("MIREN_RUNTIME_APP", tc.runtime)
 		cmd := Infer("route set", "test", RouteSet)
 		require.NoError(t, cmd.fs.Parse(tc.args))
 		opts := cmd.opts.Interface().(*RouteSetOptions)
+		if tc.wantErr {
+			require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "disagrees with --app or MIREN_APP")
+			continue
+		}
 		require.NoError(t, opts.Validate(&GlobalFlags{}))
 		require.Equal(t, tc.want, opts.App)
 	}

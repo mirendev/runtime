@@ -259,6 +259,89 @@ The saga framework determines action execution order via **topological sort on d
 - RPC interfaces → implementations: `pkg/rpc/cmd/rpcgen`
 - Generated files have `.gen.go` suffix
 
+## CLI contract: RFD-120
+
+The approved [RFD-120](https://github.com/mirendev/rfd/blob/main/rfds/0100/0120-cli-philosophy-and-retro.md)
+defines the CLI's conventions. Preserve its deliberate exceptions and distinguish
+the long-term rules from temporary compatibility behavior documented in
+[CLI compatibility](./docs/docs/cli-compatibility.md). Do not implement the RFD's
+optional Cloud-name/xid lookup recommendations as though they already exist.
+
+### Naming and registration
+
+- Put commands under singular noun categories. Prefer `list`, `show`, `create`,
+  and `delete`; use `remove` only for removing a local configuration entry, such
+  as `cluster remove` or `target remove`, without deleting the remote resource.
+- Bare categories print subcommand help. Keep established exceptions: `logs`
+  defaults to app logs, `server` must keep starting the server for installed
+  systemd units, and `upgrade` means this machine rather than a remote cluster.
+  Bare `app` retains its dashboard only during the documented transition.
+- Avoid nested categories unless the noun is rarely used (`debug sandbox-pool`)
+  or app-defined (`app admin`). `logs` is the deliberate plural-name exception.
+- Keep canonical commands and aliases explicit in `cli/commands/commands.go`.
+  Infer a command once and use `Cmd.Alias` or `Cmd.DeprecatedAlias`, rather than
+  duplicating handlers/options or rewriting registrations in a separate pass.
+- Keep options structs inline unless they need another explicit reference,
+  such as a validation method or a shared handler.
+- Expose user-facing concepts, such as `app pool-size`, rather than requiring
+  users to understand internal entities such as sandbox pools.
+
+### Subjects and cluster selection
+
+- Use `AppCentric` for commands acting on one app: `-a/--app`, then `MIREN_APP`,
+  then the name in `.miren/app.toml`, found from `-d` or by walking up from cwd.
+  An app name is scoped to a cluster; resolve the cluster before looking it up.
+- With `.miren/deploy.toml`, app-centric commands select a **target name** using
+  `-C`, then `MIREN_CLUSTER`. Otherwise use the sole target, or prompt/error when
+  several exist. Target order is never a default. Apply the same selection rules
+  to deploy, status, logs, and other app-centric commands.
+- Cluster-wide commands ignore deploy targets. Without deploy targets, resolve
+  `-C`, then `MIREN_CLUSTER`, then the global active cluster. If nothing selects
+  a cluster, offer a picker on a terminal or require `-C` otherwise. With no
+  configured clusters, explain `miren cluster add`.
+- Deploy without targets is different: explicit selection, the sole configured
+  cluster, or a picker/error. Never silently deploy to the global active cluster.
+- Never read or write per-app cluster pins in `app-state.toml`. `-C` applies only
+  to this invocation; `cluster switch` changes only the global active cluster.
+  Outside target restrictions, retain `-C address;sha1:fingerprint` support.
+- Pass the command's main item as a positional argument; pass other subjects as
+  flags. For example, a route's hostname is positional and its app uses `-a`.
+  Legacy positional compatibility must not silently redirect a mutation when
+  app selectors disagree; reject conflicting selectors.
+- Preserve `env set`'s deliberate positional shorthand for `-e`.
+
+### Prompts and destructive actions
+
+- Use `ui.IsInteractive()`: both stdin and stdout must be terminals, and CI is
+  noninteractive. Without a terminal, never wait for input; name the missing
+  flag or argument. Where practical, offer real choices with `ui.RunPicker`.
+- Destructive commands confirm on a terminal, defaulting to No. `--yes` skips
+  confirmation; unattended destructive commands require it. `--force` overrides
+  a safety check and does not mean confirmation consent.
+- Respect the one-release transition: retain deprecated confirmation-skipping
+  force flags, and allow previously nonconfirming commands to run unattended
+  with a warning. Do not extend those exceptions to new commands or repurpose
+  the old flags. Runner force remains independent of confirmation.
+- Commands that only inspect/edit local configuration must not resolve a remote
+  cluster or open a cluster picker during setup; register them `WithLocalOnly()`.
+
+### Output and scripting
+
+- Data-oriented commands print once and exit. Support human output using the
+  existing `ui` widgets and JSON using `FormatOptions` (`--format json`/`--json`).
+  Do not introduce `-o json`; `-o` is reserved for an output file. Streaming
+  commands may offer JSON Lines. Commands consuming stdin should accept JSON.
+- Keep stdout machine-readable. Send warnings and deprecations to stderr.
+  Machine-readable deploy modes never prompt, even when attached to a terminal.
+- Live/watch commands check stdout before starting a TUI. When redirected, print
+  one snapshot and exit rather than leaving a script running indefinitely.
+- Use tables for collections, keep columns compact, put long text on the right,
+  and include entity short IDs so users can copy them into subsequent commands.
+  Preserve older-server fallbacks and documented JSON shapes during migration.
+- Report missing configuration, ambiguous selection, and invalid targets as
+  those problems, not as an unreachable or unknown cluster. Never silently fall
+  back to another cluster after an explicit selection fails.
+
 ### CLI JSON Output Pattern (FormatOptions)
 
 Commands that output lists or tables should support `--format json` using the `FormatOptions` pattern:

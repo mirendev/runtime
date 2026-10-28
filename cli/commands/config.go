@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 type ConfigCentric struct {
@@ -73,7 +74,7 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 	cfg, err := c.LoadConfig()
 	if err != nil {
 		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
-			return nil, "", fmt.Errorf("no clusters configured; add one with 'miren cluster add': %w", ErrNoConfig)
+			return nil, "", clusterSelectionError(fmt.Errorf("no clusters configured; add one with 'miren cluster add': %w", ErrNoConfig))
 		}
 		return nil, "", err
 	}
@@ -107,9 +108,9 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 
 	name = cfg.ActiveCluster()
 	if name == "" {
-		name, err = pickCluster(cfg.GetClusterNames(), false)
+		name, err = pickCluster(cfg.GetClusterNames(), false, ui.IsInteractive())
 		if err != nil {
-			return nil, "", err
+			return nil, "", clusterSelectionError(err)
 		}
 	}
 

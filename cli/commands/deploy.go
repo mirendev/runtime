@@ -112,6 +112,7 @@ type deployOpts struct {
 }
 
 func (o *deployOpts) Validate(glbl *GlobalFlags) error {
+	o.nonInteractive = o.machineReadable()
 	if err := o.AppCentric.Validate(glbl); err != nil {
 		return err
 	}
@@ -125,6 +126,7 @@ func (o *deployOpts) Validate(glbl *GlobalFlags) error {
 }
 
 func (o *deployOpts) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
+	o.nonInteractive = o.machineReadable()
 	if o.targetCluster == "" {
 		var err error
 		o.targetCluster, err = o.selectAppCluster(o.Target, true)

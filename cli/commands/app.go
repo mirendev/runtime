@@ -30,9 +30,10 @@ type AppCentric struct {
 	App string   `short:"a" long:"app" env:"MIREN_APP" description:"Application name"`
 	Dir string   `short:"d" long:"dir" description:"Directory to run from" default:"."`
 
-	config        *appconfig.AppConfig
-	resolvedDir   string // absolute path to the directory containing .miren/app.toml
-	foundInParent bool   // true when config was found by walking up from CWD
+	config         *appconfig.AppConfig
+	resolvedDir    string // absolute path to the directory containing .miren/app.toml
+	foundInParent  bool   // true when config was found by walking up from CWD
+	nonInteractive bool
 }
 
 // ResolvedDir returns the directory that should be used as the app source.
@@ -43,6 +44,10 @@ func (a *AppCentric) ResolvedDir() string {
 		return a.resolvedDir
 	}
 	return a.Dir
+}
+
+func (a *AppCentric) isInteractive() bool {
+	return !a.nonInteractive && ui.IsInteractive()
 }
 
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
@@ -129,7 +134,7 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 
 			noAppMsg := "no app configuration found — run 'miren init' to get started, or pass -a <name>"
 
-			if !ui.IsInteractive() {
+			if !a.isInteractive() {
 				return fmt.Errorf("%s", noAppMsg)
 			}
 
@@ -163,7 +168,7 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 func (a *AppCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
 	name, err := a.selectAppCluster("", false)
 	if err != nil {
-		return nil, "", err
+		return nil, "", clusterSelectionError(err)
 	}
 	config := a.ConfigCentric
 	config.Cluster = name
