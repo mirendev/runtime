@@ -2,6 +2,7 @@ package appconfig
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -96,7 +97,9 @@ func TestSourceRootUploads(t *testing.T) {
 						archive, err = tarx.MakeFilteredTar(ac.SourceDir(configDir), include, needed, &written, ac.UploadFiles(configDir)...)
 					}
 					require.NoError(t, err)
-					gz, err := gzip.NewReader(archive)
+					packed, err := io.ReadAll(archive)
+					require.NoError(t, err)
+					gz, err := gzip.NewReader(bytes.NewReader(packed))
 					require.NoError(t, err)
 					tr := tar.NewReader(gz)
 					entries := make(map[string]string)
@@ -128,6 +131,14 @@ func TestSourceRootUploads(t *testing.T) {
 						} else {
 							require.Equal(t, files["main.go"], entries["main.go"])
 						}
+					}
+					extracted := t.TempDir()
+					_, err = tarx.TarFS(bytes.NewReader(packed), extracted)
+					require.NoError(t, err)
+					for path, want := range entries {
+						body, err := os.ReadFile(filepath.Join(extracted, path))
+						require.NoError(t, err)
+						require.Equal(t, want, string(body))
 					}
 				}
 			}

@@ -326,13 +326,17 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 				}
 				emittedDirs[dirPath] = true
 
+				dirHdr := &tar.Header{Typeflag: tar.TypeDir, Mode: 0755}
 				dirInfo, dirErr := os.Stat(filepath.Join(dir, dirPath))
-				if dirErr != nil {
-					continue
+				if dirErr != nil && !os.IsNotExist(dirErr) {
+					return dirErr
 				}
-				dirHdr, hdrErr := tar.FileInfoHeader(dirInfo, "")
-				if hdrErr != nil {
-					continue
+				if dirErr == nil {
+					var hdrErr error
+					dirHdr, hdrErr = tar.FileInfoHeader(dirInfo, "")
+					if hdrErr != nil {
+						return hdrErr
+					}
 				}
 				dirHdr.Name = dirPath
 				if err := tw.WriteHeader(dirHdr); err != nil {
