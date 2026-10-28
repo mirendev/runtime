@@ -140,6 +140,7 @@ type beginUploadResponseJSON struct {
 	CompleteURL     string `json:"complete_url"`
 	SupportsPrepare bool   `json:"supports_prepare"`
 	AlreadyActive   bool   `json:"already_active"`
+	Prepared        bool   `json:"prepared"`
 	Kind            string `json:"kind"`
 	OrderingKey     string `json:"ordering_key"`
 	MD5             string `json:"md5"`
@@ -334,10 +335,12 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 		volumeID: volumeID, kind: req.Kind, orderingKey: req.OrderingKey,
 		completion: completeUploadRequestJSON{MD5: claim.MD5, CRC32C: claim.CRC32C, Size: size,
 			Metadata: req.Metadata, LeaseNonce: req.LeaseNonce}}
-	if begun.AlreadyActive {
+	// Prepared bytes are immutable and have no upload URL. Reuse the bound
+	// identity, but still authenticate publication through CompleteUpload.
+	if begun.AlreadyActive || begun.Prepared {
 		if claim.MD5 == "" || begun.Kind != string(req.Kind) || begun.OrderingKey != req.OrderingKey ||
 			begun.MD5 != claim.MD5 || begun.CRC32C != claim.CRC32C || begun.Size != size {
-			return nil, fmt.Errorf("active update does not match local payload")
+			return nil, fmt.Errorf("existing update does not match local payload")
 		}
 		return prepared, nil
 	}

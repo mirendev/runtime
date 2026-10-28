@@ -301,12 +301,19 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "lost begin response", 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"update_id": "volup-" + body.Key, "upload_url": s.url + "/put/" + body.Key,
+		response := map[string]any{
+			"update_id":        "volup-" + body.Key,
 			"complete_url":     "/api/v1/disk/volumes/vol-test/updates/volup-" + body.Key + "/complete",
 			"supports_prepare": true, "already_active": row.active, "kind": row.kind,
+			"prepared":     row.prepared && !row.active,
 			"ordering_key": row.key, "md5": row.md5, "crc32c": row.crc, "size": row.size,
-		})
+		}
+		// Cloud services/disk/updates.go returns immutable prepared identities
+		// without an upload URL: staging was consumed during preparation.
+		if !row.prepared && !row.active {
+			response["upload_url"] = s.url + "/put/" + body.Key
+		}
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/updates") {
@@ -329,6 +336,10 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.Method == "PUT" {
+		if row.prepared || row.active {
+			http.Error(w, "prepared payload is immutable", http.StatusConflict)
+			return
+		}
 		if s.fail("put", key) {
 			http.Error(w, "PUT failed", http.StatusServiceUnavailable)
 			return
@@ -431,6 +442,14 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			}
 			remote.mu.Lock()
 			prefix := append([]string{}, remote.order...)
+			if stage == "put" {
+				assert.Equal(t, keys[:1], prefix)
+				assert.False(t, remote.rows[keys[1]].prepared)
+				for _, key := range keys[2:uploadConcurrency] {
+					assert.True(t, remote.rows[key].prepared, "later concurrent work survives the earlier PUT failure")
+					assert.False(t, remote.rows[key].active)
+				}
+			}
 			remote.mu.Unlock()
 			require.Equal(t, keys[:len(prefix)], prefix, "replay must never see a hole")
 			// Rebuild state, client and watcher as after a process restart.
@@ -442,6 +461,9 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			entries, err := os.ReadDir(logDir)
 			require.NoError(t, err)
 			require.Empty(t, entries)
+			horizon, err = readLogHorizon(diskPath)
+			require.NoError(t, err)
+			require.Equal(t, keys[len(keys)-1], horizon)
 			require.Equal(t, keys, remote.order)
 			require.Len(t, remote.rows, count, "retries must reuse remote identities")
 			require.LessOrEqual(t, remote.peakTransfers, 8)

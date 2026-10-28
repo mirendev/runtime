@@ -353,25 +353,32 @@ func TestCloudUpdatesClientListStaysAscendingByDefault(t *testing.T) {
 	assert.NotContains(t, seenQueries[0], "limit=")
 }
 
-func TestCloudUpdatesClientRejectsUnmatchedActiveProof(t *testing.T) {
-	for _, field := range []string{"kind", "ordering_key", "md5", "crc32c", "size"} {
-		t.Run(field, func(t *testing.T) {
-			ts, h, auth := newTestUploaderServer(t)
-			h.handler = func(w http.ResponseWriter, r *http.Request) {
-				var claim map[string]any
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&claim))
-				claim["update_id"], claim["already_active"] = "volup-active", true
-				if field == "size" {
-					claim[field] = 99
-				} else {
-					claim[field] = "different"
+func TestCloudUpdatesClientRejectsUnmatchedProof(t *testing.T) {
+	for _, state := range []string{"already_active", "prepared"} {
+		for _, field := range []string{"kind", "ordering_key", "md5", "crc32c", "size"} {
+			t.Run(state+"/"+field, func(t *testing.T) {
+				ts, h, auth := newTestUploaderServer(t)
+				h.handler = func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/updates/upload") {
+						t.Error("mismatched claim must not upload or complete")
+						http.Error(w, "unexpected request", http.StatusBadRequest)
+						return
+					}
+					var claim map[string]any
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&claim))
+					claim["update_id"], claim[state] = "volup-existing", true
+					if field == "size" {
+						claim[field] = 99
+					} else {
+						claim[field] = "different"
+					}
+					json.NewEncoder(w).Encode(claim)
 				}
-				json.NewEncoder(w).Encode(claim)
-			}
-			client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
-			_, err := client.Upload(context.Background(), "vol-test", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000100000001"}, bytes.NewReader([]byte("payload")), 7)
-			require.ErrorContains(t, err, "active update does not match")
-		})
+				client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
+				_, err := client.Upload(context.Background(), "vol-test", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000100000001"}, bytes.NewReader([]byte("payload")), 7)
+				require.ErrorContains(t, err, "update does not match local payload")
+			})
+		}
 	}
 }
 
