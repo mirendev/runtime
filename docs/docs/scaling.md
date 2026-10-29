@@ -1,6 +1,6 @@
 ---
 title: Application Scaling
-description: How Miren autoscales your app based on traffic, and how to configure scaling behavior.
+description: How Miren autoscales HTTP services based on ingress traffic, and how to configure scaling behavior.
 keywords: [scaling, autoscaling, concurrency, instances, traffic, scale to zero]
 ---
 
@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Application Scaling
 
-Miren automatically scales your application instances based on traffic. This page explains how scaling works and how to configure it for your needs.
+Miren automatically scales HTTP service instances based on requests through HTTP ingress. This page explains how scaling works and how to configure it for your needs.
 
 :::info[Scaling out across machines]
 This page is about how many instances of your app run. When the machine itself runs out of room, you add more machines to the cluster instead: see [Distributed Runners](./distributed-runners.md).
@@ -29,11 +29,15 @@ mode = "fixed"
 num_instances = 2
 ```
 
-`auto` scales the service with traffic, all the way down to zero when idle; `fixed` runs an exact instance count. Deploy and the settings take effect. Both modes and every field are explained below.
+`auto` scales the service with HTTP requests through ingress, all the way down to zero when idle; `fixed` runs an exact instance count. Deploy and the settings take effect. Both modes and every field are explained below.
 
 ## How Autoscaling Works
 
-By default, Miren uses **autoscaling** for web services. As traffic to your application increases, Miren automatically launches additional instances to handle the load. When traffic decreases, instances are scaled back down.
+By default, Miren uses **autoscaling** for web services. As HTTP requests through Miren's ingress increase, Miren automatically launches additional instances to handle the load. When that traffic decreases, instances are scaled back down.
+
+:::warning[Auto mode only tracks HTTP ingress traffic]
+Only HTTP requests through Miren's ingress count as activity for autoscaling. TCP/UDP traffic, node-port traffic, and direct calls between services that bypass ingress do not keep an auto-mode service active or wake it after it scales to zero. Use `fixed` mode for services that need to stay running for these traffic paths, background work, or other non-ingress activity.
+:::
 
 This approach is similar to Google Cloud Run's scaling model: instead of guessing how many replicas you need, Miren observes actual demand and adjusts automatically.
 
@@ -54,7 +58,7 @@ Miren can scale your application all the way down to zero instances when there's
 - **Lower costs**: Development, staging, and low-traffic production apps don't waste memory or CPU
 - **No idle tax**: Internal tools, webhooks, and scheduled tasks don't need dedicated instances waiting around
 
-When a request arrives for a scaled-to-zero app, Miren quickly spins up an instance to handle it. The first request may have slightly higher latency, but subsequent requests are served immediately.
+When an HTTP request arrives through ingress for a scaled-to-zero app, Miren quickly spins up an instance to handle it. The first request may have slightly higher latency, but subsequent requests are served immediately.
 
 ## Scaling Modes
 
@@ -62,8 +66,8 @@ Miren supports two scaling modes:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| `auto` | Scales instances based on traffic | Stateless web services, APIs |
-| `fixed` | Runs a set number of instances | Databases, workers, stateful services |
+| `auto` | Scales instances based on HTTP requests through ingress | Stateless HTTP services, APIs |
+| `fixed` | Runs a set number of instances | TCP/UDP services, direct-only services, databases, workers, stateful services |
 
 ## Default Behavior
 
@@ -78,7 +82,7 @@ Configure scaling in your `.miren/app.toml` file under `[services.<name>.concurr
 
 ### Auto Mode (Default for Web)
 
-Auto mode scales instances based on concurrent requests:
+Auto mode scales HTTP service instances based on concurrent requests through ingress:
 
 ```toml
 [services.web.concurrency]
