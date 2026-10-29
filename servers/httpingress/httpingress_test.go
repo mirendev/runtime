@@ -916,9 +916,10 @@ func (stubActivator) SetPoolCreator(activator.PoolCreator) {}
 
 type bootingActivator struct {
 	stubActivator
-	ready   <-chan struct{}
-	url     string
-	started atomic.Bool
+	ready    <-chan struct{}
+	url      string
+	started  atomic.Bool
+	overflow bool
 }
 
 func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.AppVersion, _ string) (*activator.Lease, error) {
@@ -930,7 +931,11 @@ func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.App
 		if a.err != nil {
 			return nil, a.err
 		}
-		return &activator.Lease{URL: a.url, Size: 10}, nil
+		size := 10
+		if a.overflow {
+			size = 1
+		}
+		return &activator.Lease{URL: a.url, Size: size, Overflow: a.overflow}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -993,10 +998,12 @@ func TestColdStartLoading(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, method, accept, dest string
-		fast, loading              bool
+		fast, loading, overflow    bool
 	}{
 		{name: "slow navigation", method: "GET", accept: "text/html", dest: "document", loading: true},
 		{name: "fast navigation", method: "GET", accept: "text/html", fast: true},
+		{name: "fast overflow navigation", method: "GET", accept: "text/html", fast: true, overflow: true},
+		{name: "slow overflow navigation", method: "GET", accept: "text/html", loading: true, overflow: true},
 		{name: "API", method: "GET", accept: "application/json"},
 		{name: "POST", method: "POST", accept: "text/html", dest: "document"},
 		{name: "fetch", method: "GET", accept: "text/html", dest: "empty"},
@@ -1005,7 +1012,7 @@ func TestColdStartLoading(t *testing.T) {
 			ready := make(chan struct{})
 			s := newTimeoutTestServer(5 * time.Second)
 			s.apps = make(map[string]*appUsage)
-			s.aa = &bootingActivator{ready: ready, url: backend.URL}
+			s.aa = &bootingActivator{ready: ready, url: backend.URL, overflow: tc.overflow}
 			target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}}
 			appName := "test"
 			request := func() *http.Request {

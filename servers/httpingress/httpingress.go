@@ -166,9 +166,11 @@ type appUsage struct {
 }
 
 type appBoot struct {
-	done  chan struct{}
-	lease *activator.Lease
-	err   error
+	done    chan struct{}
+	lease   *activator.Lease
+	err     error
+	waiters int
+	claimed bool
 }
 
 func NewServer(
@@ -489,12 +491,17 @@ func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *co
 			go func() {
 				actContext, cancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
 				defer cancel()
-				boot.lease, boot.err = h.aa.AcquireLease(actContext, ver, service)
-				if boot.err == nil && boot.lease != nil {
-					h.releaseLease(actContext, h.retainLease(actContext, key, boot.lease))
+				acquired, err := h.aa.AcquireLease(actContext, ver, service)
+				if err == nil && acquired != nil && !acquired.Overflow {
+					h.releaseLease(actContext, h.retainLease(actContext, key, acquired))
 				}
 
 				h.mu.Lock()
+				boot.lease, boot.err = acquired, err
+				releaseOverflow := err == nil && acquired != nil && acquired.Overflow && boot.waiters == 0
+				if releaseOverflow {
+					boot.claimed = true
+				}
 				if boot.err == nil && boot.lease != nil {
 					delete(h.boots, bootKey)
 				} else {
@@ -510,22 +517,50 @@ func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *co
 				}
 				close(boot.done)
 				h.mu.Unlock()
+				if releaseOverflow {
+					h.aa.ReleaseLease(context.WithoutCancel(actContext), acquired)
+				}
 			}()
 		}
+		boot.waiters++
 		h.mu.Unlock()
 
+		var waitErr error
 		select {
 		case <-boot.done:
-			if boot.err != nil || boot.lease == nil {
-				return nil, boot.err
-			}
-			// Each waiter takes its own use of the cached lease. If that lease
-			// is now full or invalidated, acquire more capacity within our budget.
 		case <-timer.C:
-			return nil, errAppLoading
+			waitErr = errAppLoading
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			waitErr = ctx.Err()
 		}
+
+		h.mu.Lock()
+		boot.waiters--
+		var overflow *activator.Lease
+		if boot.err == nil && boot.lease != nil && boot.lease.Overflow && !boot.claimed {
+			// Overflow capacity belongs to one request, never to the shared
+			// cache. If every waiter left, return it instead of stranding it.
+			if waitErr == nil || boot.waiters == 0 {
+				boot.claimed = true
+				overflow = boot.lease
+			}
+		}
+		acquired, err := boot.lease, boot.err
+		h.mu.Unlock()
+		if waitErr != nil {
+			if overflow != nil {
+				h.aa.ReleaseLease(context.WithoutCancel(ctx), overflow)
+			}
+			return nil, waitErr
+		}
+		if err != nil || acquired == nil {
+			return nil, err
+		}
+		if overflow != nil {
+			return h.retainLease(ctx, key, overflow), nil
+		}
+		// Each remaining waiter takes its own cached use or acquires more
+		// capacity within its original budget if the lease is full or claimed.
 	}
 }
 
