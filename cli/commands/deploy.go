@@ -87,8 +87,9 @@ func reconcileDeploymentCancellation(
 type deployOpts struct {
 	AppCentric
 
-	Target        string `long:"target" description:"Deployment target from .miren/deploy.toml"`
-	targetCluster string
+	Target            string `long:"target" description:"Deployment target from .miren/deploy.toml"`
+	targetCluster     string
+	needsClusterSetup bool
 
 	// Deploy carries its own format flags rather than the shared FormatOptions:
 	// it is the one command that also speaks jsonl, and the shared help text
@@ -112,6 +113,7 @@ type deployOpts struct {
 }
 
 func (o *deployOpts) Validate(glbl *GlobalFlags) error {
+	o.needsClusterSetup = false
 	o.nonInteractive = o.machineReadable()
 	if err := o.AppCentric.Validate(glbl); err != nil {
 		return err
@@ -122,10 +124,21 @@ func (o *deployOpts) Validate(glbl *GlobalFlags) error {
 	}
 	var err error
 	o.targetCluster, err = o.selectAppCluster(o.Target, true)
+	if errors.Is(err, ErrNoConfig) && o.isInteractive() {
+		cfg, configErr := o.LoadConfig()
+		if configErr == nil && cfg.HasIdentities() {
+			// Let runDeploy offer cluster onboarding after login, before any RPC.
+			o.needsClusterSetup = true
+			return nil
+		}
+	}
 	return err
 }
 
 func (o *deployOpts) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
+	if o.needsClusterSetup {
+		return nil, "", nil
+	}
 	o.nonInteractive = o.machineReadable()
 	if o.targetCluster == "" {
 		var err error
@@ -545,9 +558,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 
 	// Confirm deployment unless --yes is used or no terminal is attached.
 	// Always confirm when the app config was found in a parent directory,
-	// otherwise skip confirmation when only one cluster is configured.
+	// but a destination just chosen in the picker needs no second confirmation.
 	hasSingleCluster := ctx.ClientConfig != nil && ctx.ClientConfig.GetClusterCount() == 1
-	needsConfirm := opts.foundInParent || !hasSingleCluster
+	needsConfirm := opts.foundInParent || (!hasSingleCluster && !opts.clusterPicked)
 	if !opts.Yes && !opts.Force && isInteractive && needsConfirm {
 		if opts.foundInParent {
 			ctx.Printf("  ℹ App config found in parent directory %s\n", dir)

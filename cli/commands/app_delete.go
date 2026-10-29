@@ -15,6 +15,7 @@ type AppDeleteOptions struct {
 }
 
 func (o *AppDeleteOptions) Validate(flags *GlobalFlags) error {
+	o.noInit = true
 	if o.AppName != "" {
 		if o.App != "" && o.App != o.AppName {
 			return fmt.Errorf("positional app %q disagrees with --app or MIREN_APP %q", o.AppName, o.App)

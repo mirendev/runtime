@@ -98,7 +98,6 @@ miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 	d.Dispatch("deployment create", deploy)
 	d.Dispatch("deploy", deploy.Alias("deploy", WithGroup(GroupGettingStarted)))
 	deployCancel := Infer("deployment cancel", "Cancel an in-progress deployment", DeployCancel,
-		WithExample(mflags.Example{Name: "Cancel the current deployment", Body: "miren deployment cancel dep_abc123"}),
 		WithExample(mflags.Example{Name: "Cancel a specific deployment", Body: "miren deployment cancel dep_abc123"}),
 	)
 	d.Dispatch("deployment cancel", deployCancel)
@@ -1477,7 +1476,7 @@ Use ` + "`" + `--format json` + "`" + ` to get the result as a single JSON docum
 Use ` + "`" + `--format jsonl` + "`" + ` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an ` + "`" + `event` + "`" + ` name and a ` + "`" + `time` + "`" + `, and stderr stays empty. Events are ` + "`" + `start` + "`" + `, ` + "`" + `message` + "`" + `, ` + "`" + `upload` + "`" + `, ` + "`" + `upload_complete` + "`" + `, ` + "`" + `build_step` + "`" + ` (with ` + "`" + `status` + "`" + ` started, done, cached, or error), ` + "`" + `build_log` + "`" + `, ` + "`" + `build_error` + "`" + `, ` + "`" + `build_complete` + "`" + `, ` + "`" + `deployment` + "`" + ` (phase changes, using the deployment record's phase names), ` + "`" + `warning` + "`" + `, ` + "`" + `health` + "`" + ` (an ` + "`" + `outcome` + "`" + ` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an ` + "`" + `ok` + "`" + ` flag, and the app's health classification with its instance counts), ` + "`" + `port_warning` + "`" + `, ` + "`" + `app_log` + "`" + ` (recent crash output on a failed rollout), ` + "`" + `log` + "`" + ` (the CLI's own log records, which would otherwise go to stderr), and finally ` + "`" + `result` + "`" + `, which carries the same fields as the ` + "`" + `--format json` + "`" + ` document.
 
 :::note[Config changes deploy on their own]
-Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deployment create` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
+Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon delete` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deployment create` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
 :::`
 
 const debugDeployEventsDescription = `A deploy run with ` + "`" + `--format jsonl` + "`" + ` writes one JSON object per line and nothing a person would want to read. This command turns that stream back into the output the deploy would have printed: the phase summaries, build steps, health verdict, routes, and final status. Point it at a saved file, or pipe a live deploy through it.
@@ -1496,7 +1495,7 @@ Use restart to:
 - Pick up data restored out-of-band (for example, after ` + "`" + `miren disk restore` + "`" + `)
 
 :::note[Config and env changes restart on their own]
-You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon destroy` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
+You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon delete` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
 :::`
 
 const secretSetDescription = `Stores a value in the cluster's secret store. The value is encrypted at rest and is never echoed, logged, or written to disk by this command — it travels to the server, which holds the only key.

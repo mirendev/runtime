@@ -16,7 +16,7 @@ Use restart to:
 - Pick up data restored out-of-band (for example, after `miren disk restore`)
 
 :::note[Config and env changes restart on their own]
-You do not need to restart after `miren env set`, `miren env delete`, `miren addon create`, or `miren addon destroy`. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
+You do not need to restart after `miren env set`, `miren env delete`, `miren addon create`, or `miren addon delete`. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
 :::
 
 ## Usage

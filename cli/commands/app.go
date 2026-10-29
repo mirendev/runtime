@@ -34,6 +34,8 @@ type AppCentric struct {
 	resolvedDir    string // absolute path to the directory containing .miren/app.toml
 	foundInParent  bool   // true when config was found by walking up from CWD
 	nonInteractive bool
+	noInit         bool
+	clusterPicked  bool
 }
 
 // ResolvedDir returns the directory that should be used as the app source.
@@ -114,6 +116,8 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {
 			a.App = a.config.Name
+		} else if a.noInit {
+			return fmt.Errorf("app is required; pass -a <name> or run from a directory with .miren/app.toml")
 		} else {
 			// No app name from flag or config — try to help the user.
 			workDir := a.Dir

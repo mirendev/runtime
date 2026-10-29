@@ -3,14 +3,161 @@ package commands
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestDeployTerminal(t *testing.T) {
+	if scenario := os.Getenv("MIREN_TEST_DEPLOY_TERMINAL"); scenario != "" {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MIREN_APP", "")
+		t.Setenv("MIREN_RUNTIME_APP", "")
+		t.Setenv("MIREN_CLUSTER", "")
+		t.Setenv("CI", "")
+		if scenario == "unattended" {
+			t.Setenv("CI", "1")
+		}
+		dir := t.TempDir()
+		chdir(t, dir)
+		cfg := clientconfig.NewConfig()
+		cfg.SetIdentity("cloud", &clientconfig.IdentityConfig{Type: clientconfig.IdentityKeypair})
+		cmd := Infer("deploy", "test", Deploy)
+		args := []string{}
+		if scenario == "delete" {
+			cmd = Infer("app delete", "test", AppDelete)
+		} else {
+			writeAppToml(t, dir, `name = "myapp"`)
+		}
+		switch scenario {
+		case "clusters", "targets", "parent", "explicit", "sole":
+			server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"), rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, server.Close()) })
+			// No build service: selection can proceed, but no deployment can start.
+			cfg.SetCluster("a-staging", &clientconfig.ClusterConfig{Hostname: server.ListenAddr(), Insecure: true})
+			if scenario != "sole" {
+				cfg.SetCluster("z-prod", &clientconfig.ClusterConfig{Hostname: server.ListenAddr(), Insecure: true})
+				require.NoError(t, cfg.SetActiveCluster("z-prod"))
+			}
+			if scenario == "targets" || scenario == "parent" {
+				writeDeployToml(t, dir, "[[targets]]\nname = 'dev'\ncluster = 'a-staging'\n[[targets]]\nname = 'production'\ncluster = 'z-prod'\n")
+			}
+			if scenario == "parent" {
+				child := filepath.Join(dir, "child")
+				require.NoError(t, os.Mkdir(child, 0755))
+				chdir(t, child)
+			}
+			if scenario == "explicit" {
+				args = append(args, "-C", "a-staging")
+			}
+		case "json":
+			args = append(args, "--json")
+		case "format-json", "jsonl":
+			format := "json"
+			if scenario == "jsonl" {
+				format = "jsonl"
+			}
+			args = append(args, "--format", format)
+		}
+		configPath := filepath.Join(t.TempDir(), "clientconfig.yaml")
+		require.NoError(t, cfg.SaveTo(configPath))
+		require.NoError(t, cmd.fs.Parse(append(args, "--config", configPath)))
+		err := cmd.Invoke()
+		if scenario == "parent" || scenario == "explicit" {
+			require.NoError(t, err, "declining a deploy exits successfully")
+		} else {
+			require.Error(t, err)
+		}
+		fmt.Printf("COMMAND_RESULT: %v\n", err)
+		if scenario == "delete" {
+			_, err := os.Stat(filepath.Join(dir, ".miren"))
+			require.True(t, os.IsNotExist(err), "delete must not initialize an app")
+		}
+		return
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("terminal regression test uses util-linux script")
+	}
+	script, err := exec.LookPath("script")
+	if err != nil {
+		t.Skip("terminal regression test requires script")
+	}
+	binary, err := os.Executable()
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		prompts []string
+		keys    []string
+		want    string
+	}{
+		{"onboarding", []string{"Would you like to add one now?"}, []string{"n"}, "COMMAND_RESULT: no clusters configured"},
+		{"clusters", []string{"Select a cluster:"}, []string{"\r"}, "Deploying: myapp → a-staging"},
+		{"targets", []string{"Select a cluster:"}, []string{"\r"}, "Deploying: myapp → a-staging"},
+		{"parent", []string{"Select a cluster:", "Deploy app 'myapp' to cluster 'a-staging'?"}, []string{"\r", "n"}, "deployment cancelled"},
+		{"explicit", []string{"Deploy app 'myapp' to cluster 'a-staging'?"}, []string{"n"}, "deployment cancelled"},
+		{"sole", nil, nil, "Deploying: myapp → a-staging"},
+		{"json", nil, nil, "no clusters configured"},
+		{"format-json", nil, nil, "no clusters configured"},
+		{"jsonl", nil, nil, "no clusters configured"},
+		{"unattended", nil, nil, "no clusters configured"},
+		{"delete", nil, nil, "app is required; pass -a <name>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, script, "-qefc", fmt.Sprintf("%q -test.run=^TestDeployTerminal$ -test.v", binary), "/dev/null")
+			cmd.Env = append(os.Environ(), "MIREN_TEST_DEPLOY_TERMINAL="+tc.name, "TERM=dumb", "NO_COLOR=1")
+			input, err := cmd.StdinPipe()
+			require.NoError(t, err)
+			defer input.Close()
+			output, err := cmd.StdoutPipe()
+			require.NoError(t, err)
+			cmd.Stderr = cmd.Stdout
+			require.NoError(t, cmd.Start())
+			var transcript strings.Builder
+			next := 0
+			buf := make([]byte, 4096)
+			for {
+				n, err := output.Read(buf)
+				transcript.Write(buf[:n])
+				if next < len(tc.prompts) && strings.Contains(transcript.String(), tc.prompts[next]) {
+					_, writeErr := io.WriteString(input, tc.keys[next])
+					require.NoError(t, writeErr)
+					next++
+				}
+				if err != nil {
+					require.ErrorIs(t, err, io.EOF)
+					break
+				}
+			}
+			text := transcript.String()
+			t.Log(text)
+			require.NoError(t, cmd.Wait(), text)
+			require.Equal(t, len(tc.prompts), next)
+			require.Contains(t, text, tc.want)
+			require.Contains(t, text, "COMMAND_RESULT:")
+			if tc.name == "clusters" || tc.name == "targets" || tc.name == "sole" {
+				require.Contains(t, text, "Deploying")
+				require.NotContains(t, text, "Deploy app '")
+			} else if len(tc.prompts) == 0 {
+				require.NotContains(t, text, "Would you like")
+				require.NotContains(t, text, "Run 'miren init'")
+			}
+		})
+	}
+}
 
 func writeDeployToml(t *testing.T, dir, content string) {
 	t.Helper()

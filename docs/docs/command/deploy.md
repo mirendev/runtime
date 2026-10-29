@@ -32,7 +32,7 @@ Use `--format json` to get the result as a single JSON document on stdout (`stat
 Use `--format jsonl` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an `event` name and a `time`, and stderr stays empty. Events are `start`, `message`, `upload`, `upload_complete`, `build_step` (with `status` started, done, cached, or error), `build_log`, `build_error`, `build_complete`, `deployment` (phase changes, using the deployment record's phase names), `warning`, `health` (an `outcome` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an `ok` flag, and the app's health classification with its instance counts), `port_warning`, `app_log` (recent crash output on a failed rollout), `log` (the CLI's own log records, which would otherwise go to stderr), and finally `result`, which carries the same fields as the `--format json` document.
 
 :::note[Config changes deploy on their own]
-Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deployment create` when your code or `app.toml` has changed.
+Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon delete`) already creates and rolls out a new version. You only need `miren deployment create` when your code or `app.toml` has changed.
 :::
 
 ## Usage

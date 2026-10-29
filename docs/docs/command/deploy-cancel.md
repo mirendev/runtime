@@ -32,12 +32,6 @@ miren deploy cancel [deployment] [flags]
 
 ## Examples
 
-**Cancel the current deployment:**
-
-```bash
-miren deployment cancel dep_abc123
-```
-
 **Cancel a specific deployment:**
 
 ```bash

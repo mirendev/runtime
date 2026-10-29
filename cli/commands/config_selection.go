@@ -36,6 +36,7 @@ func pickCluster(names []string, useSole, interactive bool) (string, error) {
 }
 
 func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string, error) {
+	a.clusterPicked = false
 	var dc *appconfig.DeployConfig
 	// Deploy ships this directory's source even when the destination app differs.
 	// Other app commands can leave its targets only when its app is known to differ.
@@ -63,7 +64,10 @@ func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string
 		if !deploying && cfg.ActiveCluster() != "" {
 			return cfg.ActiveCluster(), nil
 		}
-		return pickCluster(cfg.GetClusterNames(), deploying, a.isInteractive())
+		names := cfg.GetClusterNames()
+		selected, err := pickCluster(names, deploying, a.isInteractive())
+		a.clusterPicked = err == nil && (!deploying || len(names) != 1)
+		return selected, err
 	}
 	if targetName != "" {
 		target, err := dc.Target(targetName)
@@ -104,6 +108,7 @@ func (a *AppCentric) selectAppCluster(targetName string, deploying bool) (string
 	if err != nil {
 		return "", err
 	}
+	a.clusterPicked = len(names) > 1
 	target, err := dc.Target(selected)
 	if err != nil {
 		return "", err
