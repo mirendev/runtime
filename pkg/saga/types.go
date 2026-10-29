@@ -33,6 +33,7 @@ const (
 // ActionResult stores the outcome of a single action execution.
 type ActionResult struct {
 	// Output is the JSON-serialized output from the action.
+	// When Error is set, this is diagnostic evidence only, not undo state.
 	Output []byte `json:"output,omitempty"`
 
 	// ExecutedAt is when the action was executed.

@@ -430,6 +430,9 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 			}
 			if len(result.Output) > 0 {
 				ctx.Printf("     output: %s\n", formatSagaJSON(result.Output, full, 5))
+				if exec.DefinitionName == "create-sandbox" && name == "boot-containers" {
+					printSandboxStartupTimings(ctx, result.Output)
+				}
 			}
 		}
 	}
@@ -439,6 +442,32 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 		for _, c := range children {
 			ctx.Printf("  %s  %s  %s\n", ui.CleanEntityID(c.exec.ID), c.exec.DefinitionName, sagaStatusLabel(c.exec))
 		}
+	}
+}
+
+func printSandboxStartupTimings(ctx *Context, raw []byte) {
+	var out struct {
+		StartupTimings []struct {
+			Name        string                   `json:"name"`
+			ImageCache  string                   `json:"image_cache"`
+			DurationsNS map[string]time.Duration `json:"durations_ns"`
+		} `json:"startup_timings"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return
+	}
+	for _, timing := range out.StartupTimings {
+		cache := timing.ImageCache
+		if cache == "" {
+			cache = "unknown"
+		}
+		var stages []string
+		for _, stage := range []string{"image_lookup", "image_pull_unpack", "container_create", "task_create", "task_start"} {
+			if elapsed, ok := timing.DurationsNS[stage]; ok {
+				stages = append(stages, fmt.Sprintf("%s=%s", stage, elapsed.Round(time.Microsecond)))
+			}
+		}
+		ctx.Printf("     startup %s (cache %s): %s\n", timing.Name, cache, strings.Join(stages, " "))
 	}
 }
 

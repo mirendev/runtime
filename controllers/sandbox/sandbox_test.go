@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -350,6 +351,20 @@ func TestSandbox(t *testing.T) {
 
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
+
+		exec, err := co.sagaStorage.Get(ctx, createSandboxSagaID(&tco))
+		r.NoError(err)
+		var boot bootContainersOut
+		r.NoError(json.Unmarshal(exec.ExecutedActions[actionBootCtrs].Output, &boot))
+		r.Len(boot.StartupTimings, 1)
+		timing := boot.StartupTimings[0]
+		r.Equal("sort", timing.Name)
+		r.Equal("mn-sort:latest", timing.Image)
+		r.Equal("hit", timing.ImageCache)
+		r.Len(timing.DurationsNS, 4)
+		for _, stage := range []string{"image_lookup", "container_create", "task_create", "task_start"} {
+			r.Positive(timing.DurationsNS[stage], stage)
+		}
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
