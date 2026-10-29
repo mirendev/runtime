@@ -195,6 +195,34 @@ func TestDeployTargetCommandsMaintainConfig(t *testing.T) {
 	require.Nil(t, dc)
 }
 
+func TestDeployTargetsStayAtConfigRoot(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeAppToml(t, dir, `name = "default-app"`)
+	writeDeployToml(t, dir, "[[targets]]\nname = 'default'\ncluster = 'default-cluster'\n")
+	configDir := filepath.Join(dir, "services", "api")
+	writeAppToml(t, configDir, "name = 'api-app'\n[build]\nsource_root = '../..'\n")
+	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("api-cluster", &clientconfig.ClusterConfig{XID: "api-cluster-id"})
+	var output bytes.Buffer
+	ctx := &Context{Context: t.Context(), Stdout: &output}
+	require.NoError(t, DeployTargetAdd(ctx, deployTargetAddOpts{
+		AppCentric: AppCentric{Dir: configDir, ConfigCentric: ConfigCentric{cfg: cfg}},
+		Name:       "prod", ClusterName: "api-cluster",
+	}))
+	opts := deployOpts{AppCentric: AppCentric{Dir: configDir, ConfigCentric: ConfigCentric{cfg: cfg}}}
+	require.NoError(t, opts.Validate(nil))
+	require.Equal(t, "api-app", opts.App)
+	require.Equal(t, "api-cluster", opts.targetCluster)
+	require.NoError(t, DeployTargetRemove(ctx, deployTargetNameOpts{AppCentric: opts.AppCentric, Name: "prod"}))
+	dc, err := appconfig.LoadDeployConfigUnder(dir)
+	require.NoError(t, err)
+	require.Equal(t, "default-cluster", dc.Targets[0].Cluster)
+	dc, err = appconfig.LoadDeployConfigUnder(configDir)
+	require.NoError(t, err)
+	require.Nil(t, dc)
+}
+
 func TestDeployTargetAddRequiresNameNonInteractively(t *testing.T) {
 	t.Setenv("CI", "1")
 	var output bytes.Buffer

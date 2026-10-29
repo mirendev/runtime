@@ -35,7 +35,7 @@ type AppCentric struct {
 	foundInParent bool   // true when config was found by walking up from CWD
 }
 
-// ResolvedDir returns the directory that should be used as the app source.
+// ResolvedDir returns the config root, the directory containing .miren.
 // When a config is found in a parent directory, this returns that parent
 // directory instead of the original Dir value.
 func (a *AppCentric) ResolvedDir() string {
@@ -66,7 +66,7 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 		}
 		if err == nil && ac != nil && configPath != "" {
 			// Config was found — always record the resolved directory.
-			configDir := filepath.Dir(filepath.Dir(configPath)) // strip .miren/app.toml
+			configDir := filepath.Dir(filepath.Dir(configPath))
 			a.resolvedDir = configDir
 			if cwd, wdErr := os.Getwd(); wdErr == nil && configDir != cwd {
 				a.foundInParent = true
@@ -111,11 +111,12 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 			a.App = a.config.Name
 		} else {
 			// No app name from flag or config — try to help the user.
+			noAppMsg := fmt.Sprintf("no app configuration found at %s — run 'miren init' to get started, or pass -a <name>", appconfig.AppConfigPath)
 			workDir := a.Dir
 			if workDir == "." || workDir == "" {
 				wd, err := os.Getwd()
 				if err != nil {
-					return fmt.Errorf("no app configuration found — run 'miren init' to get started, or pass -a <name>")
+					return fmt.Errorf("%s", noAppMsg)
 				}
 				workDir = wd
 			} else {
@@ -127,14 +128,12 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 
 			appName := inferAppName(workDir)
 
-			noAppMsg := "no app configuration found — run 'miren init' to get started, or pass -a <name>"
-
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				return fmt.Errorf("%s", noAppMsg)
 			}
 
 			confirmed, err := ui.Confirm(
-				ui.WithMessage(fmt.Sprintf("Looks like this directory isn't set up yet. Run 'miren init' to create app %q here?", appName)),
+				ui.WithMessage(fmt.Sprintf("No app configuration found at %s. Run 'miren init' to create it for app %q?", appconfig.AppConfigPath, appName)),
 				ui.WithDefault(true),
 				ui.WithIndent("  "),
 			)

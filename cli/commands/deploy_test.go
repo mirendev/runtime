@@ -1,16 +1,56 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/saga"
+	buildserver "miren.dev/runtime/servers/build"
 )
+
+func TestAnalyzeSourceRoot(t *testing.T) {
+	dir := t.TempDir()
+	for _, app := range []string{"api", "worker"} {
+		configDir := filepath.Join(dir, "services", app)
+		writeAppToml(t, configDir, "name = '"+app+"'\n[build]\nsource_root = '../..'\ndockerfile = 'services/"+app+"/Dockerfile'\n")
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "Dockerfile"), []byte("FROM alpine\nCMD echo "+app+"\n"), 0644))
+	}
+	for _, tc := range []struct {
+		app string
+		cwd string
+		dir string
+	}{
+		{"api", dir, "services/api"},
+		{"worker", filepath.Join(dir, "services", "worker"), "."},
+	} {
+		t.Run(tc.app, func(t *testing.T) {
+			chdir(t, tc.cwd)
+			opts := AppCentric{Dir: tc.dir}
+			require.NoError(t, opts.Validate(nil))
+			var output bytes.Buffer
+			log := slog.New(slog.DiscardHandler)
+			ctx := &Context{Context: t.Context(), Stdout: &output, Log: log}
+			server := &buildserver.Builder{Log: log, TempDir: t.TempDir()}
+			builder := buildserver.NewSagaBuilder(server, saga.NewMemoryStorage(), log)
+			client := build_v1alpha.NewBuilderClient(rpc.LocalClient(build_v1alpha.AdaptBuilder(builder)))
+			require.NoError(t, analyzeApp(ctx, client, opts.ResolvedDir()))
+			require.Contains(t, output.String(), tc.app)
+			require.Contains(t, output.String(), "services/"+tc.app+"/Dockerfile")
+		})
+	}
+}
 
 func TestDeployMessageChecksNewerServerNotJustDeploymentTracking(t *testing.T) {
 	ctx := context.Background()

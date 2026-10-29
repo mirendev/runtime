@@ -104,6 +104,18 @@ version = "3.12"
 onbuild = ["npm run build"]
 ```
 
+For a monorepo app, `build.source_root` selects a shared upload root and build context. The path is relative to the config root (the directory containing `.miren`), not to `.miren` itself:
+
+```toml title="services/api/.miren/app.toml"
+name = "my-api"
+
+[build]
+source_root = "../.."
+dockerfile = "services/api/Dockerfile"
+```
+
+With this configuration, `miren deploy -d services/api` reads the API's local configuration but uploads and builds from the repository root. Dockerfile and top-level `include` paths are relative to that source root. If `source_root` is omitted, the config root is also the source root, preserving the usual behavior. Deployment targets remain in the app's local `.miren/deploy.toml`. See [Monorepos: independent deployment strategies](./deployment.md#monorepos-independent-deployment-strategies) for an API and worker example.
+
 See [Language Guides](./guides/index.md) for build details per language.
 
 ### Services
