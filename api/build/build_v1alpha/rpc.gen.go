@@ -1636,6 +1636,105 @@ func (v *BuilderBuildFromTarResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type builderRebuildArgsData struct {
+	Application *string         `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	Status      *rpc.Capability `cbor:"1,keyasint,omitempty" json:"status,omitempty"`
+	Deployment  **DeployRequest `cbor:"2,keyasint,omitempty" json:"deployment,omitempty"`
+}
+
+type BuilderRebuildArgs struct {
+	call rpc.Call
+	data builderRebuildArgsData
+}
+
+func (v *BuilderRebuildArgs) HasApplication() bool {
+	return v.data.Application != nil
+}
+
+func (v *BuilderRebuildArgs) Application() string {
+	if v.data.Application == nil {
+		return ""
+	}
+	return *v.data.Application
+}
+
+func (v *BuilderRebuildArgs) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *BuilderRebuildArgs) Status() *stream.SendStreamClient[*Status] {
+	if v.data.Status == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*Status]{Client: v.call.NewClient(v.data.Status)}
+}
+
+func (v *BuilderRebuildArgs) HasDeployment() bool {
+	return v.data.Deployment != nil
+}
+
+func (v *BuilderRebuildArgs) Deployment() *DeployRequest {
+	if v.data.Deployment == nil {
+		return nil
+	}
+	return *v.data.Deployment
+}
+
+func (v *BuilderRebuildArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderRebuildArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderRebuildArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderRebuildArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type builderRebuildResultsData struct {
+	Version        *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	AccessInfo     **AccessInfo `cbor:"1,keyasint,omitempty" json:"access_info,omitempty"`
+	VersionShortId *string      `cbor:"2,keyasint,omitempty" json:"version_short_id,omitempty"`
+}
+
+type BuilderRebuildResults struct {
+	call rpc.Call
+	data builderRebuildResultsData
+}
+
+func (v *BuilderRebuildResults) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *BuilderRebuildResults) SetAccessInfo(access_info **AccessInfo) {
+	v.data.AccessInfo = access_info
+}
+
+func (v *BuilderRebuildResults) SetVersionShortId(version_short_id string) {
+	v.data.VersionShortId = &version_short_id
+}
+
+func (v *BuilderRebuildResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderRebuildResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderRebuildResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderRebuildResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type builderAnalyzeAppArgsData struct {
 	Tardata *rpc.Capability `cbor:"0,keyasint,omitempty" json:"tardata,omitempty"`
 }
@@ -1951,6 +2050,32 @@ func (t *BuilderBuildFromTar) Results() *BuilderBuildFromTarResults {
 	return results
 }
 
+type BuilderRebuild struct {
+	rpc.Call
+	args    BuilderRebuildArgs
+	results BuilderRebuildResults
+}
+
+func (t *BuilderRebuild) Args() *BuilderRebuildArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *BuilderRebuild) Results() *BuilderRebuildResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type BuilderAnalyzeApp struct {
 	rpc.Call
 	args    BuilderAnalyzeAppArgs
@@ -2031,6 +2156,7 @@ func (t *BuilderBuildFromPrepared) Results() *BuilderBuildFromPreparedResults {
 
 type Builder interface {
 	BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error
+	Rebuild(ctx context.Context, state *BuilderRebuild) error
 	AnalyzeApp(ctx context.Context, state *BuilderAnalyzeApp) error
 	PrepareUpload(ctx context.Context, state *BuilderPrepareUpload) error
 	BuildFromPrepared(ctx context.Context, state *BuilderBuildFromPrepared) error
@@ -2041,6 +2167,10 @@ type reexportBuilder struct {
 }
 
 func (reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error {
+	panic("not implemented")
+}
+
+func (reexportBuilder) Rebuild(ctx context.Context, state *BuilderRebuild) error {
 	panic("not implemented")
 }
 
@@ -2070,6 +2200,16 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Params:        []string{"application", "tardata", "status", "envVars", "ephemeral_label", "ephemeral_ttl", "deployment"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromTar(ctx, &BuilderBuildFromTar{Call: call})
+			},
+		},
+		{
+			Name:          "rebuild",
+			InterfaceName: "Builder",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"application", "status", "deployment"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Rebuild(ctx, &BuilderRebuild{Call: call})
 			},
 		},
 		{
@@ -2184,6 +2324,65 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 	}
 
 	return &BuilderClientBuildFromTarResults{client: v.Client, data: ret}, nil
+}
+
+type BuilderClientRebuildResults struct {
+	client rpc.Client
+	data   builderRebuildResultsData
+}
+
+func (v *BuilderClientRebuildResults) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *BuilderClientRebuildResults) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *BuilderClientRebuildResults) HasAccessInfo() bool {
+	return v.data.AccessInfo != nil
+}
+
+func (v *BuilderClientRebuildResults) AccessInfo() *AccessInfo {
+	if v.data.AccessInfo == nil {
+		return nil
+	}
+	return *v.data.AccessInfo
+}
+
+func (v *BuilderClientRebuildResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *BuilderClientRebuildResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
+func (v BuilderClient) Rebuild(ctx context.Context, application string, status stream.SendStream[*Status], deployment *DeployRequest) (*BuilderClientRebuildResults, error) {
+	args := BuilderRebuildArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.Application = &application
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*Status](status), status)
+		args.data.Status = c
+		caps[oid] = ic
+	}
+	args.data.Deployment = &deployment
+
+	var ret builderRebuildResultsData
+
+	err := v.CallWithCaps(ctx, "rebuild", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BuilderClientRebuildResults{client: v.Client, data: ret}, nil
 }
 
 type BuilderClientAnalyzeAppResults struct {

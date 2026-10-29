@@ -1676,6 +1676,7 @@ func TestCreateDerivedVersionPreservesConfigVersionSpec(t *testing.T) {
 		App:            entity.Id("app/static-app"),
 		ConfigVersion:  configID,
 		StaticArtifact: "sha256:static",
+		SourceArchive:  "retained-source",
 	}, []*deployment_v1alpha.EnvironmentVariable{env})
 	if err != nil {
 		t.Fatalf("create derived version: %v", err)
@@ -1685,6 +1686,9 @@ func TestCreateDerivedVersionPreservesConfigVersionSpec(t *testing.T) {
 	}
 	if derived.StaticArtifact != "sha256:static" {
 		t.Fatalf("static artifact = %q, want sha256:static", derived.StaticArtifact)
+	}
+	if derived.SourceArchive != "retained-source" {
+		t.Fatalf("source archive = %q, want retained-source", derived.SourceArchive)
 	}
 
 	var config core_v1alpha.ConfigVersion

@@ -64,8 +64,7 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 			digest: digest.Digest(testDirectImageDigest),
 			config: []byte(`{"config":{"WorkingDir":"/srv/app","ExposedPorts":{"4321/tcp":{}}}}`),
 		},
-		cacheLocks: newAppLocks(),
-		deploy:     deploylifecycle.NewTracker(log, inmem.EAC),
+		deploy: deploylifecycle.NewTracker(log, inmem.EAC),
 	}
 
 	streams := NewStreamRegistry(tempDir, log)
@@ -723,12 +722,11 @@ func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
 	rpcClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
 	tempDir := t.TempDir()
 	builder := &Builder{
-		Log:        log,
-		EAS:        inmem.EAC,
-		ec:         entityserver.NewClient(log, inmem.EAC),
-		appClient:  app.NewClient(log, rpcClient),
-		TempDir:    tempDir,
-		cacheLocks: newAppLocks(),
+		Log:       log,
+		EAS:       inmem.EAC,
+		ec:        entityserver.NewClient(log, inmem.EAC),
+		appClient: app.NewClient(log, rpcClient),
+		TempDir:   tempDir,
 	}
 	streams := NewStreamRegistry(tempDir, log)
 	statuses := NewStatusRegistry()

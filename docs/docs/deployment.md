@@ -30,6 +30,12 @@ When you run `miren deploy`, Miren:
 2. **Selects or builds an image** — builds a configured or discovered Dockerfile first; otherwise uses a configured web image directly or inspects your source for a detected [language or framework](./guides/index.md)
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
+Delta uploads reuse the active version's retained source archive—the same source
+used for [rebuilds](#rebuilding-the-deployed-app)—rather than storing a separate
+upload cache. New and changed files are uploaded; deleted files are omitted.
+After a rollback, uploads compare against the rolled-back version. If retained
+source is unavailable, Miren uploads the full project instead.
+
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
 
 ### App ownership
@@ -197,6 +203,201 @@ miren deploy -s API_KEY=@secrets/api-key.txt
 miren deploy -s SECRET_KEY
 ```
 </CliCommand>
+
+## Rebuilding the Deployed App
+
+To pick up updated base images without uploading a new working tree:
+
+<CliCommand context="client">
+```miren
+miren app rebuild -a myapp
+```
+</CliCommand>
+
+Miren rebuilds the active version's source retained on the server. This works
+with both automatically detected stacks and Dockerfile builds, including custom
+Dockerfile paths. Mutable base image tags are resolved again; digest-pinned
+images remain pinned. BuildKit can still reuse layers whose inputs have not
+changed.
+
+The rebuild preserves the current runtime configuration, runs deploy-triggered
+tasks, and rolls out a new version using the usual deployment lock and health
+checks. Local files and local Git state are not used. Add `-m "Refresh base images"`
+to record a message in deployment history, or `--format json` for machine-readable
+output. Use `miren deploy cancel -a myapp` to cancel an in-progress rebuild.
+
+:::info[Source retention required]
+Apps deployed before source retention was available need one normal
+`miren deploy` with an updated server before they can be rebuilt.
+If the server cannot retain source, it logs a warning but allows the deployment
+to continue. That version cannot be rebuilt, and subsequent uploads fall back to
+uploading the full project. Restore source storage and deploy again to enable
+rebuilds for the new version.
+:::
+
+Apps that run a prebuilt image directly cannot be rebuilt; deploy them again to
+resolve their image tag. Unlike a rebuild, `miren app restart` reuses the existing image.
+
+### Choosing dependency pins for security updates
+
+Pin the **compatibility boundary** you support, rather than every artifact's exact
+bytes, when you want rebuilds to pick up upstream fixes. A rebuild can only use a
+fix published within that boundary. It does not decide which releases are
+security fixes, widen version constraints, or schedule itself: run
+`miren app rebuild` when you want to refresh an app.
+
+#### OCI base images and language runtimes
+
+For Dockerfile builds, choose a maintained tag that follows the runtime release
+line and OS distribution you have tested. For example:
+
+```dockerfile
+FROM python:3.13-slim-bookworm
+```
+
+This allows the image publisher to deliver Python 3.13 patch releases and Debian
+Bookworm image updates without moving the app to Python 3.14 or a different
+distribution. Apply the same policy to **every stage** in a multi-stage Dockerfile,
+including builder images: a patched final image does not fix a vulnerable compiler
+or library copied from the builder.
+
+| Image reference | What a rebuild can pick up |
+| --- | --- |
+| `python:3.13-slim-bookworm` | New image contents published under that tag, including runtime patches and OS fixes |
+| `python:3.13.1-slim-bookworm` | New contents under that exact tag, if republished; not a later Python patch version |
+| `python:3.13-slim-bookworm@sha256:…` | Nothing newer: the digest fixes the image contents even when a tag is also present |
+| `python:latest` | Whatever the publisher makes latest, potentially including incompatible runtime or distribution changes |
+
+Avoid `latest` for production merely to get security updates. Prefer a supported,
+bounded release line, and plan explicit upgrades before it reaches end of life.
+Tags are publisher-defined names, not version constraints: Miren resolves the
+same tag again; it does not search for newer tags. A security fix must actually
+be published under the selected tag.
+
+For automatic stack builds, select the runtime line through `[build] version` in
+`.miren/app.toml`, where supported by your [language stack](./guides/index.md):
+
+```toml
+[build]
+version = "3.13"
+```
+
+For Python this selects the `python:3.13-slim` base image through Miren's image
+proxy. Other stacks have their own version mappings; do not assume every stack
+accepts semver ranges or maps a short version to a floating image tag. For example,
+the Elixir stack maps supported Elixir/OTP combinations to specific dated builder
+tags, so moving that builder to a newer release requires an updated Miren runtime.
+
+#### Language packages and lockfiles
+
+Choose bounded version constraints that permit compatible fixes. These examples
+allow patch releases within the 1.2 line; replace the versions with the supported
+line for each dependency:
+
+| Package specification | Patch-compatible constraint |
+| --- | --- |
+| npm, Yarn, or Bun `package.json` | `"some-package": "~1.2.3"` |
+| pip `requirements.txt` | `some-package>=1.2.3,<1.3` |
+| Ruby `Gemfile` | `gem "some-package", "~> 1.2.3"` |
+| Rust `Cargo.toml` | `some-package = "~1.2.3"` |
+| Elixir `mix.exs` | `{:some_package, "~> 1.2.3"}` |
+
+If your compatibility policy allows minor updates too, use a wider bounded range,
+such as npm's `^1.2.3` or pip's `>=1.2.3,<2`. A fix released outside your range
+still requires changing the specification. Version ranges express compatibility,
+not a guarantee that an upstream release is safe or contains a security fix.
+
+**A range does not override a lockfile.** Stack builds use normal install commands
+such as `npm install`, `bun install`, `bundle install`, `uv sync`, and
+`cargo build`; rebuild does not replace them with dependency-update commands.
+An existing compatible locked version generally stays selected. This applies to
+files such as `package-lock.json`, `yarn.lock`, `bun.lock`, `Gemfile.lock`,
+`poetry.lock`, `uv.lock`, `Pipfile.lock`, `Cargo.lock`, and `mix.lock`. Go's
+`go.mod` selects dependency versions rather than declaring floating semver ranges;
+`go mod download` does not upgrade them. `go.sum` records checksums, not version
+selections. Vendored dependencies are retained source too and do not refresh on
+rebuild. A new runtime can cause some installers to adjust a resolution for
+compatibility, but that is not a general security update.
+
+For reproducible application dependencies, **keep lockfiles** and use a dependency
+update bot or a regular update-and-test workflow. Commit the updated specifications,
+lockfiles, or vendor tree, then run `miren deploy` to upload them. A server-side
+rebuild cannot see a lockfile changed only in your local checkout or Git repository.
+
+If you deliberately choose unlocked dependencies, a fresh install can select newer
+versions within the ranges, but you give up exact reproducibility. Do not remove a
+lockfile solely to make rebuilds appear to update dependencies: it may also affect
+stack detection and transitive dependency resolution.
+
+:::warning[Rebuild is not a dependency upgrade or a cache purge]
+BuildKit can reuse an unchanged dependency-install layer even for an unlocked
+specification. When a base image changes, steps that depend on it are normally
+rebuilt, but the mere passage of time or a new package-registry release does not
+invalidate a cached install. Dockerfile `RUN` steps follow the same rule, including
+OS package installation. Rebuild is therefore a way to pick up refreshed base
+images, not a guarantee that every application or OS package is upgraded.
+:::
+
+Use refreshed supported base images **and** regular dependency updates together.
+Test the resulting app and monitor deployment health; keep the previous version
+available for rollback. If you require digest-pinned images for reproducibility,
+have your update workflow change those digests explicitly and deploy the change.
+
+#### Maintaining package specifications and lockfiles
+
+Treat the package specification as your compatibility policy and the lockfile as
+the concrete dependency set you have tested. Maintain both:
+
+1. **Declare supported ranges.** List your direct dependencies in `package.json`,
+   `pyproject.toml`, `Gemfile`, `Cargo.toml`, or `mix.exs`. Keep the lower bound high
+   enough to exclude known-vulnerable releases, and widen the upper bound
+   deliberately when a fix requires a newer release line. For Go, update the
+   selected module version in `go.mod` using Go tooling.
+2. **Refresh the resolution regularly.** Use a dependency update bot such as
+   Dependabot or Renovate where it supports your ecosystem, or run your package
+   manager's update command. Include transitive dependencies: a vulnerable package
+   may appear only in the lockfile, not in your direct dependency list.
+3. **Review and test the result.** Review changed versions, checksums, and upstream
+   release notes; run your tests and vulnerability checks. A version range permits
+   an update but does not prove it is compatible. If a transitive fix cannot be
+   selected, update the parent dependency or deliberately adjust its constraints
+   rather than hand-editing the lockfile.
+4. **Commit the inputs together.** Commit changed package specifications and the
+   generated lockfile in the same change. Use the project's package-manager
+   version, resolve lockfile conflicts with that tool, and regenerate any vendor
+   tree. Avoid deleting a lockfile to resolve a small update or merge conflict:
+   that can unexpectedly re-resolve the entire dependency graph.
+5. **Deploy the updated source.** Run `miren deploy`, test the deployed app, and
+   monitor health. Running `miren app rebuild` instead would reuse the old retained
+   specifications and lockfiles, even if you have already committed newer ones.
+
+Examples of targeted updates, run in your project checkout (replace `PACKAGE`
+with the dependency name):
+
+| Ecosystem | Update workflow |
+| --- | --- |
+| npm | `npm update PACKAGE` updates within declared ranges; change the declaration explicitly if the fix is outside them |
+| Yarn | Yarn 1: `yarn upgrade PACKAGE`; Yarn 2+: `yarn up PACKAGE` (review declaration changes as well as the lockfile) |
+| Bun | `bun update PACKAGE`; review `package.json` and `bun.lock` |
+| uv | `uv lock --upgrade-package PACKAGE`, then `uv sync` to test that resolution |
+| Poetry | `poetry update PACKAGE`; review `pyproject.toml` and `poetry.lock` |
+| Pipenv | `pipenv update PACKAGE`; review `Pipfile` and `Pipfile.lock` |
+| Ruby / Bundler | `bundle update PACKAGE`; review `Gemfile` and `Gemfile.lock` |
+| Rust / Cargo | `cargo update -p PACKAGE`; update `Cargo.toml` too if its constraint excludes the fix |
+| Elixir / Mix | `mix deps.update PACKAGE`; review `mix.exs` and `mix.lock` |
+| Go | `go get PACKAGE@vX.Y.Z`, then `go mod tidy`; run `go mod vendor` if you vendor dependencies, and commit the changed `go.mod`, `go.sum`, and vendor files |
+
+For pip, distinguish a hand-maintained requirements list from a generated locked
+one. If you use pip-tools, keep direct dependency constraints in `requirements.in`
+and run `pip-compile --upgrade-package PACKAGE` to regenerate `requirements.txt`.
+Commit both files and install from the generated requirements for testing. If you
+maintain `requirements.txt` directly, update its pins or ranges explicitly and
+check transitive dependencies too: pinning only direct dependencies does not lock
+the complete environment. Preserve any hash-checking policy when regenerating.
+
+Use a regular update cadence plus prompt updates for security advisories. Do not
+rely solely on a successful build or a clean vulnerability scan: neither guarantees
+that all dependencies are secure or that behavior is unchanged.
 
 ## Redeploying an Existing Version
 

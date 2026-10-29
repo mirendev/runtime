@@ -182,6 +182,10 @@ kinds:
       type: string
       doc: Content digest of the tar archive containing files exported from static.dir
 
+    source_archive:
+      type: string
+      doc: SHA-256 of the private source archive retained for rebuilding this version
+
     manifest:
       type: string
       doc: The OCI image manifest for the version

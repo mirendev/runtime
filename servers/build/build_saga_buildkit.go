@@ -50,7 +50,8 @@ type buildImageIn struct {
 	// Consuming DeploymentID anchors this action after begin-deployment, so the
 	// deploy lock is taken before any buildkit work starts. It is empty only for
 	// ephemeral builds and sagas created by an older runtime.
-	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	DeploymentID   string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	RebuildVersion string `json:"rebuild_version,omitempty" saga:"rebuild_version,optional"`
 }
 
 type buildImageOut struct {
@@ -111,6 +112,7 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 		AppConfig:      in.AppConfig,
 		ExistingConfig: existing,
 		CLIEnvVars:     in.CLIEnvVars,
+		Rebuild:        in.RebuildVersion != "",
 	}, status, buildLog)
 	if err != nil {
 		return buildImageOut{}, err
@@ -143,6 +145,7 @@ type runBuildkitBuildInputs struct {
 	AppConfig      *appconfig.AppConfig
 	ExistingConfig core_v1alpha.ConfigSpec
 	CLIEnvVars     []*build_v1alpha.EnvironmentVariable
+	Rebuild        bool
 }
 
 // runBuildkitBuild connects to BuildKit, runs the actual image build
@@ -189,7 +192,11 @@ func (b *Builder) runBuildkitBuild(
 
 	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.WorkloadIssuer}
 
-	buildEnvVars := computeBuildEnvVars(in.ExistingConfig.Variables, in.AppConfig, in.CLIEnvVars)
+	envConfig := in.AppConfig
+	if in.Rebuild {
+		envConfig = nil
+	}
+	buildEnvVars := computeBuildEnvVars(in.ExistingConfig.Variables, envConfig, in.CLIEnvVars)
 	if len(buildEnvVars) > 0 {
 		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
 	}

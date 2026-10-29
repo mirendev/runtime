@@ -288,6 +288,10 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren app versions --ephemeral",
 		}),
 	))
+	d.Dispatch("app rebuild", Infer("app rebuild", "Rebuild and deploy the currently deployed source", AppRebuild,
+		WithDescription("Rebuild the active version using source retained on the server, refreshing mutable base image tags for stackbuild and Dockerfile builds. No local files are uploaded. The current runtime configuration is preserved, deploy tasks run, and the command waits for the new version to become healthy. Apps deployed before source retention was available must be deployed once with an updated server first. Digest-pinned base images remain pinned."),
+		WithExample(mflags.Example{Name: "Refresh an app's base images", Body: "miren app rebuild -a myapp"}),
+	))
 	d.Dispatch("app restart", Infer("app restart", "Restart an application", AppRestart,
 		WithDescription(appRestartDescription),
 		WithExample(mflags.Example{
@@ -1527,7 +1531,7 @@ Warning: These commands are intended for advanced users and developers. They may
 // generated command docs (docs/docs/command/*.md) and clarify which operations
 // roll out automatically versus require a rebuild.
 
-const deployDescription = `Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by ` + "`" + `[build].dockerfile` + "`" + ` or discovered as ` + "`" + `Dockerfile.miren` + "`" + ` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. When source needs rebuilding, this is the command that does it.
+const deployDescription = `Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by ` + "`" + `[build].dockerfile` + "`" + ` or discovered as ` + "`" + `Dockerfile.miren` + "`" + ` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. To rebuild the deployed source without uploading local files, use ` + "`" + `miren app rebuild` + "`" + ` instead.
 
 To activate an existing version without selecting or building another image, pass ` + "`" + `--version` + "`" + `:
 ` + "```" + `bash

@@ -42,6 +42,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren app delete`](./command/app-delete.md) | Delete an application and all its resources |
 | [`miren app history`](./command/app-history.md) | Show deployment history for an application |
 | [`miren app list`](./command/app-list.md) | List all applications |
+| [`miren app rebuild`](./command/app-rebuild.md) | Rebuild and deploy the currently deployed source |
 | [`miren app restart`](./command/app-restart.md) | Restart an application |
 | [`miren app run`](./command/app-run.md) | Open interactive shell in a new sandbox |
 | [`miren app runs`](./command/app-runs.md) | List recent task runs |

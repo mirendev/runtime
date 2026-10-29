@@ -41,13 +41,12 @@ func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 	tempDir := t.TempDir()
 	rpcClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
 	builder := &Builder{
-		Log:        log,
-		EAS:        inmem.EAC,
-		ec:         entityserver.NewClient(log, inmem.EAC),
-		appClient:  app.NewClient(log, rpcClient),
-		TempDir:    tempDir,
-		cacheLocks: newAppLocks(),
-		deploy:     deploylifecycle.NewTracker(log, inmem.EAC),
+		Log:       log,
+		EAS:       inmem.EAC,
+		ec:        entityserver.NewClient(log, inmem.EAC),
+		appClient: app.NewClient(log, rpcClient),
+		TempDir:   tempDir,
+		deploy:    deploylifecycle.NewTracker(log, inmem.EAC),
 	}
 
 	streams := NewStreamRegistry(tempDir, log)
@@ -132,7 +131,7 @@ func TestBuildSaga_PersistsInitiatingOrganizationWithoutActionIdentity(t *testin
 	})
 	sb := &SagaBuilder{executor: h.executor}
 	// Actions run without the initiating RPC identity, as they do on recovery.
-	require.NoError(t, sb.startBuild(requestCtx, t.Context(), "test-identity", "demo", "stream-identity", nil, nil, nil))
+	require.NoError(t, sb.startBuild(requestCtx, t.Context(), "test-identity", "demo", "stream-identity", nil, nil, nil, ""))
 	records, err := h.builder.deploy.Store().List(t.Context(), deploylifecycle.Query{AppName: "demo"})
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -155,7 +154,7 @@ func TestBuildSaga_EphemeralPreservesCreatorWithoutActionIdentity(t *testing.T) 
 			requestCtx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "ephemeral-owner", Method: method})
 			sb := &SagaBuilder{executor: h.executor}
 			require.NoError(t, sb.startBuild(requestCtx, t.Context(), "test-ephemeral-owner", "preview", "stream-ephemeral-owner", nil,
-				&ephemeralOpts{label: "preview"}, nil))
+				&ephemeralOpts{label: "preview"}, nil, ""))
 			app, err := h.builder.appClient.GetByName(t.Context(), "preview")
 			require.NoError(t, err)
 			if method == rpc.AuthMethodJWT {
@@ -360,7 +359,7 @@ func TestBuildSaga_Tracked_ClientDisconnectStillActivates(t *testing.T) {
 
 	work := newDeploymentContext(ctx)
 	defer work.Close()
-	err := sb.startBuild(work.control, work.action, "test-drop", "demo", "stream-drop", nil, nil, req)
+	err := sb.startBuild(work.control, work.action, "test-drop", "demo", "stream-drop", nil, nil, req, "")
 	require.NoError(t, err)
 
 	// Reads below use a live context; the saga's is deliberately dead.
@@ -403,7 +402,7 @@ func TestBuildSaga_Tracked_RecordCancellationCompensates(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- sb.startBuild(work.control, work.action, "test-cancel", "demo", "stream-cancel", nil, nil, req)
+		done <- sb.startBuild(work.control, work.action, "test-cancel", "demo", "stream-cancel", nil, nil, req, "")
 	}()
 	select {
 	case <-activeStarted:

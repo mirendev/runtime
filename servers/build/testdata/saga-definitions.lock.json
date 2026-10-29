@@ -1,10 +1,11 @@
 {
   "build-from-tar": {
-    "version": 4,
+    "version": 5,
     "resumes_from": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "actions": {
       "activate-deployment": {
@@ -51,6 +52,7 @@
           "deployment_id",
           "existing_config_json",
           "image_url",
+          "rebuild_version",
           "source_dir",
           "stream_id",
           "version_name"
@@ -94,6 +96,7 @@
           "ephemeral_ttl",
           "final_image_url",
           "manifest_digest",
+          "source_archive",
           "source_kind",
           "source_value",
           "static_artifact",
@@ -108,7 +111,8 @@
           "extract-static",
           "get-next-version",
           "handle-ephemeral",
-          "load-source"
+          "load-source",
+          "receive-tar"
         ]
       },
       "extract-static": {
@@ -181,6 +185,8 @@
       "load-source": {
         "inputs": [
           "app_name",
+          "deployment_id",
+          "rebuild_version",
           "source_dir",
           "stream_id"
         ],
@@ -192,6 +198,7 @@
           "source_value"
         ],
         "dependencies": [
+          "begin-deployment",
           "receive-tar"
         ]
       },
@@ -205,6 +212,7 @@
           "ephemeral_label",
           "existing_config_json",
           "procfile_services",
+          "rebuild_version",
           "source_kind",
           "source_value",
           "stream_id"
@@ -239,6 +247,7 @@
           "stream_id"
         ],
         "outputs": [
+          "source_archive",
           "source_dir"
         ]
       },
@@ -282,6 +291,7 @@
           "deploy_tasks_ran",
           "deployment_id",
           "ephemeral_label",
+          "rebuild_version",
           "stream_id"
         ],
         "outputs": [

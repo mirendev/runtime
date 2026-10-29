@@ -81,6 +81,32 @@ func TestPreparedUploadDenialDoesNotConsumeSession(t *testing.T) {
 	require.ErrorIs(t, err, rpc.ErrUnauthorized, "session must still exist: its owner reaches the missing create-permission check")
 }
 
+func TestRebuildAuthorizesBeforeReturningAppState(t *testing.T) {
+	b := newDeployTestBuilder(t)
+	_, _, err := app.EnsureApp(t.Context(), b.EAS, "existing", "owner")
+	require.NoError(t, err)
+	client := build_v1alpha.NewBuilderClient(rpc.LocalClient(build_v1alpha.AdaptBuilder(&SagaBuilder{inner: b})))
+	for _, tc := range []struct {
+		name, target, grant string
+		denied              bool
+	}{
+		{"denied existing", "existing", "other", true},
+		{"denied missing", "missing", "other", true},
+		{"allowed existing", "existing", "existing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := rpc.ContextWithAuthorization(t.Context(), &buildPolicy{app: tc.grant, owner: "owner"}, "builder", "rebuild")
+			ctx = rpc.ContextWithIdentity(ctx, &rpc.Identity{Subject: "caller", Method: rpc.AuthMethodJWT})
+			_, err := client.Rebuild(ctx, tc.target, nil, nil)
+			if tc.denied {
+				require.ErrorIs(t, err, rpc.ErrUnauthorized)
+			} else {
+				require.ErrorContains(t, err, "no deployed version")
+			}
+		})
+	}
+}
+
 func TestBoundOIDCAnalyzeSource(t *testing.T) {
 	b := newDeployTestBuilder(t)
 	b.TempDir = t.TempDir()
