@@ -43,6 +43,7 @@ func realMethods(t *testing.T) map[string]map[string]bool {
 		app_v1alpha.AdaptAppStatus(nil),
 		app_v1alpha.AdaptLogs(nil),
 		app_v1alpha.AdaptAddons(nil),
+		app_v1alpha.AdaptRuns(nil),
 		deployment_v1alpha.AdaptDeployment(nil),
 		build_v1alpha.AdaptBuilder(nil),
 		admin_v1alpha.AdaptAdmin(nil),

@@ -397,6 +397,8 @@ func TestCompositeAuthorizer_WorkloadRoles(t *testing.T) {
 		{workloadroles.RoleAppAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"entityaccess", "patch"}},
 		{workloadroles.RoleClusterReadonly, [2]string{"sandboxpools", "list"}, [2]string{"sandboxpools", "setdesired"}},
 		{workloadroles.RoleClusterAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"runnerregistration", "issueworkloadtoken"}},
+		{workloadroles.RoleClusterAdmin, [2]string{"addons", "rotatecredential"}, [2]string{"crud", "setworkloadrole"}},
+		{workloadroles.RoleAppAdmin, [2]string{"crud", "setenvvar"}, [2]string{"addons", "rotatecredential"}},
 	}
 
 	for _, c := range cases {
