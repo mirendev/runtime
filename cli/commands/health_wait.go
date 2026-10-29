@@ -96,6 +96,9 @@ const (
 	// decisionNoService: the app has no long-running process by design. Its
 	// tasks or static content are available, which is as "up" as it gets.
 	decisionNoService
+	// decisionDisabled: the app is disabled, so the version is deployed but
+	// held at zero until the app is enabled.
+	decisionDisabled
 )
 
 // decideActivation maps a snapshot to a terminal decision (or "keep waiting").
@@ -125,6 +128,8 @@ func decideActivation(snap healthSnapshot) activationDecision {
 		return decisionNoService
 	case snap.health == apphealth.Idle:
 		return decisionScaledToZero
+	case snap.health == apphealth.Disabled:
+		return decisionDisabled
 	case snap.ready > 0:
 		return decisionHealthy
 	default:
@@ -189,6 +194,7 @@ const (
 	outcomeHealthy terminalOutcome = iota
 	outcomeScaledToZero
 	outcomeNoService
+	outcomeDisabled
 	outcomeCrashed
 	outcomeTimeout
 	outcomeCanceled
@@ -210,6 +216,8 @@ func pollOutcome(ctx context.Context, getter appInfoGetter, appName, versionID s
 		return outcomeScaledToZero, snap, true
 	case decisionNoService:
 		return outcomeNoService, snap, true
+	case decisionDisabled:
+		return outcomeDisabled, snap, true
 	case decisionCrashed:
 		return outcomeCrashed, snap, true
 	default:
@@ -240,6 +248,8 @@ func healthOutcomeText(versionDisplay string, outcome terminalOutcome, snap heal
 		// Deliberately not the scaled-to-zero wording: nothing went to sleep,
 		// this app never had a long-running process to begin with.
 		return fmt.Sprintf("Version %s deployed — no long-running service required", versionDisplay), true
+	case outcomeDisabled:
+		return fmt.Sprintf("Version %s deployed — the app is disabled; run `miren app enable` to start it", versionDisplay), true
 	case outcomeCrashed:
 		detail := ""
 		if snap.crashCount > 0 {

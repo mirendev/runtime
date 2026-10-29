@@ -15,6 +15,9 @@ const (
 	Crashed = "crashed"
 	// Idle means the app is deliberately scaled to zero (no desired instances).
 	Idle = "idle"
+	// Disabled means the app was disabled with `miren app disable`: every
+	// service is held at zero until `miren app enable`, whatever its config.
+	Disabled = "disabled"
 	// Ready means the app is deployed and available to invoke, but has no
 	// long-running process to be healthy or idle. A task-only app is doing
 	// exactly what it was configured to do; reporting it as idle would say it

@@ -226,6 +226,82 @@ func TestSchedulerIgnoresAppsWithoutAnActiveVersion(t *testing.T) {
 	assert.Empty(t, h.runs(ctx))
 }
 
+// A disabled app's schedule pauses, and enabling it doesn't replay the ticks
+// it missed. On a fallback copy left disabled on an old cluster, either one
+// would run a job twice against state the two clusters share.
+func TestSchedulerPausesWhileTheAppIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	h := newSchedHarness(t, "*-*-* *:00/30:00")
+	appID := entity.Id("app/demo")
+
+	setDisabled := func(at time.Time) {
+		t.Helper()
+		_, err := h.inm.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, appID),
+			entity.Time(core_v1alpha.AppDisabledAtId, at),
+		).Attrs(), 0)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
+
+	setDisabled(atUTC("2026-08-04T12:10:00Z"))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:30:01Z")))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T14:00:01Z")))
+	assert.Empty(t, h.runs(ctx), "no tick fires while the app is disabled")
+
+	_, err := h.inm.EAC.Patch(ctx, entity.New(
+		entity.Ref(entity.DBId, appID),
+		entity.Time(core_v1alpha.AppDisabledAtId, time.Time{}),
+		entity.Time(core_v1alpha.AppLastEnabledAtId, atUTC("2026-08-04T14:10:00Z")),
+	).Attrs(), 0)
+	require.NoError(t, err)
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T14:30:01Z")))
+	runs := h.runs(ctx)
+	require.Len(t, runs, 1, "the first sweep after enable skips missed ticks but fires ticks due after enable")
+	assert.Equal(t, "2026-08-04T14:30:00Z", runs[0].Tick)
+}
+
+func TestSchedulerResumesFromLatestEnable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enables []string
+		want    []string
+	}{
+		{"single enable", []string{"2026-08-04T12:01:20Z"}, []string{"2026-08-04T12:02:00Z", "2026-08-04T12:03:00Z"}},
+		{"repeated enables between sweeps", []string{"2026-08-04T12:01:20Z", "2026-08-04T12:02:20Z"}, []string{"2026-08-04T12:03:00Z"}},
+		{"tick at enable is skipped", []string{"2026-08-04T12:02:00Z"}, []string{"2026-08-04T12:03:00Z"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newSchedHarness(t, "*-*-* *:*:00")
+			require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T11:59:30Z")))
+
+			for _, enabledAt := range tc.enables {
+				_, err := h.inm.EAC.Patch(ctx, entity.New(
+					entity.Ref(entity.DBId, entity.Id("app/demo")),
+					entity.Time(core_v1alpha.AppLastEnabledAtId, atUTC(enabledAt)),
+				).Attrs(), 0)
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:03:01Z")))
+			ticks := func() []string {
+				var ticks []string
+				for _, run := range h.runs(ctx) {
+					ticks = append(ticks, run.Tick)
+				}
+				return ticks
+			}
+			assert.ElementsMatch(t, tc.want, ticks(), "pending ticks before the latest enable are discarded")
+
+			require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:04:01Z")))
+			assert.ElementsMatch(t, append(tc.want, "2026-08-04T12:04:00Z"), ticks(), "later sweeps continue past the resume boundary")
+		})
+	}
+}
+
 // Manual and deploy tasks are not on a schedule and must never be fired by it.
 func TestSchedulerIgnoresUnscheduledTasks(t *testing.T) {
 	ctx := context.Background()

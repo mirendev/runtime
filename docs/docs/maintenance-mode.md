@@ -117,7 +117,7 @@ There's no way to browse the real app from behind the holding page yet. Bring th
 ## What's not covered
 
 :::warning[Background work keeps running]
-Maintenance mode only affects HTTP traffic. Background workers and scheduled jobs carry on, so a window opened for a migration does not stop them writing to the database you are migrating. Stop them the way you normally would.
+Maintenance mode only affects HTTP traffic. Background workers and scheduled jobs carry on, so a window opened for a migration does not stop them writing to the database you are migrating. To stop them too, also [disable the app](./command/app-disable.md): every service goes to zero and scheduled tasks pause, the route keeps showing its maintenance page, and `miren app run` still works for the migration itself.
 :::
 
 Custom holding-page HTML and scheduled windows (announce a future window, enter and leave automatically) aren't supported yet.

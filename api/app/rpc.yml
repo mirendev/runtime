@@ -655,6 +655,12 @@ interfaces:
           - name: sourceValue
             type: string
             doc: "Normalized image reference or auto-detected stack name, depending on sourceKind"
+          - name: disabledAt
+            type: standard.Timestamp
+            doc: "When the app was disabled with app disable; unset when it is not disabled"
+          - name: disabledReason
+            type: string
+            doc: "Why the app was disabled, as given to app disable"
       - name: setWorkloadRole
         doc: |
           Set the authorization role that identity tokens minted for this app's
@@ -775,6 +781,31 @@ interfaces:
             type: int32
           - name: stopped_sandboxes
             type: int32
+      - name: disable
+        http:
+          post: /apps/{app}/disable
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+          - name: reason
+            type: string
+            doc: "Optional explanation, shown by app status"
+        results:
+          - name: scaled_pools
+            type: int32
+            doc: "Pools scaled to zero by this call"
+      - name: enable
+        http:
+          post: /apps/{app}/enable
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: restored_pools
+            type: int32
+            doc: "Fixed-mode pools returned to their configured count"
 
       - name: listVersions
         doc: List an app's version history newest first, including replaced and ephemeral versions.

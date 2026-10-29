@@ -256,6 +256,16 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		rai.SetHealth(apphealth.Unknown)
 	}
 
+	// Disabled is an explicit operator decision, so it wins over whatever the
+	// pools say, including when there's no active version or the pool lookup
+	// failed. List and the cloud health feed report it the same way.
+	if !appRec.DisabledAt.IsZero() {
+		rai.SetHealth(apphealth.Disabled)
+		for _, svc := range rai.Services() {
+			svc.SetHealth(apphealth.Disabled)
+		}
+	}
+
 	// Get addon instances from entity store
 	addonResults, err := a.EC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appRec.ID))
 	if err != nil {

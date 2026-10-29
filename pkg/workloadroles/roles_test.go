@@ -66,7 +66,7 @@ func TestScoping(t *testing.T) {
 // added for. If someone adds a method to an app-scoped role that isn't in a
 // guarded block (e.g. crud.list, logs.sandboxlogs), this fails.
 func TestAppScopedRolesOnlyGrantGuardedMethods(t *testing.T) {
-	guarded := merge(appRead, appDeploy, appConfig, execBlock)
+	guarded := merge(appRead, appDeploy, appConfig, appLifecycle, execBlock)
 
 	for name, role := range Roles {
 		if role.ClusterScoped {
@@ -160,6 +160,14 @@ func TestRoleMembershipSpotChecks(t *testing.T) {
 		{RoleClusterDeployer, [2]string{"deployment", "deployversion"}, [2]string{"crud", "destroy"}},
 		{RoleClusterDeployer, [2]string{"crud", "setenvvar"}, [2]string{"crud", "new"}},
 		{RoleClusterDebugger, [2]string{"internalhttp", "dorequest"}, [2]string{"crud", "destroy"}},
+		// Disable and enable go to the admins: app-admin for its own app,
+		// cluster-admin for any. Deployers deploy; they don't turn apps off.
+		{RoleAppAdmin, [2]string{"crud", "disable"}, [2]string{"crud", "destroy"}},
+		{RoleAppAdmin, [2]string{"crud", "enable"}, [2]string{"crud", "list"}},
+		{RoleClusterAdmin, [2]string{"crud", "disable"}, [2]string{"crud", "setworkloadrole"}},
+		{RoleClusterAdmin, [2]string{"crud", "enable"}, [2]string{"crud", "setworkloadrole"}},
+		{RoleClusterDeployer, [2]string{"crud", "restart"}, [2]string{"crud", "disable"}},
+		{RoleAppDeployer, [2]string{"deployment", "deployversion"}, [2]string{"crud", "enable"}},
 	}
 
 	for _, c := range cases {

@@ -115,6 +115,18 @@ func (c *Controller) start(ctx context.Context, r *run_v1alpha.Run) error {
 		return c.finish(ctx, r, run_v1alpha.TIMED_OUT, nil)
 	}
 
+	// The scheduler may have created this run before disable. Make it terminal
+	// instead of holding it pending, so enabling cannot replay the skipped work.
+	if r.Trigger == run_v1alpha.SCHEDULE {
+		var app core_v1alpha.App
+		if err := c.EC.GetById(ctx, r.App, &app); err != nil {
+			return fmt.Errorf("checking scheduled run app: %w", err)
+		}
+		if !app.DisabledAt.IsZero() {
+			return c.finish(ctx, r, run_v1alpha.SKIPPED, nil)
+		}
+	}
+
 	admitted, err := c.admit(ctx, r)
 	if err != nil {
 		return fmt.Errorf("admitting run: %w", err)

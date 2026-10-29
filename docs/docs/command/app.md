@@ -61,6 +61,8 @@ miren app --watch
 
 - [`miren app attach`](./app-attach.md) — Attach to a running task
 - [`miren app delete`](./app-delete.md) — Delete an application and all its resources
+- [`miren app disable`](./app-disable.md) — Hold every service of an app at zero instances
+- [`miren app enable`](./app-enable.md) — Start a disabled app again
 - [`miren app history`](./app-history.md) — Show deployment history for an application
 - [`miren app list`](./app-list.md) — List all applications
 - [`miren app restart`](./app-restart.md) — Restart an application

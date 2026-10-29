@@ -62,10 +62,11 @@ kinds:
         Indexed because the deadline sweep lists non-terminal runs on a short
         interval; scanning every run of every app to find them would not hold up.
 
-        "skipped" is a scheduled run that never executed because its predecessor
-        was still going. It exists so a skipped tick is visible rather than
-        looking like a gap, since "my job stopped running" and "my job got
-        slower than its interval" are otherwise indistinguishable from outside.
+        "skipped" is scheduled work discarded because its predecessor was still
+        going or the app was disabled before the next attempt could start.
+        It exists so a skipped tick is visible rather than looking like a gap,
+        since "my job stopped running" and "my job got slower than its interval"
+        are otherwise indistinguishable from outside.
 
     attempt:
       type: int

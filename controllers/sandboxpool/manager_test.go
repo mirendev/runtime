@@ -1445,6 +1445,38 @@ func TestManagerDecommissionedPool_NoCrashDetection(t *testing.T) {
 		"decommissioned pool should not enter cooldown")
 }
 
+// TestManagerDisabledApp_NoCrashCooldown verifies that a disabled app's pool,
+// whose config still asks for instances, is held at zero rather than revived
+// by crash cooldown.
+func TestManagerDisabledApp_NoCrashCooldown(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	appID, err := server.Client.Create(ctx, "disabled-app", &core_v1alpha.App{DisabledAt: time.Now()})
+	require.NoError(t, err)
+
+	pool := &compute_v1alpha.SandboxPool{
+		App:                   appID,
+		Service:               "worker",
+		DesiredInstances:      0,
+		ReferencedByVersions:  []entity.Id{"ver-1"},
+		ConsecutiveCrashCount: 2,
+		CooldownUntil:         time.Now().Add(5 * time.Minute),
+		SandboxSpec:           compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	poolID, err := server.Client.Create(ctx, "disabled-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	reconcilePool(t, ctx, server, NewManager(testutils.TestLogger(t), server.EAC), pool)
+
+	updated := getPool(t, ctx, server, poolID)
+	assert.Equal(t, int64(0), updated.DesiredInstances, "cooldown must not revive a disabled app")
+	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
+	assert.True(t, updated.CooldownUntil.IsZero())
+}
+
 // TestManagerCrashResetDoesNotRecount verifies that after crash state is reset
 // (e.g. by a deploy), old DEAD sandboxes are not re-counted as new crashes.
 // This is a regression test for MIR-956.

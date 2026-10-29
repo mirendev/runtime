@@ -195,6 +195,47 @@ func TestRunReachesRunningAndCreatesASandbox(t *testing.T) {
 	assert.Equal(t, id, runIDFor(&sb))
 }
 
+func TestPendingRunRespectsAppDisabledState(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		trigger  run_v1alpha.RunTrigger
+		disabled bool
+		want     run_v1alpha.RunStatus
+	}{
+		{"enabled schedule", run_v1alpha.SCHEDULE, false, run_v1alpha.RUNNING},
+		{"disabled schedule", run_v1alpha.SCHEDULE, true, run_v1alpha.SKIPPED},
+		{"disabled manual", run_v1alpha.MANUAL, true, run_v1alpha.RUNNING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newHarness(t)
+			appID, verID := h.seedApp(ctx)
+			r := baseRun(appID, verID, "run/demo-migrate-1")
+			r.Trigger = tc.trigger
+			id := h.createRun(ctx, r)
+			if tc.disabled {
+				require.NoError(t, h.inm.Client.Patch(ctx, appID, 0,
+					entity.Time(core_v1alpha.AppDisabledAtId, time.Now())))
+			}
+
+			require.NoError(t, h.reconcile(ctx, id))
+			after := h.getRun(ctx, id)
+			assert.Equal(t, tc.want, after.Status)
+			if tc.want == run_v1alpha.SKIPPED {
+				assert.Empty(t, after.Sandbox)
+				assert.False(t, after.EndedAt.IsZero())
+				require.NoError(t, h.inm.Client.Patch(ctx, appID, 0,
+					entity.Time(core_v1alpha.AppDisabledAtId, time.Time{})))
+				require.NoError(t, h.reconcile(ctx, id))
+				assert.Equal(t, run_v1alpha.SKIPPED, h.getRun(ctx, id).Status,
+					"enable must not replay the skipped run")
+			} else {
+				assert.NotEmpty(t, after.Sandbox)
+			}
+		})
+	}
+}
+
 // Reconciling twice must not create a second sandbox. Framework retries can run
 // the same step again after a partial failure.
 func TestRunStartIsIdempotent(t *testing.T) {

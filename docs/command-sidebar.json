@@ -40,6 +40,8 @@
     "items": [
       "command/app-attach",
       "command/app-delete",
+      "command/app-disable",
+      "command/app-enable",
       "command/app-history",
       "command/app-list",
       "command/app-restart",

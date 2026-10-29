@@ -96,7 +96,7 @@ func (h *Server) askTLSCheck(ctx context.Context, route *ingress_v1alpha.HttpRou
 
 	rec := &statusRecorder{header: http.Header{}}
 
-	if target, ok := h.resolveIngressTarget(rec, req, route.App, "", ingress.IsWildcardHost(route.Host)); ok {
+	if target, ok := h.resolveIngressTarget(rec, req, route.App, "", ingress.IsWildcardHost(route.Host), nil); ok {
 		appName := target.appMetadata.Name
 		h.serveAuthenticatedRequest(rec, req, route.App, routeService(route), "tls_check", target, &appName, tlsCheckTimeout)
 	}
