@@ -7,14 +7,22 @@ import (
 	"runtime/debug"
 	"time"
 
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/version"
 )
 
 type VersionOptions struct {
 	ConfigCentric
-	Deps   bool   `long:"deps" description:"Show dependencies"`
-	Format string `long:"format" description:"Output format (text, json)" default:"text"`
-	Server bool   `short:"s" long:"server" description:"Also report the version of the active cluster's server"`
+	FormatOptions
+	Deps   bool `long:"deps" description:"Show dependencies"`
+	Server bool `short:"s" long:"server" description:"Also report the version of the active cluster's server"`
+}
+
+func (o *VersionOptions) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
+	if !o.Server {
+		return nil, "", nil
+	}
+	return o.ConfigCentric.LoadCluster()
 }
 
 // versionReport is the --server shape. Without --server the output stays the
@@ -35,10 +43,10 @@ func Version(ctx *Context, opts VersionOptions) error {
 		if opts.Deps {
 			return fmt.Errorf("--deps and --server cannot be combined")
 		}
-		return versionWithServer(ctx, info, opts.Format == "json")
+		return versionWithServer(ctx, info, opts.IsJSON())
 	}
 
-	if opts.Format == "json" {
+	if opts.IsJSON() {
 		jsonStr, err := info.JSON()
 		if err != nil {
 			return fmt.Errorf("failed to marshal version info: %w", err)

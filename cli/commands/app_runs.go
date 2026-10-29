@@ -47,6 +47,7 @@ func AppRuns(ctx *Context, opts struct {
 	if opts.IsJSON() {
 		type runJSON struct {
 			ID        string `json:"id"`
+			ShortID   string `json:"short_id,omitempty"`
 			Task      string `json:"task"`
 			Trigger   string `json:"trigger"`
 			Status    string `json:"status"`
@@ -62,6 +63,7 @@ func AppRuns(ctx *Context, opts struct {
 		for _, r := range list {
 			item := runJSON{
 				ID:      r.Id(),
+				ShortID: r.ShortId(),
 				Task:    r.Task(),
 				Trigger: r.Trigger(),
 				Status:  r.Status(),

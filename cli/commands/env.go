@@ -484,34 +484,28 @@ func EnvList(ctx *Context, opts struct {
 func EnvDelete(ctx *Context, opts struct {
 	Keys    []string `rest:"true" usage:"Environment variable keys to delete" required:"true"`
 	Service string   `short:"S" long:"service" description:"Delete env var from specific service only (if not specified, deletes global env var)"`
-	Force   bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Yes     bool     `short:"y" long:"yes" description:"Skip confirmation prompt"`
+	Force   bool     `short:"f" long:"force" description:"Deprecated: use --yes to skip confirmation"`
 	AppCentric
 }) error {
 	if len(opts.Keys) == 0 {
 		return fmt.Errorf("no environment variables specified")
 	}
 
-	// Ask for confirmation unless --force is used
-	if !opts.Force {
-		var message string
-		if len(opts.Keys) == 1 {
-			message = fmt.Sprintf("Delete environment variable '%s'?", opts.Keys[0])
-		} else {
-			message = fmt.Sprintf("Delete %d environment variables: %s?",
-				len(opts.Keys), strings.Join(opts.Keys, ", "))
-		}
-
-		confirmed, err := ui.Confirm(
-			ui.WithMessage(message),
-			ui.WithDefault(false),
-		)
-		if err != nil {
-			return fmt.Errorf("confirmation cancelled: %w", err)
-		}
-		if !confirmed {
-			ctx.Printf("deletion cancelled\n")
-			return nil
-		}
+	var message string
+	if len(opts.Keys) == 1 {
+		message = fmt.Sprintf("Delete environment variable '%s'?", opts.Keys[0])
+	} else {
+		message = fmt.Sprintf("Delete %d environment variables: %s?",
+			len(opts.Keys), strings.Join(opts.Keys, ", "))
+	}
+	confirmed, err := confirmDeletion(message, opts.Yes, opts.Force, false)
+	if err != nil {
+		return fmt.Errorf("confirmation cancelled: %w", err)
+	}
+	if !confirmed {
+		ctx.Printf("deletion cancelled\n")
+		return nil
 	}
 
 	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")

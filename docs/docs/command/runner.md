@@ -17,6 +17,7 @@ miren runner [flags]
 ## Subcommands
 
 - [`miren runner cordon`](./runner-cordon.md) — Mark a runner unschedulable without stopping its sandboxes
+- [`miren runner delete`](./runner-delete.md) — Remove a registered runner and clean up resources
 - [`miren runner drain`](./runner-drain.md) — Cordon a runner and evict its sandboxes onto other nodes
 - [`miren runner install`](./runner-install.md) — Install systemd service for miren runner
 - [`miren runner join`](./runner-join.md) — Join this machine to a coordinator as a runner
@@ -24,7 +25,7 @@ miren runner [flags]
 - [`miren runner operations`](./runner-operations.md) — Durable runner restart and upgrade operations
 - [`miren runner query`](./runner-query.md) — Query a runner's live host activity and print the JSON result
 - [`miren runner reissue`](./runner-reissue.md) — Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity
-- [`miren runner remove`](./runner-remove.md) — Remove a registered runner and clean up resources
+- [`miren runner remove`](./runner-remove.md) — Deprecated: use 'miren runner delete'
 - [`miren runner service-status`](./runner-service-status.md) — Show miren-runner systemd service status
 - [`miren runner start`](./runner-start.md) — Start this machine as a distributed runner
 - [`miren runner status`](./runner-status.md) — Show runner health and configuration

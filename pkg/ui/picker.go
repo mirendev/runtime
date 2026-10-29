@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 
 	"miren.dev/runtime/pkg/theme"
 )
@@ -363,11 +364,5 @@ func IsInteractive() bool {
 	if os.Getenv("CI") != "" {
 		return false
 	}
-
-	fileInfo, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-
-	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }

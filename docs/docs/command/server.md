@@ -1,12 +1,12 @@
 ---
 title: "miren server"
 sidebar_label: "server"
-description: "Start the miren server"
+description: "Alias for 'miren server start'"
 ---
 
 # miren server
 
-Start the miren server
+Alias for 'miren server start'
 
 ## Usage
 
@@ -85,18 +85,20 @@ miren server [flags]
 **Start the server:**
 
 ```bash
-sudo miren server
+sudo miren server start
 ```
 
 ## Subcommands
 
 - [`miren server config`](./server-config.md) — Server configuration management commands
 - [`miren server container`](./server-container.md) — Run the miren server in a container (Docker or Podman)
+- [`miren server download-release`](./server-download-release.md) — Download and extract miren release
 - [`miren server identity-anchor`](./server-identity-anchor.md) — Move where this cluster's workload identity is anchored
 - [`miren server install`](./server-install.md) — Install systemd service for miren server
 - [`miren server operations`](./server-operations.md) — Durable server restart and upgrade operations
 - [`miren server register`](./server-register.md) — Register this cluster with miren.cloud
 - [`miren server restart`](./server-restart.md) — Restart the systemd-managed miren server and wait for it to report ready
+- [`miren server start`](./server-start.md) — Start the miren server
 - [`miren server status`](./server-status.md) — Show miren service status
 - [`miren server uninstall`](./server-uninstall.md) — Remove systemd service for miren server
 - [`miren server unregister`](./server-unregister.md) — Detach this cluster from miren.cloud

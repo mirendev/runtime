@@ -65,6 +65,7 @@ func (r *AppInfo) ListVersions(ctx context.Context, state *app_v1alpha.CrudListV
 
 		var v app_v1alpha.AppVersionSummary
 		v.SetId(av.ID.String())
+		v.SetShortId(results.Entity().ShortId())
 		v.SetVersion(av.Version)
 		v.SetCreatedAt(standard.ToTimestamp(results.Entity().GetCreatedAt()))
 		switch {

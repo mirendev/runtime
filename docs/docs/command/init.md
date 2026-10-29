@@ -1,12 +1,12 @@
 ---
 title: "miren init"
 sidebar_label: "init"
-description: "Initialize a new application"
+description: "Alias for 'miren app init'"
 ---
 
 # miren init
 
-Initialize a new application
+Alias for 'miren app init'
 
 ## Usage
 
@@ -32,11 +32,11 @@ miren init [flags]
 **Initialize in current directory:**
 
 ```bash
-miren init
+miren app init
 ```
 
 **Initialize with a specific name:**
 
 ```bash
-miren init --name myapp
+miren app init --name myapp
 ```

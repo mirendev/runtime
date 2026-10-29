@@ -1,12 +1,12 @@
 ---
 title: "miren rollback"
 sidebar_label: "rollback"
-description: "Roll back to a previous version"
+description: "Alias for 'miren app rollback'"
 ---
 
 # miren rollback
 
-Roll back to a previous version
+Alias for 'miren app rollback'
 
 Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
@@ -39,11 +39,11 @@ miren rollback [flags]
 **Rollback the app in the current directory:**
 
 ```bash
-miren rollback
+miren app rollback
 ```
 
 **Rollback a specific app:**
 
 ```bash
-miren rollback -a myapp
+miren app rollback -a myapp
 ```

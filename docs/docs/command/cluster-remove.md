@@ -22,6 +22,7 @@ miren cluster remove [cluster] [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--yes, -y` — Skip confirmation prompt
 
 ## Global Options
 

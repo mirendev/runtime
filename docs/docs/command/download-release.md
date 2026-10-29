@@ -1,12 +1,12 @@
 ---
 title: "miren download release"
 sidebar_label: "download release"
-description: "Download and extract miren release"
+description: "Deprecated: use 'miren server download-release'"
 ---
 
 # miren download release
 
-Download and extract miren release
+Deprecated: use 'miren server download-release'
 
 ## Usage
 
@@ -32,7 +32,7 @@ miren download release [flags]
 **Download the latest release:**
 
 ```bash
-miren download release
+miren server download-release
 ```
 
 ## See also

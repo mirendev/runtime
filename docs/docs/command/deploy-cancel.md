@@ -1,24 +1,28 @@
 ---
 title: "miren deploy cancel"
 sidebar_label: "deploy cancel"
-description: "Cancel an in-progress deployment"
+description: "Deprecated: use 'miren deployment cancel'"
 ---
 
 # miren deploy cancel
 
-Cancel an in-progress deployment
+Deprecated: use 'miren deployment cancel'
 
 ## Usage
 
 ```bash
-miren deploy cancel [flags]
+miren deploy cancel [deployment] [flags]
 ```
+
+## Arguments
+
+- `deployment` — ID of the deployment to cancel
 
 ## Flags
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--deployment, -d` — ID of the deployment to cancel
+- `--deployment, -d` — Deprecated: pass the deployment ID as an argument
 
 ## Global Options
 
@@ -28,16 +32,10 @@ miren deploy cancel [flags]
 
 ## Examples
 
-**Cancel the current deployment:**
-
-```bash
-miren deploy cancel
-```
-
 **Cancel a specific deployment:**
 
 ```bash
-miren deploy cancel -d dep_abc123
+miren deployment cancel dep_abc123
 ```
 
 ## See also

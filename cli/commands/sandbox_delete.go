@@ -8,7 +8,8 @@ import (
 )
 
 func SandboxDelete(ctx *Context, opts struct {
-	Force     bool   `short:"f" long:"force" description:"Force delete without confirmation"`
+	Yes       bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
+	Force     bool   `short:"f" long:"force" description:"Deprecated: use --yes to skip confirmation"`
 	SandboxID string `position:"0" usage:"ID of the sandbox to delete" required:"true"`
 	ConfigCentric
 }) error {
@@ -23,15 +24,13 @@ func SandboxDelete(ctx *Context, opts struct {
 		return err
 	}
 
-	// Confirm deletion unless forced
-	if !opts.Force {
-		ctx.Printf("Are you sure you want to delete sandbox %s? (y/N): ", sandboxID)
-		var response string
-		_, _ = fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
-			ctx.Printf("Deletion cancelled\n")
-			return nil
-		}
+	confirmed, confirmErr := confirmDeletion(fmt.Sprintf("Delete sandbox %s?", sandboxID), opts.Yes, opts.Force, false)
+	if confirmErr != nil {
+		return confirmErr
+	}
+	if !confirmed {
+		ctx.Printf("Deletion cancelled\n")
+		return nil
 	}
 
 	if err == nil {
