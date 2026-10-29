@@ -3,8 +3,7 @@ package commands
 import (
 	"fmt"
 
-	apppkg "miren.dev/runtime/api/app"
-	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 )
 
 func RouteSetDefault(ctx *Context, opts struct {
@@ -21,22 +20,12 @@ func RouteSetDefault(ctx *Context, opts struct {
 		return fmt.Errorf("app is required")
 	}
 
-	cl, err := ctx.RPCClient("entities")
+	cl, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
-	appClient := apppkg.NewClient(ctx.Log, cl)
-	ingressClient := ingress.NewClient(ctx.Log, cl)
-
-	// Get the app to ensure it exists
-	app, err := appClient.GetByName(ctx, appName)
-	if err != nil {
-		return fmt.Errorf("failed to get app %s: %w", appName, err)
-	}
-
-	ctx.Log.Info("setting default route", "app", app.ID)
-
-	_, err = ingressClient.SetDefault(ctx, app.ID)
+	routes := ingress_v1alpha.NewRoutesClient(cl)
+	_, err = routes.SetDefault(ctx, appName)
 	if err != nil {
 		return fmt.Errorf("failed to set default route: %w", err)
 	}

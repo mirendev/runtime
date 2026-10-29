@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -25,6 +26,10 @@ type Client struct {
 	log *slog.Logger
 	ec  *entityserver.Client
 	eac *entityserver_v1alpha.EntityAccessClient
+
+	// ProviderMu serializes provider mutations with route protection. The
+	// coordinator's provider and route RPC servers must share this client.
+	ProviderMu sync.Mutex
 }
 
 // NewClient creates a new Ingress client from an RPC client
@@ -350,24 +355,6 @@ func (c *Client) SetRoute(ctx context.Context, host string, appID entity.Id, ser
 	return route, nil
 }
 
-// DeleteByHost deletes an http_route by hostname
-func (c *Client) DeleteByHost(ctx context.Context, host string) error {
-	route, err := c.Lookup(ctx, host)
-	if err != nil {
-		return err
-	}
-
-	if route == nil {
-		return fmt.Errorf("route not found: %s", host)
-	}
-
-	if err := c.ec.Delete(ctx, route.ID); err != nil {
-		return fmt.Errorf("failed to delete route: %w", err)
-	}
-
-	return nil
-}
-
 // CreateOrUpdateOIDCProvider creates or updates an OIDC provider
 func (c *Client) CreateOrUpdateOIDCProvider(ctx context.Context, provider *ingress_v1alpha.OidcProvider) (*ingress_v1alpha.OidcProvider, error) {
 	if provider.Name == "" {
@@ -400,12 +387,7 @@ func (c *Client) GetOIDCProvider(ctx context.Context, name string) (*ingress_v1a
 
 // ListOIDCProviders returns all OIDC providers
 func (c *Client) ListOIDCProviders(ctx context.Context) ([]*ingress_v1alpha.OidcProvider, error) {
-	kindRes, err := c.eac.LookupKind(ctx, "oidc_provider")
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup oidc_provider kind: %w", err)
-	}
-
-	res, err := c.eac.List(ctx, kindRes.Attr())
+	res, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindOidcProvider))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list OIDC providers: %w", err)
 	}
@@ -418,41 +400,6 @@ func (c *Client) ListOIDCProviders(ctx context.Context) ([]*ingress_v1alpha.Oidc
 	}
 
 	return providers, nil
-}
-
-// DeleteOIDCProvider deletes an OIDC provider by name
-func (c *Client) DeleteOIDCProvider(ctx context.Context, name string) error {
-	provider, err := c.GetOIDCProvider(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if provider == nil {
-		return fmt.Errorf("OIDC provider not found: %s", name)
-	}
-
-	if err := c.ec.Delete(ctx, provider.ID); err != nil {
-		return fmt.Errorf("failed to delete OIDC provider: %w", err)
-	}
-
-	return nil
-}
-
-// AttachAuthProviderToRoute associates an auth provider with an already-resolved route.
-// The providerID should be the entity ID of either an OIDC or password provider.
-func (c *Client) AttachAuthProviderToRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, providerID entity.Id, claimMappings []ingress_v1alpha.ClaimMappings) (*ingress_v1alpha.HttpRoute, error) {
-	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
-		r.AuthProvider = providerID
-		r.ClaimMappings = claimMappings
-	})
-}
-
-// DetachAuthProviderFromRoute removes auth provider association from a route
-func (c *Client) DetachAuthProviderFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
-	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
-		r.AuthProvider = ""
-		r.ClaimMappings = nil
-	})
 }
 
 // SetRouteMaintenance puts a route into maintenance. The router serves a
@@ -555,12 +502,7 @@ func (c *Client) GetPasswordProvider(ctx context.Context, name string) (*ingress
 
 // ListPasswordProviders returns all password providers
 func (c *Client) ListPasswordProviders(ctx context.Context) ([]*ingress_v1alpha.PasswordProvider, error) {
-	kindRes, err := c.eac.LookupKind(ctx, "password_provider")
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup password_provider kind: %w", err)
-	}
-
-	res, err := c.eac.List(ctx, kindRes.Attr())
+	res, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindPasswordProvider))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list password providers: %w", err)
 	}
@@ -573,24 +515,6 @@ func (c *Client) ListPasswordProviders(ctx context.Context) ([]*ingress_v1alpha.
 	}
 
 	return providers, nil
-}
-
-// DeletePasswordProvider deletes a password provider by name
-func (c *Client) DeletePasswordProvider(ctx context.Context, name string) error {
-	provider, err := c.GetPasswordProvider(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if provider == nil {
-		return fmt.Errorf("password provider not found: %s", name)
-	}
-
-	if err := c.ec.Delete(ctx, provider.ID); err != nil {
-		return fmt.Errorf("failed to delete password provider: %w", err)
-	}
-
-	return nil
 }
 
 func (c *Client) CreateWAFProfile(ctx context.Context, level int) (*ingress_v1alpha.WafProfile, error) {
@@ -625,113 +549,6 @@ func (c *Client) GetWAFProfileByID(ctx context.Context, id entity.Id) (*ingress_
 	return &profile, nil
 }
 
-func (c *Client) SetRouteWAFLevel(ctx context.Context, host string, level int) (*ingress_v1alpha.HttpRoute, error) {
-	route, err := c.Lookup(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	if route == nil {
-		return nil, fmt.Errorf("route not found: %s", host)
-	}
-
-	return c.SetRouteWAFLevelOnRoute(ctx, route, level)
-}
-
-func (c *Client) SetRouteWAFLevelOnRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, level int) (*ingress_v1alpha.HttpRoute, error) {
-	if route == nil {
-		return nil, fmt.Errorf("route is required")
-	}
-	if level < 1 || level > 4 {
-		return nil, fmt.Errorf("WAF level must be between 1 and 4, got %d", level)
-	}
-
-	profile, err := c.CreateWAFProfile(ctx, level)
-	if err != nil {
-		return nil, err
-	}
-
-	route.WafProfile = profile.ID
-
-	err = c.ec.Update(ctx, route)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set WAF profile on route: %w", err)
-	}
-
-	return route, nil
-}
-
-func (c *Client) DetachWAFProfile(ctx context.Context, host string) (*ingress_v1alpha.HttpRoute, error) {
-	route, err := c.Lookup(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	if route == nil {
-		return nil, fmt.Errorf("route not found: %s", host)
-	}
-
-	return c.DetachWAFProfileFromRoute(ctx, route)
-}
-
-func (c *Client) DetachWAFProfileFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
-	if route == nil {
-		return nil, fmt.Errorf("route is required")
-	}
-	err := c.ec.Patch(ctx, route.ID, 0,
-		entity.Ref(ingress_v1alpha.HttpRouteWafProfileId, ""),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to detach WAF profile from route: %w", err)
-	}
-
-	route.WafProfile = ""
-	return route, nil
-}
-
-// SetRouteRequestTimeout sets the per-route ingress request timeout override.
-// The timeout is stored as a duration string (e.g. "10m") and must parse to a
-// positive duration.
-func (c *Client) SetRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute, timeout string) (*ingress_v1alpha.HttpRoute, error) {
-	if route == nil {
-		return nil, fmt.Errorf("route is required")
-	}
-
-	d, err := time.ParseDuration(timeout)
-	if err != nil {
-		return nil, fmt.Errorf("invalid request timeout %q: %w", timeout, err)
-	}
-	if d <= 0 {
-		return nil, fmt.Errorf("request timeout must be positive, got %q", timeout)
-	}
-
-	err = c.ec.Patch(ctx, route.ID, 0,
-		entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, timeout),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set request timeout on route: %w", err)
-	}
-
-	route.RequestTimeout = timeout
-	return route, nil
-}
-
-// ClearRouteRequestTimeout removes the per-route timeout override, so the route
-// falls back to the server-wide http_request_timeout.
-func (c *Client) ClearRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
-	if route == nil {
-		return nil, fmt.Errorf("route is required")
-	}
-
-	err := c.ec.Patch(ctx, route.ID, 0,
-		entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, ""),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to clear request timeout on route: %w", err)
-	}
-
-	route.RequestTimeout = ""
-	return route, nil
-}
-
 // ValidateTLSCheckPath checks that path is usable as a route's tls_check. It
 // must be an absolute path on the app with no query or fragment, since the
 // ingress appends its own "?domain=" query when it asks. A leading "//" is
@@ -751,8 +568,101 @@ func ValidateTLSCheckPath(path string) error {
 	return nil
 }
 
-// SetRouteTLSCheck sets the path the ingress asks before issuing an on-demand
-// certificate for a name under this route.
+// DeleteByHost deletes an http_route by hostname.
+func (c *Client) DeleteByHost(ctx context.Context, host string) error {
+	route, err := c.Lookup(ctx, host)
+	if err != nil {
+		return err
+	}
+	if route == nil {
+		return fmt.Errorf("route not found: %s", host)
+	}
+	if err := c.ec.Delete(ctx, route.ID); err != nil {
+		return fmt.Errorf("failed to delete route: %w", err)
+	}
+	return nil
+}
+
+// AttachAuthProviderToRoute associates an auth provider with an already-resolved route.
+func (c *Client) AttachAuthProviderToRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, providerID entity.Id, claimMappings []ingress_v1alpha.ClaimMappings) (*ingress_v1alpha.HttpRoute, error) {
+	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
+		r.AuthProvider = providerID
+		r.ClaimMappings = claimMappings
+	})
+}
+
+// DetachAuthProviderFromRoute removes auth provider association from a route.
+func (c *Client) DetachAuthProviderFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
+		r.AuthProvider = ""
+		r.ClaimMappings = nil
+	})
+}
+
+func (c *Client) SetRouteWAFLevelOnRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, level int) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+	if level < 1 || level > 4 {
+		return nil, fmt.Errorf("WAF level must be between 1 and 4, got %d", level)
+	}
+	profile, err := c.CreateWAFProfile(ctx, level)
+	if err != nil {
+		return nil, err
+	}
+	route.WafProfile = profile.ID
+	if err := c.ec.Patch(ctx, route.ID, 0, entity.Ref(ingress_v1alpha.HttpRouteWafProfileId, profile.ID)); err != nil {
+		return nil, fmt.Errorf("failed to set WAF profile on route: %w", err)
+	}
+	return route, nil
+}
+
+func (c *Client) DetachWAFProfileFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+	err := c.ec.Patch(ctx, route.ID, 0, entity.Ref(ingress_v1alpha.HttpRouteWafProfileId, ""))
+	if err != nil {
+		return nil, fmt.Errorf("failed to detach WAF profile from route: %w", err)
+	}
+	route.WafProfile = ""
+	return route, nil
+}
+
+// SetRouteRequestTimeout sets the per-route ingress request timeout override.
+func (c *Client) SetRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute, timeout string) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+	d, err := time.ParseDuration(timeout)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request timeout %q: %w", timeout, err)
+	}
+	if d <= 0 {
+		return nil, fmt.Errorf("request timeout must be positive, got %q", timeout)
+	}
+	err = c.ec.Patch(ctx, route.ID, 0, entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, timeout))
+	if err != nil {
+		return nil, fmt.Errorf("failed to set request timeout on route: %w", err)
+	}
+	route.RequestTimeout = timeout
+	return route, nil
+}
+
+// ClearRouteRequestTimeout removes the per-route timeout override.
+func (c *Client) ClearRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+	err := c.ec.Patch(ctx, route.ID, 0, entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, ""))
+	if err != nil {
+		return nil, fmt.Errorf("failed to clear request timeout on route: %w", err)
+	}
+	route.RequestTimeout = ""
+	return route, nil
+}
+
+// SetRouteTLSCheck sets the path consulted before issuing an on-demand certificate.
 func (c *Client) SetRouteTLSCheck(ctx context.Context, route *ingress_v1alpha.HttpRoute, path string) (*ingress_v1alpha.HttpRoute, error) {
 	if route == nil {
 		return nil, fmt.Errorf("route is required")
@@ -760,32 +670,23 @@ func (c *Client) SetRouteTLSCheck(ctx context.Context, route *ingress_v1alpha.Ht
 	if err := ValidateTLSCheckPath(path); err != nil {
 		return nil, err
 	}
-
-	err := c.ec.Patch(ctx, route.ID, 0,
-		entity.String(ingress_v1alpha.HttpRouteTlsCheckId, path),
-	)
+	err := c.ec.Patch(ctx, route.ID, 0, entity.String(ingress_v1alpha.HttpRouteTlsCheckId, path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to set TLS check on route: %w", err)
 	}
-
 	route.TlsCheck = path
 	return route, nil
 }
 
-// ClearRouteTLSCheck removes the route's TLS check, so names under it get
-// certificates only when they are live ephemeral deploys.
+// ClearRouteTLSCheck removes the route's TLS check.
 func (c *Client) ClearRouteTLSCheck(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
 	if route == nil {
 		return nil, fmt.Errorf("route is required")
 	}
-
-	err := c.ec.Patch(ctx, route.ID, 0,
-		entity.String(ingress_v1alpha.HttpRouteTlsCheckId, ""),
-	)
+	err := c.ec.Patch(ctx, route.ID, 0, entity.String(ingress_v1alpha.HttpRouteTlsCheckId, ""))
 	if err != nil {
 		return nil, fmt.Errorf("failed to clear TLS check on route: %w", err)
 	}
-
 	route.TlsCheck = ""
 	return route, nil
 }

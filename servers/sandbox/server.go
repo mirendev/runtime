@@ -1,4 +1,4 @@
-// Package sandbox serves the operator-facing sandbox inventory.
+// Package sandbox serves sandbox inventory, lifecycle and exec selection.
 //
 // Sandbox entities are execution records and contain resolved container
 // environment values. This package is the boundary that turns those raw
@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 type Server struct {
@@ -28,36 +29,45 @@ func NewServer(log *slog.Logger, ec *entityserver.Client) *Server {
 var _ compute_v1alpha.Sandboxes = (*Server)(nil)
 
 func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList) error {
+	if _, err := rpc.FilterResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "list"}); err != nil {
+		return err
+	}
+	apps, err := inventoryApps(ctx, s.ec)
+	if err != nil {
+		return err
+	}
 	pools, err := s.ec.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
 		return err
 	}
 	poolServices := make(map[string]string)
 	poolShortIDs := make(map[string]string)
+	poolApps := make(map[string]entity.Id)
 	for pools.Next() {
 		var pool compute_v1alpha.SandboxPool
 		if err := pools.Read(&pool); err != nil {
 			return err
 		}
 		poolServices[pool.ID.String()] = pool.Service
+		poolApps[pool.ID.String()] = pool.App
 		if shortID := pools.Entity().ShortId(); shortID != "" {
 			poolShortIDs[pool.ID.String()] = shortID
 		}
 	}
 
-	// Version metadata is best-effort display enrichment. A missing version
-	// must not make the underlying sandbox disappear from an inventory query.
-	versionApps := make(map[string]string)
+	// Missing associations are orphans, but failed bulk reads are not evidence
+	// that an association is missing.
+	versionApps := make(map[string]entity.Id)
 	versionShortIDs := make(map[string]string)
 	if versions, listErr := s.ec.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion)); listErr != nil {
-		s.log.Warn("could not enrich sandbox inventory with app versions", "error", listErr)
+		return listErr
 	} else {
 		for versions.Next() {
 			var version core_v1alpha.AppVersion
 			if err := versions.Read(&version); err != nil {
 				return err
 			}
-			versionApps[version.ID.String()] = strings.TrimPrefix(version.App.String(), "app/")
+			versionApps[version.ID.String()] = version.App
 			if shortID := versions.Entity().ShortId(); shortID != "" {
 				versionShortIDs[version.ID.String()] = shortID
 			}
@@ -103,7 +113,18 @@ func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList)
 		metadata.Decode(ent)
 		pool, _ := metadata.Labels.Get("pool")
 		service := poolServices[pool]
-		app := versionApps[sb.Spec.Version.String()]
+		appID := versionApps[sb.Spec.Version.String()]
+		if pool != "" {
+			appID = poolApps[pool]
+		}
+		owner := apps[appID]
+		allowed, err := filterInventoryApp(ctx, owner)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
 
 		address := ""
 		if len(sb.Network) > 0 {
@@ -125,7 +146,12 @@ func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList)
 		item := new(compute_v1alpha.SandboxInfo)
 		item.SetId(sb.ID.String())
 		item.SetShortId(ent.ShortId())
-		item.SetApp(app)
+		item.SetApp(owner.Instance)
+		if owner.Instance == "" {
+			// Display-only fallback for legacy addon pools, after authorization.
+			name, _ := metadata.Labels.Get("app")
+			item.SetApp(name)
+		}
 		item.SetVersion(sb.Spec.Version.String())
 		item.SetVersionShortId(versionShortIDs[sb.Spec.Version.String()])
 		item.SetService(service)
@@ -141,4 +167,34 @@ func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList)
 
 	state.Results().SetSandboxes(items)
 	return nil
+}
+
+func inventoryApps(ctx context.Context, ec *entityserver.Client) (map[entity.Id]rpc.ResourceRequest, error) {
+	apps, err := ec.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+	if err != nil {
+		return nil, err
+	}
+	owners := make(map[entity.Id]rpc.ResourceRequest)
+	for apps.Next() {
+		var app core_v1alpha.App
+		if err := apps.Read(&app); err != nil {
+			return nil, err
+		}
+		var md core_v1alpha.Metadata
+		md.Decode(apps.Entity())
+		if md.Name != "" {
+			owners[app.ID] = rpc.ResourceRequest{Resource: "app", Action: "list", Instance: md.Name, Owner: app.OwnedBy}
+		}
+	}
+	return owners, nil
+}
+
+func filterInventoryApp(ctx context.Context, owner rpc.ResourceRequest) (bool, error) {
+	if !rpc.AllowApp(ctx, owner.Instance) {
+		return false, nil
+	}
+	if owner.Instance == "" {
+		owner = rpc.ResourceRequest{Resource: "cluster", Action: "admin"}
+	}
+	return rpc.FilterResource(ctx, owner)
 }

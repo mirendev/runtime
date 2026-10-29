@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/version"
 )
@@ -34,9 +35,10 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	// Determine the target architecture
 	arch := runtime.GOARCH
 
-	// Construct download URLs
-	baseURL := fmt.Sprintf("https://api.miren.cloud/assets/release/miren/%s/miren-base-linux-%s.tar.gz", opts.Branch, arch)
-	shaURL := baseURL + ".sha256"
+	artifact := release.Artifact{Type: release.ArtifactTypeBase, Version: opts.Branch, Platform: "linux", Arch: arch}
+	artifactName := artifact.Filename()
+	baseURL := artifact.GetDownloadURL()
+	shaURL := artifact.GetChecksumURL()
 
 	// Determine release directory
 	var releaseDir string
@@ -91,19 +93,10 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Download SHA256 checksum
-	ctx.Log.Info("downloading checksum", "url", shaURL)
-	shaPath := filepath.Join(tempDir, "release.tar.gz.sha256")
-	if err := downloadFile(shaPath, shaURL); err != nil {
-		return fmt.Errorf("failed to download checksum from %s: %w", shaURL, err)
-	}
-
-	// Read expected checksum
-	shaData, err := os.ReadFile(shaPath)
+	expectedSum, err := expectedReleaseChecksum(ctx, opts.Branch, artifactName, shaURL, tempDir)
 	if err != nil {
-		return fmt.Errorf("failed to read checksum file: %w", err)
+		return err
 	}
-	expectedSum := strings.TrimSpace(strings.Split(string(shaData), " ")[0])
 
 	// Download release tarball
 	ctx.Log.Info("downloading release tarball")
@@ -121,7 +114,7 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	}
 
 	if actualSum != expectedSum {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, actualSum)
+		return fmt.Errorf("%w: expected %s, got %s (a new build is probably being published; try again in a minute)", release.ErrChecksumMismatch, expectedSum, actualSum)
 	}
 
 	stagingDir, err := os.MkdirTemp(releaseParent, "."+filepath.Base(releaseDir)+"-staging-*")
@@ -205,6 +198,30 @@ func promoteReleaseDir(stagingDir, releaseDir string, replaceExisting bool) (str
 	}
 
 	return backupDir, nil
+}
+
+// expectedReleaseChecksum takes the checksum from the branch's version.json,
+// as upgrades do: a channel's .sha256 can belong to a different build than
+// its tarball while a publish is overwriting it. Without a manifest entry it
+// falls back to the .sha256 file.
+func expectedReleaseChecksum(ctx *Context, branch, artifactName, shaURL, tempDir string) (string, error) {
+	if metadata, err := release.NewDownloader().GetVersionMetadata(ctx, branch); err == nil {
+		if sum, ok := metadata.GetArtifactChecksum(artifactName); ok {
+			ctx.Log.Info("using checksum from release manifest", "version", metadata.Version)
+			return sum, nil
+		}
+	}
+
+	ctx.Log.Info("downloading checksum", "url", shaURL)
+	shaPath := filepath.Join(tempDir, "release.tar.gz.sha256")
+	if err := downloadFile(shaPath, shaURL); err != nil {
+		return "", fmt.Errorf("failed to download checksum from %s: %w", shaURL, err)
+	}
+	shaData, err := os.ReadFile(shaPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read checksum file: %w", err)
+	}
+	return strings.TrimSpace(strings.Split(string(shaData), " ")[0]), nil
 }
 
 // DownloadRelease is the CLI command handler for downloading a release

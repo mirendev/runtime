@@ -1492,6 +1492,37 @@ func TestEntityServer_ListPage(t *testing.T) {
 		r.Equal(testKind, kind.Value.Id().String())
 	})
 
+	for _, session := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reports corrupt omissions/session=%t", session), func(t *testing.T) {
+			ctx := t.Context()
+			client, prefix := setupTestEtcd(t)
+			store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+			require.NoError(t, err)
+			require.NoError(t, schema.Apply(ctx, store))
+			live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "readable", index))
+			require.NoError(t, err)
+			corrupt, err := store.CreateEntity(ctx, entity.New(entity.Ident, "corrupt", index))
+			require.NoError(t, err)
+			server, err := NewEntityServer(slog.Default(), store)
+			require.NoError(t, err)
+			sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+			page, err := sc.ListPage(ctx, index, "", 10)
+			require.NoError(t, err)
+			require.Len(t, page.Values(), 2)
+			require.False(t, page.Incomplete())
+			key := prefix + "/entity/" + base58.Encode([]byte(corrupt.Id()))
+			if session {
+				key += "/session/corrupt"
+			}
+			_, err = client.Put(ctx, key, "\xff invalid cbor")
+			require.NoError(t, err)
+			page, err = sc.ListPage(ctx, index, "", 10)
+			require.NoError(t, err, "ordinary listings remain tolerant")
+			require.True(t, page.Incomplete())
+			require.Len(t, page.Values(), 1)
+			require.Equal(t, live.Id().String(), page.Values()[0].Id())
+		})
+	}
 }
 
 func TestEntityServer_OrphanReadsStayQuietAndPure(t *testing.T) {
@@ -1528,6 +1559,7 @@ func TestEntityServer_OrphanReadsStayQuietAndPure(t *testing.T) {
 		page, err := sc.ListPage(ctx, index, "", 10)
 		require.NoError(t, err)
 		require.Len(t, page.Values(), 1)
+		require.False(t, page.Incomplete(), "a stale index is not corrupt entity data")
 		require.Equal(t, int64(1), page.Total())
 		entry, err := client.Get(ctx, key)
 		require.NoError(t, err)

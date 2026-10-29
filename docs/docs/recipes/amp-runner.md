@@ -1,6 +1,6 @@
 ---
 title: Run an Amp agent on Miren
-description: A worked example — run the Amp coding agent as a headless runner on Miren that dials out to ampcode.com and shows up as a Machine you drive from the web app.
+description: Run the Amp coding agent as a headless runner on Miren that dials out to ampcode.com and shows up as a Machine in the web app.
 keywords: [amp, ampcode, ai agent, runner, machine, headless, remote thread, example, deploy]
 ---
 
@@ -54,14 +54,14 @@ workspace (cloned repos, build caches) stable across redeploys.
 
 ## Select the target cluster
 
-If the cluster isn't configured locally yet, list what your identity can see and add it
+If the cluster isn't configured locally yet, add it by its Miren Cloud name
 (this pins the TLS fingerprint):
 
 <CliCommand context="client">
 
 ```bash
-# Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
-miren cluster add -i cloud
+# Add a cluster your cloud identity can see, stored locally as `amp` (pins the TLS fingerprint)
+miren cluster add -c <your-cluster> --as amp
 
 miren whoami -C amp
 ```
@@ -92,17 +92,14 @@ RUN curl -fsSL https://ampcode.com/install.sh | AMP_VERSION=0.0.1784319456-g6a2c
 
 COPY runner.sh /usr/local/bin/runner.sh
 RUN chmod +x /usr/local/bin/runner.sh
+
+CMD ["runner.sh"]
 ```
 
 :::note[Why the extra symlink]
 The installer drops the binary at `$AMP_HOME/bin/amp` and tries to symlink it into a
 per-user PATH directory (`~/.local/bin`). Building as root, that isn't reliably on `PATH`, so
 the recipe symlinks `/opt/amp/bin/amp` into `/usr/local/bin` explicitly.
-:::
-
-:::note[No ENTRYPOINT or CMD needed]
-Miren runs the service `command` from `app.toml` via `/bin/sh -c "<cmd>"`, so this image
-doesn't need an `ENTRYPOINT` or `CMD` — `runner.sh` is invoked directly (see below).
 :::
 
 ## The runner entrypoint
@@ -155,12 +152,16 @@ and add the file below. The `Dockerfile` and `runner.sh` stay at the project roo
 ```toml
 name = "amp-runner"
 
+# No `web` service. Without this, Miren synthesizes one that would also run the
+# image's CMD, starting a second runner without the workspace disk.
+web = false
+
 [build]
 dockerfile = "Dockerfile"
 
 # Portless background service: nothing listens, so no `port`/`port_type`.
+# No `command` either: the service runs the image's CMD.
 [services.runner]
-command = "runner.sh"
 
 [services.runner.concurrency]
 mode = "fixed"
@@ -294,8 +295,8 @@ miren sandbox exec <sandbox-id> -C amp -- \
 ## Roadblock checklist
 
 1. Set `amp.remoteThreadCreation.enabled: true` (in `runner.sh`), or the runner accepts no threads.
-2. Portless service: omit `port`/`port_type`, and name it `runner`, not `web` (else `error acquiring lease`).
-3. Run the daemon `amp --no-tui`, not `amp -x` — the service command must not exit.
+2. Portless service: omit `port`/`port_type`, name it `runner`, not `web` (else `error acquiring lease`), and set `web = false` so no synthesized `web` service runs the image too.
+3. Run the daemon `amp --no-tui` (via `runner.sh`), not `amp -x` — the process must not exit.
 4. Give it a stable `AMP_RUNNER_ID` (valid hostname) and a fixed working directory.
 5. A `miren` disk means `fixed` / `num_instances = 1`; expect `did not become healthy` noise on redeploy (verify state before retrying). Use `local` for snappy rollouts.
 6. Point `HOME` and `AMP_SETTINGS_FILE` at the writable disk.

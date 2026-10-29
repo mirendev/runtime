@@ -99,21 +99,86 @@ XIDs). Cloud sends the organization's rules with their tag selectors; the runtim
 selectors against its own cluster tags. Policy and memberships are replaced
 together, and cached grants are invalidated on every update.
 
-JWT authorization is denied before the first snapshot, while the cluster
-connection is disconnected, and after reconnect until a fresh snapshot arrives.
-This applies to direct connections as well as cloud-routed ones, preventing
-removed users or groups from retaining access during an outage. Local,
-CA-verified client certificate access remains available and bypasses cloud RBAC.
+Cloud defines access, so the cluster keeps authorizing from the last snapshot
+cloud sent until cloud sends a new one. Losing the cluster connection,
+reconnecting, and restarting the server don't change who can do what: the
+cluster saves each snapshot to disk, along with cloud's token signing keys, and
+picks up where it left off. An update the cluster can't read is ignored and
+logged as an error, leaving the previous snapshot in place. This applies to
+direct connections as well as cloud-routed ones.
 
-:::warning[Upgrade cloud first]
+JWT authorization is denied only before a cluster has ever received a snapshot,
+or after it is registered to a different organization. Local, CA-verified client
+certificate access is always available and bypasses cloud RBAC.
 
-A cloud that does not negotiate authorization version 1 cannot authorize JWT
-callers on this runtime; update cloud before upgrading the runtime.
+:::warning[Revocations wait for the cluster to hear from cloud]
+
+While a cluster can't reach cloud, it keeps trusting what cloud last told it,
+for as long as the outage lasts. That covers two kinds of revocation:
+
+- **Permissions.** Removing someone from a group or from the organization
+  reaches the cluster with its next snapshot. Until then, they keep the access
+  they had.
+- **Signing keys.** If cloud withdraws a token signing key, for example because
+  it leaked, the cluster keeps accepting tokens signed with that key until it
+  fetches cloud's current keys.
+
+Restoring the connection delivers both. Where a cluster is reachable directly,
+treat a long uplink outage as a window in which neither kind of revocation
+applies there.
 
 :::
 
+:::warning[Upgrade cloud first]
+
+A cloud that does not negotiate authorization version 1 cannot authorize
+JWT callers on this runtime; update cloud before upgrading the runtime.
+
+:::
+
+The runtime currently offers only authorization version 1, retaining the existing
+RPC-interface/method policy vocabulary. Version 2 negotiation is held for a
+separate, approved Cloud/runtime rollout; it is not a CLI version. The runtime
+retains version 2 enforcement for saved snapshots. This negotiation hold is not
+a kill switch: a saved version 2 snapshot remains authoritative across restarts
+until a valid replacement arrives, including a version 1 replacement.
+
+Version 2 snapshots must explicitly include `version: 2` and use
+logical permissions for migrated app operations (`app:read`, `app:create`,
+`app:configure`, `app:deploy`, `app:destroy`, `app:logs`, and `app:exec`). The
+runtime resolves the app's stored name and creator before evaluating its scope;
+ownership alone never grants access without a matching policy rule. Creating an
+app under version 2 requires an unscoped create grant, including implicit
+creation during a build. A deploy grant alone is not a create grant.
+
+Version 1 and standalone certificate, OIDC, and workload callers retain their
+existing method permissions and app bindings, including implicit creation during
+an authorized first build. Source-only analysis uses `builder:analyzeapp`, not
+`app:read`, in both policy versions. Prepared uploads require the same initiating
+subject only under logical Cloud policy. Existing sandbox app-confinement checks
+remain in place; the additional authoritative owner lookup applies to logical
+Cloud policy only.
+
+Cloud must only emit scoped, logical permissions after negotiating version 2
+with that specific runtime. Older runtimes ignore unknown permission fields,
+so sending them a scoped rule can silently turn it into a cluster-wide grant.
+Never strip scopes to downgrade a policy; version 1 grants must be genuinely
+unscoped. Cloud must persist and emit scopes before version 2 can be enabled.
+Upgrading the evaluator alone is not sufficient rollout protection. Version 1
+and version 2 policies must not be combined as alternative grants: a broad legacy
+grant must not override a scoped logical permission. Version selection and
+policy replacement are atomic, and saved snapshots retain their vocabulary
+across restarts. Before downgrading to a runtime without version 2 support,
+replace the saved authorization state and policy with an appropriate version 1
+policy; old binaries cannot safely read version 2 snapshots.
+
+Logical authorization is being migrated incrementally. Collection filtering,
+related-resource authorization, raw entity/infrastructure gates, ownership
+transfer, and standalone file policies are separate changes. Do not enable a
+restricted shared-cluster policy until those enforcement paths are deployed.
+
 After reconnecting, the cluster receives current permissions, including changes
-made while offline, before JWT access resumes.
+made while it was offline, and applies them as soon as they arrive.
 
 `miren debug rbac` and `miren debug rbac test` still perform an explicit, one-shot
 HTTP policy fetch for troubleshooting. They do not inspect the running cluster's
@@ -180,15 +245,16 @@ explicitly:
 [Connectivity](./connectivity.md) panel; the cluster is offline or has lost its
 uplink.
 
-**`access denied by RBAC policy`** — you reached the cluster and it refused the
+**`unauthorized: denied by RBAC policy`** — you reached the cluster and it refused the
 command. That is the cluster's own policy, not the relay. Check your current
 organization membership and permissions. A newly granted permission becomes
 usable when the corresponding push arrives.
 
-**`cloud authorization is not synchronized`** — the cluster has no current
-authorization snapshot, either because its cloud connection is down or because
-it is waiting for a fresh snapshot. Check the [Connectivity](./connectivity.md)
-panel and that cloud was upgraded first; JWT access resumes after synchronization.
+**`cloud authorization is not synchronized`** — the cluster has never received
+an authorization snapshot from its current organization, usually because it was
+just registered or upgraded and hasn't connected to cloud since. Check the
+[Connectivity](./connectivity.md) panel. JWT access starts once the first
+snapshot arrives.
 
 **`the cluster's link to the cloud dropped`** — the cluster disconnected while
 your command was running. Retry it.

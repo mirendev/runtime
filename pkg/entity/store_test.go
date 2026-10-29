@@ -1,7 +1,9 @@
 package entity
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -2356,6 +2358,40 @@ func TestCreateEntity_UniqueValueCollisionRetry(t *testing.T) {
 	assert.Equal(t, entityId, string(resp.Kvs[0].Value))
 }
 
+// A revision-checked write carries its unique-value guards in the same
+// transaction as the revision guard. When only a unique guard fails, the store
+// must log a unique-value race at Warn rather than a revision race at Debug,
+// since a caller retrying on conflict will hit it every time.
+func TestPatchEntity_UniqueConflictUnderFromRevisionLogsWarn(t *testing.T) {
+	client, prefix := setupTestEtcd(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store, err := NewEtcdStore(t.Context(), log, client, prefix)
+	require.NoError(t, err)
+
+	kind, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/uniqrace")),
+	))
+	require.NoError(t, err)
+
+	holder, err := store.CreateEntity(t.Context(), New(Ref(EntityKind, kind.Id())))
+	require.NoError(t, err)
+	other, err := store.CreateEntity(t.Context(), New(Ref(EntityKind, kind.Id())))
+	require.NoError(t, err)
+
+	logs.Reset()
+	_, err = store.PatchEntity(t.Context(), New(
+		Ref(DBId, other.Id()),
+		String(DBShortId, holder.ShortId()),
+	), WithFromRevision(other.GetRevision()))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, cond.ErrConflict{}), "got %v", err)
+
+	assert.Contains(t, logs.String(), `level=WARN msg="patch lost unique-value race"`)
+	assert.NotContains(t, logs.String(), "lost revision race")
+}
+
 func TestCreateEntity_AllocatesShortId(t *testing.T) {
 	client, prefix := setupTestEtcd(t)
 
@@ -3130,7 +3166,7 @@ func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
 // entity this way, so a primary-key-only read would export a node without its
 // status for as long as the runner held its session.
 func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
-	store, _ := setupTestEtcdStore(t)
+	store, client := setupTestEtcdStore(t)
 	ctx := t.Context()
 
 	_, err := store.CreateEntity(ctx, New(
@@ -3159,6 +3195,10 @@ func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
 	require.True(t, ok, "the session attribute is part of the entity at that revision")
 	assert.Equal(t, "ready", status.Value.String())
 
+	// Other tests share etcd's revision counter even though their keys are isolated.
+	_, err = client.Put(ctx, store.Prefix()+"/unrelated", "write")
+	require.NoError(t, err)
+
 	// Once the session is gone the attribute is gone with it, and a read at
 	// that later revision says so, while the earlier revision still has it.
 	require.NoError(t, store.RevokeSession(ctx, session))
@@ -3170,9 +3210,11 @@ func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
 		_, still := current.Get("test/session-status")
 		return !still
 	}, 5*time.Second, 50*time.Millisecond)
-	current, err := store.GetEntity(ctx, Id("node/pinned"))
+	// Revoking a session leaves the primary key's ModRevision unchanged.
+	// Use the store revision observed after revocation, not the entity revision.
+	current, err := client.Get(ctx, store.buildKey(Id("node/pinned")))
 	require.NoError(t, err)
-	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.GetRevision()+1)
+	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.Header.Revision)
 	require.NoError(t, err)
 	_, still := later.Get("test/session-status")
 	require.False(t, still)

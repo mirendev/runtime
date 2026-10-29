@@ -56,7 +56,7 @@ miren deploy [flags]
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
 - `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
 - `--target` — Deployment target from .miren/deploy.toml
-- `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
+- `--ttl` — TTL for ephemeral version (e.g. 48h, 7d, 2w) (default: `7d`)
 - `--version, -V` — Deploy an existing version (reuse its resolved image; skip image selection and build)
 
 ## Config Options

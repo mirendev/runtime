@@ -31,7 +31,6 @@ import (
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -75,6 +74,7 @@ func (w *buildLogWriter) write(msg string) {
 type buildSession struct {
 	dir        string
 	appName    string
+	subject    string
 	cancelFunc context.CancelFunc
 }
 
@@ -1142,18 +1142,24 @@ func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appcon
 	return b.ec.Patch(ctx, appRec.ID, 0, entity.String(core_v1alpha.AppWorkloadRoleId, ac.WorkloadRole))
 }
 
-func (b *Builder) nextVersion(ctx context.Context, name string) (
+func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
 	core_v1alpha.ConfigSpec,
 	string,
 	error,
 ) {
-	app, err := b.ensureApp(ctx, name)
+	if err := b.authorizeBuild(ctx, name); err != nil {
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
+	}
+	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, creator)
 	if err != nil {
 		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 	}
-	appRec := *app
+	if err := app.Authorize(ctx, b.ec.EAC(), name, "deploy"); err != nil {
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
+	}
+	appRec := *record
 
 	var currentCfg core_v1alpha.ConfigSpec
 
@@ -1201,24 +1207,14 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 // the build takes its app-scoped lock. It preserves nextVersion's historical
 // create-on-first-deploy behavior.
 func (b *Builder) ensureApp(ctx context.Context, name string) (*core_v1alpha.App, error) {
-	var appRec core_v1alpha.App
-	if err := b.ec.Get(ctx, name, &appRec); err == nil {
-		return &appRec, nil
-	} else if !errors.Is(err, cond.ErrNotFound{}) {
+	if err := b.authorizeBuild(ctx, name); err != nil {
 		return nil, err
 	}
-
-	appRec.Project = "project/default"
-	id, err := b.ec.Create(ctx, name, &appRec)
-	if err != nil {
-		// A concurrent first deploy may have created it between Get and Create.
-		if getErr := b.ec.Get(ctx, name, &appRec); getErr == nil {
-			return &appRec, nil
-		}
-		return nil, err
+	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, app.CreationSubject(ctx))
+	if err == nil {
+		err = app.Authorize(ctx, b.ec.EAC(), name, "deploy")
 	}
-	appRec.ID = id
-	return &appRec, nil
+	return record, err
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
@@ -1386,6 +1382,9 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if err := b.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
 
 	if b.DataPath == "" {
 		return fmt.Errorf("data path not configured")
@@ -1413,6 +1412,7 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	b.sessions.Store(sessionID, &buildSession{
 		dir:        tempDir,
 		appName:    name,
+		subject:    app.CreationSubject(ctx),
 		cancelFunc: cancelCleanup,
 	})
 
@@ -1703,6 +1703,7 @@ func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
 
 // AnalyzeApp analyzes an app without building it, returning detected stack, services, and configuration.
 func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAnalyzeApp) error {
+	// The transport gates builder/analyzeapp. Source analysis has no app target.
 	args := state.Args()
 	td := args.Tardata()
 

@@ -54,6 +54,10 @@ func TestAuthorizationOverUplink(t *testing.T) {
 		if len(hello.Capabilities) != 1 || hello.Capabilities[0].Name != AuthorizationCapability {
 			return
 		}
+		if versions := hello.Capabilities[0].Versions; len(versions) != 1 || versions[0] != 1 {
+			t.Errorf("authorization rollout hold must offer only v1, got %v", versions)
+			return
+		}
 		id := fmt.Sprintf("session-%d", sequence.Add(1))
 		welcome := uplink.SessionWelcome{
 			HandshakeVersion: 1, SessionID: id, OrganizationID: "org-1",
@@ -73,7 +77,7 @@ func TestAuthorizationOverUplink(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewAuthorizationState(ctx, slog.Default())
+	s := NewAuthorizationState(ctx, slog.Default(), "", "")
 	link := uplink.NewClient(srv.URL, authorizationTokenSource{}, uplink.NewMessageRouter(), slog.Default(), uplink.WithSession(uplink.SessionIdentity{RuntimeVersion: "test"}))
 	s.Register(link)
 	done := make(chan error, 1)
@@ -120,9 +124,8 @@ func TestAuthorizationOverUplink(t *testing.T) {
 	send(conn, authorizationSnapshot(conn.id, 5))
 	waitDecision("alice", rbac.DecisionAllow)
 	require.NoError(t, conn.ws.CloseNow())
-	waitDecision("alice", rbac.DecisionDeny)
 	conn = nextConnection()
-	require.Equal(t, rbac.DecisionDeny, decision("alice"))
+	require.Equal(t, rbac.DecisionAllow, decision("alice"))
 	snapshot = authorizationSnapshot(conn.id, 1)
 	snapshot.Memberships = map[string][]string{"bob": {"readers"}}
 	send(conn, snapshot)

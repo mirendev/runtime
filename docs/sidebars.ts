@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'deployment',
         'app-configuration',
+        'private-dependencies',
         'services',
         'tasks',
         'ci-deploy',
@@ -67,6 +68,7 @@ const sidebars: SidebarsConfig = {
         'distributed-runners',
         'admin-interface',
         'observability',
+        'host-queries',
         'logs',
       ],
     },

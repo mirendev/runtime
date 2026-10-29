@@ -6,17 +6,14 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/ui"
 )
-
-type appVersionInfo struct {
-	version   core_v1alpha.AppVersion
-	createdAt time.Time
-}
 
 func AppVersions(ctx *Context, opts struct {
 	AppCentric
@@ -25,72 +22,92 @@ func AppVersions(ctx *Context, opts struct {
 	Ephemeral bool `long:"ephemeral" description:"Show only ephemeral versions"`
 	Limit     int  `short:"n" long:"limit" description:"Max versions to show" default:"20"`
 }) error {
-	client, err := ctx.RPCClient("entities")
+	versions, err := fetchAppVersions(ctx, opts.App, opts.Ephemeral, opts.Limit)
 	if err != nil {
 		return err
 	}
+	if opts.IsJSON() {
+		return printAppVersionsJSON(versions)
+	}
+	if opts.Ephemeral {
+		return printEphemeralVersionsTable(ctx, versions)
+	}
+	return printAllVersionsTable(ctx, versions)
+}
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	ec := entityserver.NewClient(ctx.Log, eac)
-
-	appClient := app.NewClient(ctx.Log, client)
-	appEntity, err := appClient.GetByName(ctx, opts.App)
+func fetchAppVersions(ctx *Context, name string, ephemeral bool, limit int) ([]*app_v1alpha.AppVersionSummary, error) {
+	client, err := ctx.RPCClient("dev.miren.runtime/app")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "listVersions")
+	}
+	if isMissingRPC(err) {
+		return fetchAppVersionsLegacy(ctx, name, ephemeral, limit)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to get app %q: %w", opts.App, err)
+		return nil, err
 	}
 
+	crud := app_v1alpha.NewCrudClient(client)
+	result, err := crud.ListVersions(ctx, name, ephemeral, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
+	}
+	return result.Versions(), nil
+}
+
+func fetchAppVersionsLegacy(ctx *Context, name string, ephemeral bool, limit int) ([]*app_v1alpha.AppVersionSummary, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	appEntity, err := app.NewClient(ctx.Log, client).GetByName(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app %q: %w", name, err)
+	}
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
 	lr, err := ec.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, appEntity.ID))
 	if err != nil {
-		return fmt.Errorf("failed to list app versions: %w", err)
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
 	}
-
-	var versions []appVersionInfo
+	var versions []*app_v1alpha.AppVersionSummary
 	for lr.Next() {
 		var av core_v1alpha.AppVersion
 		if err := lr.Read(&av); err != nil {
 			continue
 		}
-
-		if opts.Ephemeral && av.EphemeralLabel == "" {
+		if ephemeral && av.EphemeralLabel == "" {
 			continue
 		}
-
-		createdAt := lr.Entity().GetCreatedAt()
-		versions = append(versions, appVersionInfo{
-			version:   av,
-			createdAt: createdAt,
-		})
+		status := "replaced"
+		if av.ID == appEntity.ActiveVersion {
+			status = "active"
+		} else if av.EphemeralLabel != "" {
+			status = "ephemeral"
+		}
+		v := &app_v1alpha.AppVersionSummary{}
+		v.SetId(string(av.ID))
+		v.SetVersion(av.Version)
+		v.SetStatus(status)
+		v.SetCreatedAt(standard.ToTimestamp(lr.Entity().GetCreatedAt()))
+		v.SetEphemeralLabel(av.EphemeralLabel)
+		v.SetEphemeralTtl(av.EphemeralTtl)
+		if !av.EphemeralExpiresAt.IsZero() {
+			v.SetExpiresAt(standard.ToTimestamp(av.EphemeralExpiresAt))
+		}
+		versions = append(versions, v)
 	}
-
 	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].createdAt.After(versions[j].createdAt)
+		return standard.FromTimestamp(versions[i].CreatedAt()).After(standard.FromTimestamp(versions[j].CreatedAt()))
 	})
-
-	if opts.Limit > 0 && len(versions) > opts.Limit {
-		versions = versions[:opts.Limit]
+	if limit > 0 && len(versions) > limit {
+		versions = versions[:limit]
 	}
-
-	if opts.IsJSON() {
-		return printAppVersionsJSON(versions, appEntity)
-	}
-
-	if opts.Ephemeral {
-		return printEphemeralVersionsTable(ctx, versions)
-	}
-	return printAllVersionsTable(ctx, versions, appEntity)
+	return versions, nil
 }
 
-func versionStatus(av core_v1alpha.AppVersion, appEntity *core_v1alpha.App) string {
-	if av.ID == appEntity.ActiveVersion {
-		return "active"
-	}
-	if av.EphemeralLabel != "" {
-		return "ephemeral"
-	}
-	return "replaced"
-}
-
-func printAppVersionsJSON(versions []appVersionInfo, appEntity *core_v1alpha.App) error {
+func printAppVersionsJSON(versions []*app_v1alpha.AppVersionSummary) error {
 	type versionJSON struct {
 		ID             string `json:"id"`
 		Version        string `json:"version"`
@@ -104,16 +121,16 @@ func printAppVersionsJSON(versions []appVersionInfo, appEntity *core_v1alpha.App
 	var items []versionJSON
 	for _, v := range versions {
 		item := versionJSON{
-			ID:        string(v.version.ID),
-			Version:   v.version.Version,
-			Status:    versionStatus(v.version, appEntity),
-			CreatedAt: v.createdAt.UTC().Format(time.RFC3339),
+			ID:        v.Id(),
+			Version:   v.Version(),
+			Status:    v.Status(),
+			CreatedAt: standard.FromTimestamp(v.CreatedAt()).UTC().Format(time.RFC3339),
 		}
-		if v.version.EphemeralLabel != "" {
-			item.EphemeralLabel = v.version.EphemeralLabel
-			item.EphemeralTTL = v.version.EphemeralTtl
-			if !v.version.EphemeralExpiresAt.IsZero() {
-				item.ExpiresAt = v.version.EphemeralExpiresAt.UTC().Format(time.RFC3339)
+		if v.EphemeralLabel() != "" {
+			item.EphemeralLabel = v.EphemeralLabel()
+			item.EphemeralTTL = v.EphemeralTtl()
+			if expires := standard.FromTimestamp(v.ExpiresAt()); !expires.IsZero() {
+				item.ExpiresAt = expires.UTC().Format(time.RFC3339)
 			}
 		}
 		items = append(items, item)
@@ -121,27 +138,25 @@ func printAppVersionsJSON(versions []appVersionInfo, appEntity *core_v1alpha.App
 	return PrintJSON(items)
 }
 
-func printAllVersionsTable(ctx *Context, versions []appVersionInfo, appEntity *core_v1alpha.App) error {
+func printAllVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSummary) error {
 	headers := []string{"VERSION", "STATUS", "CREATED", "LABEL"}
 	var rows []ui.Row
 
 	for _, v := range versions {
-		status := versionStatus(v.version, appEntity)
-
 		label := ""
-		if v.version.EphemeralLabel != "" {
-			remaining := time.Until(v.version.EphemeralExpiresAt)
+		if v.EphemeralLabel() != "" {
+			remaining := time.Until(standard.FromTimestamp(v.ExpiresAt()))
 			if remaining > 0 {
-				label = fmt.Sprintf("%s (expires in %s)", v.version.EphemeralLabel, formatVersionDuration(remaining))
+				label = fmt.Sprintf("%s (expires in %s)", v.EphemeralLabel(), formatVersionDuration(remaining))
 			} else {
-				label = fmt.Sprintf("%s (expired)", v.version.EphemeralLabel)
+				label = fmt.Sprintf("%s (expired)", v.EphemeralLabel())
 			}
 		}
 
 		rows = append(rows, ui.Row{
-			v.version.Version,
-			status,
-			humanFriendlyTimestamp(v.createdAt),
+			v.Version(),
+			v.Status(),
+			humanFriendlyTimestamp(standard.FromTimestamp(v.CreatedAt())),
 			label,
 		})
 	}
@@ -160,20 +175,20 @@ func printAllVersionsTable(ctx *Context, versions []appVersionInfo, appEntity *c
 	return nil
 }
 
-func printEphemeralVersionsTable(ctx *Context, versions []appVersionInfo) error {
+func printEphemeralVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSummary) error {
 	headers := []string{"VERSION", "LABEL", "CREATED", "EXPIRES"}
 	var rows []ui.Row
 
 	for _, v := range versions {
 		expires := "-"
-		if !v.version.EphemeralExpiresAt.IsZero() {
-			expires = v.version.EphemeralExpiresAt.Format("2006-01-02 15:04:05")
+		if expiry := standard.FromTimestamp(v.ExpiresAt()); !expiry.IsZero() {
+			expires = expiry.Format("2006-01-02 15:04:05")
 		}
 
 		rows = append(rows, ui.Row{
-			v.version.Version,
-			v.version.EphemeralLabel,
-			humanFriendlyTimestamp(v.createdAt),
+			v.Version(),
+			v.EphemeralLabel(),
+			humanFriendlyTimestamp(standard.FromTimestamp(v.CreatedAt())),
 			expires,
 		})
 	}

@@ -20,8 +20,8 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 	}
 
 	t.Setenv("MIREN_SERVER_ADDRESS", "0.0.0.0:9999")
-	t.Setenv("MIREN_ETCD_START_EMBEDDED", "false")
-	t.Setenv("MIREN_ETCD_ENDPOINTS", "http://e1:2379,http://e2:2379")
+	t.Setenv("MIREN_SERVER_SKIP_CLIENT_CONFIG", "true")
+	t.Setenv("MIREN_TLS_ADDITIONAL_NAMES", "a.example.com,b.example.com")
 	t.Setenv("MIREN_ETCD_CLIENT_PORT", "23790")
 	t.Setenv("MIREN_LABS", "alpha,beta")
 	t.Setenv("MIREN_TELEMETRY_METRICS_REMOTE_WRITE_URL", "https://metrics.example.com/write")
@@ -37,19 +37,19 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 	if cfg.Server.Address == nil || *cfg.Server.Address != "0.0.0.0:9999" {
 		t.Errorf("Server.Address = %v, want 0.0.0.0:9999", cfg.Server.Address)
 	}
-	if cfg.Etcd.StartEmbedded == nil || *cfg.Etcd.StartEmbedded {
-		t.Errorf("Etcd.StartEmbedded = %v, want false", cfg.Etcd.StartEmbedded)
+	if !cfg.Server.GetSkipClientConfig() {
+		t.Errorf("Server.SkipClientConfig = %v, want true", cfg.Server.SkipClientConfig)
 	}
 	if cfg.Etcd.ClientPort == nil || *cfg.Etcd.ClientPort != 23790 {
 		t.Errorf("Etcd.ClientPort = %v, want 23790", cfg.Etcd.ClientPort)
 	}
-	wantEndpoints := []string{"http://e1:2379", "http://e2:2379"}
-	if len(cfg.Etcd.Endpoints) != len(wantEndpoints) {
-		t.Errorf("Etcd.Endpoints = %v, want %v", cfg.Etcd.Endpoints, wantEndpoints)
+	wantNames := []string{"a.example.com", "b.example.com"}
+	if len(cfg.TLS.AdditionalNames) != len(wantNames) {
+		t.Errorf("TLS.AdditionalNames = %v, want %v", cfg.TLS.AdditionalNames, wantNames)
 	} else {
-		for i, ep := range cfg.Etcd.Endpoints {
-			if ep != wantEndpoints[i] {
-				t.Errorf("Etcd.Endpoints[%d] = %s, want %s", i, ep, wantEndpoints[i])
+		for i, name := range cfg.TLS.AdditionalNames {
+			if name != wantNames[i] {
+				t.Errorf("TLS.AdditionalNames[%d] = %s, want %s", i, name, wantNames[i])
 			}
 		}
 	}

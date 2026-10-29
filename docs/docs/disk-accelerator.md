@@ -22,6 +22,10 @@ Cloud is built on.
 `lbd` is not part of Linux, so it has to be compiled for the exact kernel your
 node is running. One command does that.
 
+:::warning[Experimental]
+Accelerator mode is experimental. It's here for you to try, and we'd love to hear how it goes, but expect rough edges and changes between releases. Universal mode remains the default.
+:::
+
 ## Minimum working example
 
 ```bash
@@ -149,3 +153,63 @@ This unloads the module, removes it along with `lbdctl`, and forgets that the
 host ever had it, so nothing rebuilds it later. It fails if a disk is still
 attached — the kernel will not unload a module in use. Stop the apps holding
 disks first.
+
+## Recovering a blocked cloud upload
+
+:::warning[Upgrade cloud before runtime]
+
+Every cloud replica serving this runtime must support checksum-bound upload
+recovery, the dedicated `/prepare` endpoint, and idempotent `/lease/acquire`.
+Upgrade cloud first, including staging and alternate cloud endpoints. Do not
+roll cloud back to an incompatible version while this runtime is in use:
+missing upload support blocks uploads and lease transitions, and acquisition
+has no legacy fallback.
+
+:::
+
+An unresolved upload batch keeps a durable pending-upload gate on its cloud
+volume. Lease acquisition and release remain blocked across runtime restarts:
+changing the lease mid-upload could invalidate the batch's authorization or
+allow a different writer before its outcome is known.
+
+For transient network or cloud failures, retain the original log segments and
+let the uploader retry. Checksum-bound begin requests recover the original
+upload identities, including a lost begin response. Ordered, authenticated
+completion of **every** original segment confirms the batch before the runtime
+clears the gate. It retains the volume lock through durable horizon updates and
+local file retirement.
+
+Normal unmount closes the final LBD segment and drains the retained logs under
+the original lease before releasing it. A failed detach or drain keeps the
+lease and local recovery state; restart retries the same originals. This avoids
+depending on nonce-less tail uploads after another runner takes ownership.
+
+Orphan lease cleanup also requires the owning runner to confirm its containers
+are gone. An unreachable runner or a legacy lease with no recorded owner is
+not proof of absence and is not automatically released. Preserve that fencing
+until ownership can be established, or escalate for protocol-level recovery.
+
+If payload mismatch or lease-nonce rejection persists:
+
+- Stop app writes through normal sandbox shutdown; preserve the disk image,
+  original log segments, replay horizon, and `diskio-state.json`. Treat the
+  persisted credentials as secrets.
+- Investigate the cloud volume, original payloads, and current lease ownership.
+  Recovery must use the original checksum-bound identities and exact completion
+  metadata, in order, with valid authorization. Completion retries can publish
+  pending updates; they are not read-only status probes.
+
+:::danger[Do not bypass upload fencing]
+
+Do not clear `pending_cloud_uploads`, replace the nonce, advance the horizon,
+or delete retained segments to unblock the controller. An active listing,
+missing update, generic 403/409/404, or successful generic update deletion does
+not prove that the whole batch has safely completed or aborted.
+
+:::
+
+There is currently no supported forced-abort/unblock command. The cloud API
+does not provide an authenticated, conditional batch abort that fences late
+requests and proves all pending identities resolved. If normal completion
+cannot reconcile the original batch, the volume intentionally remains blocked;
+escalate for protocol-level recovery rather than bypassing local fencing.

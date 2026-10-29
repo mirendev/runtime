@@ -12,6 +12,135 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+type appVersionSummaryData struct {
+	Id             *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Version        *string             `cbor:"1,keyasint,omitempty" json:"version,omitempty"`
+	Status         *string             `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	CreatedAt      *standard.Timestamp `cbor:"3,keyasint,omitempty" json:"created_at,omitempty"`
+	EphemeralLabel *string             `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
+	EphemeralTtl   *string             `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	ExpiresAt      *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"expires_at,omitempty"`
+}
+
+type AppVersionSummary struct {
+	data appVersionSummaryData
+}
+
+func (v *AppVersionSummary) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AppVersionSummary) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *AppVersionSummary) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AppVersionSummary) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *AppVersionSummary) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *AppVersionSummary) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *AppVersionSummary) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *AppVersionSummary) Status() string {
+	if v.data.Status == nil {
+		return ""
+	}
+	return *v.data.Status
+}
+
+func (v *AppVersionSummary) SetStatus(status string) {
+	v.data.Status = &status
+}
+
+func (v *AppVersionSummary) HasCreatedAt() bool {
+	return v.data.CreatedAt != nil
+}
+
+func (v *AppVersionSummary) CreatedAt() *standard.Timestamp {
+	return v.data.CreatedAt
+}
+
+func (v *AppVersionSummary) SetCreatedAt(created_at *standard.Timestamp) {
+	v.data.CreatedAt = created_at
+}
+
+func (v *AppVersionSummary) HasEphemeralLabel() bool {
+	return v.data.EphemeralLabel != nil
+}
+
+func (v *AppVersionSummary) EphemeralLabel() string {
+	if v.data.EphemeralLabel == nil {
+		return ""
+	}
+	return *v.data.EphemeralLabel
+}
+
+func (v *AppVersionSummary) SetEphemeralLabel(ephemeral_label string) {
+	v.data.EphemeralLabel = &ephemeral_label
+}
+
+func (v *AppVersionSummary) HasEphemeralTtl() bool {
+	return v.data.EphemeralTtl != nil
+}
+
+func (v *AppVersionSummary) EphemeralTtl() string {
+	if v.data.EphemeralTtl == nil {
+		return ""
+	}
+	return *v.data.EphemeralTtl
+}
+
+func (v *AppVersionSummary) SetEphemeralTtl(ephemeral_ttl string) {
+	v.data.EphemeralTtl = &ephemeral_ttl
+}
+
+func (v *AppVersionSummary) HasExpiresAt() bool {
+	return v.data.ExpiresAt != nil
+}
+
+func (v *AppVersionSummary) ExpiresAt() *standard.Timestamp {
+	return v.data.ExpiresAt
+}
+
+func (v *AppVersionSummary) SetExpiresAt(expires_at *standard.Timestamp) {
+	v.data.ExpiresAt = expires_at
+}
+
+func (v *AppVersionSummary) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AppVersionSummary) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AppVersionSummary) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AppVersionSummary) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type logTargetData struct {
 	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Sandbox *string `cbor:"1,keyasint,omitempty" json:"sandbox,omitempty"`
@@ -531,6 +660,7 @@ type appInfoData struct {
 	CrashCount        *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
 	CooldownSeconds   *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"10,keyasint,omitempty" json:"maintenance_routes,omitempty"`
+	OwnedBy           *string             `cbor:"11,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type AppInfo struct {
@@ -696,6 +826,21 @@ func (v *AppInfo) MaintenanceRoutes() []string {
 func (v *AppInfo) SetMaintenanceRoutes(maintenance_routes []string) {
 	x := slices.Clone(maintenance_routes)
 	v.data.MaintenanceRoutes = &x
+}
+
+func (v *AppInfo) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
+}
+
+func (v *AppInfo) OwnedBy() string {
+	if v.data.OwnedBy == nil {
+		return ""
+	}
+	return *v.data.OwnedBy
+}
+
+func (v *AppInfo) SetOwnedBy(owned_by string) {
+	v.data.OwnedBy = &owned_by
 }
 
 func (v *AppInfo) MarshalCBOR() ([]byte, error) {
@@ -1494,6 +1639,7 @@ type applicationStatusData struct {
 	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"21,keyasint,omitempty" json:"maintenance_routes,omitempty"`
 	Services          *[]*ServiceHealth   `cbor:"22,keyasint,omitempty" json:"services,omitempty"`
+	OwnedBy           *string             `cbor:"23,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1852,6 +1998,21 @@ func (v *ApplicationStatus) SetServices(services []*ServiceHealth) {
 	v.data.Services = &x
 }
 
+func (v *ApplicationStatus) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
+}
+
+func (v *ApplicationStatus) OwnedBy() string {
+	if v.data.OwnedBy == nil {
+		return ""
+	}
+	return *v.data.OwnedBy
+}
+
+func (v *ApplicationStatus) SetOwnedBy(ownedBy string) {
+	v.data.OwnedBy = &ownedBy
+}
+
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -2116,6 +2277,253 @@ func (v *DiskConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DiskConfig) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonCatalogEntryData struct {
+	Name           *string                 `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	DisplayName    *string                 `cbor:"1,keyasint,omitempty" json:"display_name,omitempty"`
+	Description    *string                 `cbor:"2,keyasint,omitempty" json:"description,omitempty"`
+	DefaultVariant *string                 `cbor:"3,keyasint,omitempty" json:"default_variant,omitempty"`
+	DefaultVersion *string                 `cbor:"4,keyasint,omitempty" json:"default_version,omitempty"`
+	Variants       *[]*AddonCatalogVariant `cbor:"5,keyasint,omitempty" json:"variants,omitempty"`
+}
+
+type AddonCatalogEntry struct {
+	data addonCatalogEntryData
+}
+
+func (v *AddonCatalogEntry) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonCatalogEntry) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonCatalogEntry) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AddonCatalogEntry) HasDisplayName() bool {
+	return v.data.DisplayName != nil
+}
+
+func (v *AddonCatalogEntry) DisplayName() string {
+	if v.data.DisplayName == nil {
+		return ""
+	}
+	return *v.data.DisplayName
+}
+
+func (v *AddonCatalogEntry) SetDisplayName(display_name string) {
+	v.data.DisplayName = &display_name
+}
+
+func (v *AddonCatalogEntry) HasDescription() bool {
+	return v.data.Description != nil
+}
+
+func (v *AddonCatalogEntry) Description() string {
+	if v.data.Description == nil {
+		return ""
+	}
+	return *v.data.Description
+}
+
+func (v *AddonCatalogEntry) SetDescription(description string) {
+	v.data.Description = &description
+}
+
+func (v *AddonCatalogEntry) HasDefaultVariant() bool {
+	return v.data.DefaultVariant != nil
+}
+
+func (v *AddonCatalogEntry) DefaultVariant() string {
+	if v.data.DefaultVariant == nil {
+		return ""
+	}
+	return *v.data.DefaultVariant
+}
+
+func (v *AddonCatalogEntry) SetDefaultVariant(default_variant string) {
+	v.data.DefaultVariant = &default_variant
+}
+
+func (v *AddonCatalogEntry) HasDefaultVersion() bool {
+	return v.data.DefaultVersion != nil
+}
+
+func (v *AddonCatalogEntry) DefaultVersion() string {
+	if v.data.DefaultVersion == nil {
+		return ""
+	}
+	return *v.data.DefaultVersion
+}
+
+func (v *AddonCatalogEntry) SetDefaultVersion(default_version string) {
+	v.data.DefaultVersion = &default_version
+}
+
+func (v *AddonCatalogEntry) HasVariants() bool {
+	return v.data.Variants != nil
+}
+
+func (v *AddonCatalogEntry) Variants() []*AddonCatalogVariant {
+	if v.data.Variants == nil {
+		return nil
+	}
+	return *v.data.Variants
+}
+
+func (v *AddonCatalogEntry) SetVariants(variants []*AddonCatalogVariant) {
+	x := slices.Clone(variants)
+	v.data.Variants = &x
+}
+
+func (v *AddonCatalogEntry) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogEntry) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogEntry) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonCatalogVariantData struct {
+	Name        *string                `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Description *string                `cbor:"1,keyasint,omitempty" json:"description,omitempty"`
+	Details     *[]*AddonCatalogDetail `cbor:"2,keyasint,omitempty" json:"details,omitempty"`
+}
+
+type AddonCatalogVariant struct {
+	data addonCatalogVariantData
+}
+
+func (v *AddonCatalogVariant) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonCatalogVariant) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonCatalogVariant) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AddonCatalogVariant) HasDescription() bool {
+	return v.data.Description != nil
+}
+
+func (v *AddonCatalogVariant) Description() string {
+	if v.data.Description == nil {
+		return ""
+	}
+	return *v.data.Description
+}
+
+func (v *AddonCatalogVariant) SetDescription(description string) {
+	v.data.Description = &description
+}
+
+func (v *AddonCatalogVariant) HasDetails() bool {
+	return v.data.Details != nil
+}
+
+func (v *AddonCatalogVariant) Details() []*AddonCatalogDetail {
+	if v.data.Details == nil {
+		return nil
+	}
+	return *v.data.Details
+}
+
+func (v *AddonCatalogVariant) SetDetails(details []*AddonCatalogDetail) {
+	x := slices.Clone(details)
+	v.data.Details = &x
+}
+
+func (v *AddonCatalogVariant) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogVariant) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogVariant) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogVariant) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonCatalogDetailData struct {
+	Key   *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type AddonCatalogDetail struct {
+	data addonCatalogDetailData
+}
+
+func (v *AddonCatalogDetail) HasKey() bool {
+	return v.data.Key != nil
+}
+
+func (v *AddonCatalogDetail) Key() string {
+	if v.data.Key == nil {
+		return ""
+	}
+	return *v.data.Key
+}
+
+func (v *AddonCatalogDetail) SetKey(key string) {
+	v.data.Key = &key
+}
+
+func (v *AddonCatalogDetail) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *AddonCatalogDetail) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *AddonCatalogDetail) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *AddonCatalogDetail) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogDetail) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogDetail) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogDetail) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -2732,77 +3140,6 @@ func (v *CrudGetConfigurationResults) MarshalJSON() ([]byte, error) {
 }
 
 func (v *CrudGetConfigurationResults) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type crudSetHostArgsData struct {
-	App  *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
-	Host *string `cbor:"1,keyasint,omitempty" json:"host,omitempty"`
-}
-
-type CrudSetHostArgs struct {
-	call rpc.Call
-	data crudSetHostArgsData
-}
-
-func (v *CrudSetHostArgs) HasApp() bool {
-	return v.data.App != nil
-}
-
-func (v *CrudSetHostArgs) App() string {
-	if v.data.App == nil {
-		return ""
-	}
-	return *v.data.App
-}
-
-func (v *CrudSetHostArgs) HasHost() bool {
-	return v.data.Host != nil
-}
-
-func (v *CrudSetHostArgs) Host() string {
-	if v.data.Host == nil {
-		return ""
-	}
-	return *v.data.Host
-}
-
-func (v *CrudSetHostArgs) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *CrudSetHostArgs) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *CrudSetHostArgs) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *CrudSetHostArgs) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type crudSetHostResultsData struct{}
-
-type CrudSetHostResults struct {
-	call rpc.Call
-	data crudSetHostResultsData
-}
-
-func (v *CrudSetHostResults) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *CrudSetHostResults) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *CrudSetHostResults) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *CrudSetHostResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -3613,6 +3950,96 @@ func (v *CrudEnableResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudListVersionsArgsData struct {
+	App       *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Ephemeral *bool   `cbor:"1,keyasint,omitempty" json:"ephemeral,omitempty"`
+	Limit     *int64  `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+}
+
+type CrudListVersionsArgs struct {
+	call rpc.Call
+	data crudListVersionsArgsData
+}
+
+func (v *CrudListVersionsArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudListVersionsArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudListVersionsArgs) HasEphemeral() bool {
+	return v.data.Ephemeral != nil
+}
+
+func (v *CrudListVersionsArgs) Ephemeral() bool {
+	if v.data.Ephemeral == nil {
+		return false
+	}
+	return *v.data.Ephemeral
+}
+
+func (v *CrudListVersionsArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *CrudListVersionsArgs) Limit() int64 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *CrudListVersionsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListVersionsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListVersionsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListVersionsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudListVersionsResultsData struct {
+	Versions *[]*AppVersionSummary `cbor:"0,keyasint,omitempty" json:"versions,omitempty"`
+}
+
+type CrudListVersionsResults struct {
+	call rpc.Call
+	data crudListVersionsResultsData
+}
+
+func (v *CrudListVersionsResults) SetVersions(versions []*AppVersionSummary) {
+	x := slices.Clone(versions)
+	v.data.Versions = &x
+}
+
+func (v *CrudListVersionsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListVersionsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListVersionsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListVersionsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	rpc.Call
 	args    CrudNewArgs
@@ -3682,32 +4109,6 @@ func (t *CrudGetConfiguration) Args() *CrudGetConfigurationArgs {
 }
 
 func (t *CrudGetConfiguration) Results() *CrudGetConfigurationResults {
-	results := &t.results
-	if results.call != nil {
-		return results
-	}
-	results.call = t.Call
-	t.Call.Results(results)
-	return results
-}
-
-type CrudSetHost struct {
-	rpc.Call
-	args    CrudSetHostArgs
-	results CrudSetHostResults
-}
-
-func (t *CrudSetHost) Args() *CrudSetHostArgs {
-	args := &t.args
-	if args.call != nil {
-		return args
-	}
-	args.call = t.Call
-	t.Call.Args(args)
-	return args
-}
-
-func (t *CrudSetHost) Results() *CrudSetHostResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -3977,11 +4378,36 @@ func (t *CrudEnable) Results() *CrudEnableResults {
 	return results
 }
 
+type CrudListVersions struct {
+	rpc.Call
+	args    CrudListVersionsArgs
+	results CrudListVersionsResults
+}
+
+func (t *CrudListVersions) Args() *CrudListVersionsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudListVersions) Results() *CrudListVersionsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
 	GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error
-	SetHost(ctx context.Context, state *CrudSetHost) error
 	SetWorkloadRole(ctx context.Context, state *CrudSetWorkloadRole) error
 	List(ctx context.Context, state *CrudList) error
 	Destroy(ctx context.Context, state *CrudDestroy) error
@@ -3992,6 +4418,7 @@ type Crud interface {
 	Restart(ctx context.Context, state *CrudRestart) error
 	Disable(ctx context.Context, state *CrudDisable) error
 	Enable(ctx context.Context, state *CrudEnable) error
+	ListVersions(ctx context.Context, state *CrudListVersions) error
 }
 
 type reexportCrud struct {
@@ -4007,10 +4434,6 @@ func (reexportCrud) SetConfiguration(ctx context.Context, state *CrudSetConfigur
 }
 
 func (reexportCrud) GetConfiguration(ctx context.Context, state *CrudGetConfiguration) error {
-	panic("not implemented")
-}
-
-func (reexportCrud) SetHost(ctx context.Context, state *CrudSetHost) error {
 	panic("not implemented")
 }
 
@@ -4051,6 +4474,10 @@ func (reexportCrud) Disable(ctx context.Context, state *CrudDisable) error {
 }
 
 func (reexportCrud) Enable(ctx context.Context, state *CrudEnable) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) ListVersions(ctx context.Context, state *CrudListVersions) error {
 	panic("not implemented")
 }
 
@@ -4106,22 +4533,6 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
-			},
-		},
-		{
-			Name:          "setHost",
-			InterfaceName: "Crud",
-			Index:         0,
-			Public:        false,
-			Params:        []string{"app", "host"},
-			HTTP: &rpc.HTTPBinding{
-				Verb:       "PUT",
-				Path:       "/api/v1/apps/{app}/host",
-				Body:       "*",
-				PathParams: []string{"app"},
-			},
-			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
 		},
 		{
@@ -4279,6 +4690,26 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Enable(ctx, &CrudEnable{Call: call})
+			},
+		},
+		{
+			Name:          "listVersions",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "ephemeral", "limit"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{app}/versions",
+				Body:       "",
+				PathParams: []string{"app"},
+				Query: []rpc.HTTPParam{
+					{Name: "ephemeral", Kind: "bool"},
+					{Name: "limit", Kind: "int"},
+				},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListVersions(ctx, &CrudListVersions{Call: call})
 			},
 		},
 	}
@@ -4480,26 +4911,6 @@ func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClie
 	}
 
 	return &CrudClientGetConfigurationResults{client: v.Client, data: ret}, nil
-}
-
-type CrudClientSetHostResults struct {
-	client rpc.Client
-	data   crudSetHostResultsData
-}
-
-func (v CrudClient) SetHost(ctx context.Context, app string, host string) (*CrudClientSetHostResults, error) {
-	args := CrudSetHostArgs{}
-	args.data.App = &app
-	args.data.Host = &host
-
-	var ret crudSetHostResultsData
-
-	err := v.Call(ctx, "setHost", &args, &ret)
-	if err != nil {
-		return nil, err
-	}
-
-	return &CrudClientSetHostResults{client: v.Client, data: ret}, nil
 }
 
 type CrudClientSetWorkloadRoleResults struct {
@@ -4847,6 +5258,38 @@ func (v CrudClient) Enable(ctx context.Context, app string) (*CrudClientEnableRe
 	}
 
 	return &CrudClientEnableResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientListVersionsResults struct {
+	client rpc.Client
+	data   crudListVersionsResultsData
+}
+
+func (v *CrudClientListVersionsResults) HasVersions() bool {
+	return v.data.Versions != nil
+}
+
+func (v *CrudClientListVersionsResults) Versions() []*AppVersionSummary {
+	if v.data.Versions == nil {
+		return nil
+	}
+	return *v.data.Versions
+}
+
+func (v CrudClient) ListVersions(ctx context.Context, app string, ephemeral bool, limit int64) (*CrudClientListVersionsResults, error) {
+	args := CrudListVersionsArgs{}
+	args.data.App = &app
+	args.data.Ephemeral = &ephemeral
+	args.data.Limit = &limit
+
+	var ret crudListVersionsResultsData
+
+	err := v.Call(ctx, "listVersions", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientListVersionsResults{client: v.Client, data: ret}, nil
 }
 
 type userQueryWhoAmIArgsData struct{}
@@ -6784,6 +7227,124 @@ func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteR
 	return &DisksClientDeleteResults{client: v.Client, data: ret}, nil
 }
 
+type addonsListAvailableArgsData struct{}
+
+type AddonsListAvailableArgs struct {
+	call rpc.Call
+	data addonsListAvailableArgsData
+}
+
+func (v *AddonsListAvailableArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListAvailableArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsListAvailableResultsData struct {
+	Addons *[]*AddonCatalogEntry `cbor:"0,keyasint,omitempty" json:"addons,omitempty"`
+}
+
+type AddonsListAvailableResults struct {
+	call rpc.Call
+	data addonsListAvailableResultsData
+}
+
+func (v *AddonsListAvailableResults) SetAddons(addons []*AddonCatalogEntry) {
+	x := slices.Clone(addons)
+	v.data.Addons = &x
+}
+
+func (v *AddonsListAvailableResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListAvailableResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsGetCatalogArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type AddonsGetCatalogArgs struct {
+	call rpc.Call
+	data addonsGetCatalogArgsData
+}
+
+func (v *AddonsGetCatalogArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonsGetCatalogArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonsGetCatalogArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsGetCatalogArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsGetCatalogResultsData struct {
+	Addon *AddonCatalogEntry `cbor:"0,keyasint,omitempty" json:"addon,omitempty"`
+}
+
+type AddonsGetCatalogResults struct {
+	call rpc.Call
+	data addonsGetCatalogResultsData
+}
+
+func (v *AddonsGetCatalogResults) SetAddon(addon *AddonCatalogEntry) {
+	v.data.Addon = addon
+}
+
+func (v *AddonsGetCatalogResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsGetCatalogResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type addonsCreateInstanceArgsData struct {
 	Name     *string   `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Addon    *string   `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
@@ -7135,6 +7696,58 @@ func (v *AddonsDeleteInstanceResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type AddonsListAvailable struct {
+	rpc.Call
+	args    AddonsListAvailableArgs
+	results AddonsListAvailableResults
+}
+
+func (t *AddonsListAvailable) Args() *AddonsListAvailableArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsListAvailable) Results() *AddonsListAvailableResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type AddonsGetCatalog struct {
+	rpc.Call
+	args    AddonsGetCatalogArgs
+	results AddonsGetCatalogResults
+}
+
+func (t *AddonsGetCatalog) Args() *AddonsGetCatalogArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsGetCatalog) Results() *AddonsGetCatalogResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type AddonsCreateInstance struct {
 	rpc.Call
 	args    AddonsCreateInstanceArgs
@@ -7240,6 +7853,8 @@ func (t *AddonsDeleteInstance) Results() *AddonsDeleteInstanceResults {
 }
 
 type Addons interface {
+	ListAvailable(ctx context.Context, state *AddonsListAvailable) error
+	GetCatalog(ctx context.Context, state *AddonsGetCatalog) error
 	CreateInstance(ctx context.Context, state *AddonsCreateInstance) error
 	ListInstances(ctx context.Context, state *AddonsListInstances) error
 	RotateCredential(ctx context.Context, state *AddonsRotateCredential) error
@@ -7248,6 +7863,14 @@ type Addons interface {
 
 type reexportAddons struct {
 	client rpc.Client
+}
+
+func (reexportAddons) ListAvailable(ctx context.Context, state *AddonsListAvailable) error {
+	panic("not implemented")
+}
+
+func (reexportAddons) GetCatalog(ctx context.Context, state *AddonsGetCatalog) error {
+	panic("not implemented")
 }
 
 func (reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
@@ -7272,6 +7895,38 @@ func (t reexportAddons) CapabilityClient() rpc.Client {
 
 func AdaptAddons(t Addons) *rpc.Interface {
 	methods := []rpc.Method{
+		{
+			Name:          "listAvailable",
+			InterfaceName: "Addons",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/addons",
+				Body:       "",
+				PathParams: []string{},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListAvailable(ctx, &AddonsListAvailable{Call: call})
+			},
+		},
+		{
+			Name:          "getCatalog",
+			InterfaceName: "Addons",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/addons/{name}",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetCatalog(ctx, &AddonsGetCatalog{Call: call})
+			},
+		},
 		{
 			Name:          "createInstance",
 			InterfaceName: "Addons",
@@ -7351,6 +8006,62 @@ func NewAddonsClient(client rpc.Client) *AddonsClient {
 
 func (c AddonsClient) Export() Addons {
 	return reexportAddons{client: c.Client}
+}
+
+type AddonsClientListAvailableResults struct {
+	client rpc.Client
+	data   addonsListAvailableResultsData
+}
+
+func (v *AddonsClientListAvailableResults) HasAddons() bool {
+	return v.data.Addons != nil
+}
+
+func (v *AddonsClientListAvailableResults) Addons() []*AddonCatalogEntry {
+	if v.data.Addons == nil {
+		return nil
+	}
+	return *v.data.Addons
+}
+
+func (v AddonsClient) ListAvailable(ctx context.Context) (*AddonsClientListAvailableResults, error) {
+	args := AddonsListAvailableArgs{}
+
+	var ret addonsListAvailableResultsData
+
+	err := v.Call(ctx, "listAvailable", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientListAvailableResults{client: v.Client, data: ret}, nil
+}
+
+type AddonsClientGetCatalogResults struct {
+	client rpc.Client
+	data   addonsGetCatalogResultsData
+}
+
+func (v *AddonsClientGetCatalogResults) HasAddon() bool {
+	return v.data.Addon != nil
+}
+
+func (v *AddonsClientGetCatalogResults) Addon() *AddonCatalogEntry {
+	return v.data.Addon
+}
+
+func (v AddonsClient) GetCatalog(ctx context.Context, name string) (*AddonsClientGetCatalogResults, error) {
+	args := AddonsGetCatalogArgs{}
+	args.data.Name = &name
+
+	var ret addonsGetCatalogResultsData
+
+	err := v.Call(ctx, "getCatalog", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientGetCatalogResults{client: v.Client, data: ret}, nil
 }
 
 type AddonsClientCreateInstanceResults struct {

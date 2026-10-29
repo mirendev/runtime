@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// TestPublishedSchemaFieldsMatchConfig keeps the public editor schema in step
+// TestDocsSchemaFieldsMatchConfig keeps the public editor schema in step
 // with the TOML structs. Validation rules still belong to Validate; this test
 // guards the easier-to-miss failure mode where a field is added to one source
 // of truth and omitted from the other.
-func TestPublishedSchemaFieldsMatchConfig(t *testing.T) {
+func TestDocsSchemaFieldsMatchConfig(t *testing.T) {
 	data, err := os.ReadFile("../docs/static/app-toml.schema.json")
 	if err != nil {
 		t.Fatal(err)

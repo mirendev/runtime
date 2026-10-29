@@ -1,8 +1,10 @@
 package cluster
 
 import (
+	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +62,30 @@ func TestPutThenResolveRoundTrip(t *testing.T) {
 	// A floating reference must come back fully qualified, so whatever records
 	// it freezes an exact version.
 	assert.Equal(t, secret.FormatRef("payments/stripe-key", version), got.Ref)
+}
+
+func TestResolveDoesNotWaitForRotationOrRefreshKeyring(t *testing.T) {
+	b, _ := newTestBackend(t)
+	client, prefix := etcdtest.TestEtcdClient(t)
+	shared, err := keyring.NewSharedStore(client, prefix, t.TempDir(), []byte("authority"))
+	require.NoError(t, err)
+	ring, release, err := shared.Lock(t.Context())
+	require.NoError(t, err)
+	release()
+	b.UseKeyring(ring)
+	b.SharedKeyring = shared
+	_, _, err = b.Put(t.Context(), "test/key", []byte("readable"))
+	require.NoError(t, err)
+	// Entity reads remain available while the separate metadata client is down.
+	require.NoError(t, client.Close())
+	_, release, err = shared.Lock(t.Context())
+	require.NoError(t, err)
+	defer release()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	got, err := b.Resolve(ctx, "test/key")
+	require.NoError(t, err)
+	require.Equal(t, "readable", string(got.Bytes))
 }
 
 func TestResolvePinnedVersionSurvivesRotation(t *testing.T) {

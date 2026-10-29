@@ -11,17 +11,20 @@ configs:
           long: config
           description: "Path to configuration file"
         cli_only: true  # This field is only for CLI, not stored in config
+      # Standalone is the only server mode. The key still parses so existing
+      # `--mode standalone` invocations keep working and a leftover
+      # `mode = "distributed"` fails startup instead of being ignored; see
+      # ValidateRetiredTopology.
       mode:
         type: string
         default: standalone
         cli:
           long: mode
           short: m
-          description: "Server mode: standalone (default), distributed (experimental)"
+          description: "Deprecated: standalone is the only server mode"
+          hidden: true
         env: MIREN_MODE
         toml: mode
-        validation:
-          enum: [standalone, distributed]
 
       labs:
         type: "[]string"
@@ -310,13 +313,16 @@ configs:
   EtcdConfig:
     description: Etcd configuration
     fields:
+      # Retired with external etcd. Embedded etcd never read it, so it stays
+      # accepted and ignored; ValidateRetiredTopology refuses the settings
+      # that actually selected an external etcd.
       endpoints:
         type: "[]string"
-        default: []
         cli:
           long: etcd
           short: e
-          description: Etcd endpoints
+          description: "Retired and ignored: miren always runs its own etcd"
+          hidden: true
         env: MIREN_ETCD_ENDPOINTS
         toml: endpoints
 
@@ -330,15 +336,15 @@ configs:
         env: MIREN_ETCD_PREFIX
         toml: prefix
 
+      # Retired: embedded is the only option, so only `false` is refused.
       start_embedded:
         type: bool
         cli:
           long: start-etcd
-          description: Start embedded etcd server
+          description: "Retired: etcd always runs embedded"
+          hidden: true
         env: MIREN_ETCD_START_EMBEDDED
         toml: start_embedded
-        mode_default:
-          standalone: true
 
       client_port:
         type: int
@@ -390,15 +396,15 @@ configs:
   VictoriaLogsConfig:
     description: VictoriaLogs configuration
     fields:
+      # Retired: embedded is the only option, so only `false` is refused.
       start_embedded:
         type: bool
         cli:
           long: start-victorialogs
-          description: Start embedded VictoriaLogs server
+          description: "Retired: VictoriaLogs always runs embedded"
+          hidden: true
         env: MIREN_VICTORIALOGS_START_EMBEDDED
         toml: start_embedded
-        mode_default:
-          standalone: true
 
       http_port:
         type: int
@@ -422,29 +428,29 @@ configs:
         validation:
           regex: '^\d+(ms|s|m|h|d|w|y)$'
 
+      # Retired with external Victoria servers. Only read when the server was
+      # not running Victoria itself, so it stays accepted and ignored.
       address:
         type: string
-        default: "victorialogs:9428"
         cli:
           long: victorialogs-addr
-          description: VictoriaLogs address (when not using embedded)
+          description: "Retired and ignored: miren always runs its own VictoriaLogs"
+          hidden: true
         env: MIREN_VICTORIALOGS_ADDRESS
         toml: address
-        validation:
-          format: host:port
 
   VictoriaMetricsConfig:
     description: VictoriaMetrics configuration
     fields:
+      # Retired: embedded is the only option, so only `false` is refused.
       start_embedded:
         type: bool
         cli:
           long: start-victoriametrics
-          description: Start embedded VictoriaMetrics server
+          description: "Retired: VictoriaMetrics always runs embedded"
+          hidden: true
         env: MIREN_VICTORIAMETRICS_START_EMBEDDED
         toml: start_embedded
-        mode_default:
-          standalone: true
 
       http_port:
         type: int
@@ -468,16 +474,16 @@ configs:
         validation:
           regex: '^\d+$'
 
+      # Retired with external Victoria servers. Only read when the server was
+      # not running Victoria itself, so it stays accepted and ignored.
       address:
         type: string
-        default: "victoriametrics:8428"
         cli:
           long: victoriametrics-addr
-          description: VictoriaMetrics address (when not using embedded)
+          description: "Retired and ignored: miren always runs its own VictoriaMetrics"
+          hidden: true
         env: MIREN_VICTORIAMETRICS_ADDRESS
         toml: address
-        validation:
-          format: host:port
 
   MetricsConfig:
     description: "Deprecated: superseded by [telemetry.metrics]"
@@ -566,15 +572,15 @@ configs:
   ContainerdConfig:
     description: Containerd configuration
     fields:
+      # Retired: embedded is the only option, so only `false` is refused.
       start_embedded:
         type: bool
         cli:
           long: start-containerd
-          description: Start embedded containerd daemon
+          description: "Retired: containerd always runs embedded"
+          hidden: true
         env: MIREN_CONTAINERD_START_EMBEDDED
         toml: start_embedded
-        mode_default:
-          standalone: true
 
       binary_path:
         type: string
@@ -597,22 +603,24 @@ configs:
   BuildkitConfig:
     description: BuildKit daemon configuration
     fields:
+      # Retired: embedded is the only option, so only `false` is refused.
       start_embedded:
         type: bool
         cli:
           long: start-buildkit
-          description: Start embedded BuildKit daemon for container image builds
+          description: "Retired: BuildKit always runs embedded"
+          hidden: true
         env: MIREN_BUILDKIT_START_EMBEDDED
         toml: start_embedded
-        mode_default:
-          standalone: true
 
+      # Retired with external BuildKit. Only read when the server was not
+      # running BuildKit itself, so it stays accepted and ignored.
       socket_path:
         type: string
-        default: ""
         cli:
           long: buildkit-socket
-          description: Path to external BuildKit Unix socket (for distributed mode)
+          description: "Retired and ignored: miren always runs its own BuildKit"
+          hidden: true
         env: MIREN_BUILDKIT_SOCKET_PATH
         toml: socket_path
 

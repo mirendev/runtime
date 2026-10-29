@@ -14,26 +14,6 @@ services:
       - "8443:8443/udp"
     volumes:
       - miren-data:/var/lib/miren
-    environment:
-      - ETCD_ENDPOINTS=http://etcd:2379
-    depends_on:
-      - etcd
-
-  etcd:
-    image: oci.miren.cloud/etcd:v1
-    container_name: miren-etcd
-    command:
-      - etcd
-      - --listen-client-urls=http://0.0.0.0:2379
-      - --advertise-client-urls=http://etcd:2379
-      - --listen-peer-urls=http://0.0.0.0:2380
-      - --initial-advertise-peer-urls=http://etcd:2380
-      - --initial-cluster=default=http://etcd:2380
-      - --data-dir=/etcd-data
-    volumes:
-      - etcd-data:/etcd-data
-
 
 volumes:
   miren-data:
-  etcd-data:

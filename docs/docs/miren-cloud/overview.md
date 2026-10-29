@@ -1,6 +1,6 @@
 ---
 title: Miren Cloud
-description: Connect your self-hosted Miren clusters to a public front door, team access, and multi-environment workflows, without giving up ownership of your infrastructure.
+description: Give your self-hosted Miren clusters a public front door, team access, and multi-environment workflows while you keep the infrastructure.
 keywords: [miren cloud, control plane, subdomains, miren anywhere, teams, multi-environment]
 ---
 

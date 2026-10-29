@@ -205,6 +205,7 @@ func undoLoadSource(_ context.Context, _ loadSourceIn, _ loadSourceOut) error {
 
 type getNextVersionIn struct {
 	AppName string `json:"app_name" saga:"app_name"`
+	Creator string `json:"app_creator,omitempty" saga:"app_creator,optional"`
 }
 
 type getNextVersionOut struct {
@@ -219,7 +220,7 @@ type getNextVersionOut struct {
 func getNextVersion(ctx context.Context, in getNextVersionIn) (getNextVersionOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 
-	appRec, mrv, existing, art, err := deps.builder.nextVersion(ctx, in.AppName)
+	appRec, mrv, existing, art, err := deps.builder.nextVersion(ctx, in.AppName, in.Creator)
 	if err != nil {
 		return getNextVersionOut{}, fmt.Errorf("allocating next version for %s: %w", in.AppName, err)
 	}
@@ -378,16 +379,12 @@ func handleEphemeral(ctx context.Context, in handleEphemeralIn) (handleEphemeral
 
 	ttl := in.EphemeralTTL
 	if ttl == "" {
-		ttl = "24h"
+		ttl = ephemeralx.DefaultTTL
 	}
-	ttlDuration, err := time.ParseDuration(ttl)
+	ttlDuration, err := ephemeralx.ParseTTL(ttl)
 	if err != nil {
 		status.SendError("invalid ephemeral TTL %q: %v", ttl, err)
 		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: %w", ttl, err)
-	}
-	if ttlDuration <= 0 {
-		status.SendError("invalid ephemeral TTL %q: must be greater than 0", ttl)
-		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ttl)
 	}
 
 	spec, err := unmarshalConfigSpec(in.ConfigSpec)
@@ -1160,8 +1157,10 @@ func registerBuildSaga(
 
 	// The optional config input allows v1/v2 compensation before prepare-config
 	// ran; forward execution still requires config before replacing previews.
+	// Older executions lack app_creator and safely leave newly created apps
+	// unattributed rather than assigning the recovering worker as their owner.
 	return saga.Define(sagaBuildFromTar).
-		Version(3).ResumesFrom(1, 2).
+		Version(4).ResumesFrom(1, 2, 3).
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).

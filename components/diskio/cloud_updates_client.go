@@ -111,12 +111,15 @@ type cloudUpdatesClient struct {
 
 // NewCloudUpdatesClient creates a client for the cloud's volume update API.
 func NewCloudUpdatesClient(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) CloudUpdatesClient {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = uploadConcurrency
+	transport.MaxConnsPerHost = uploadConcurrency
 	return &cloudUpdatesClient{
 		log:        log.With("module", "cloud-updates"),
 		baseURL:    baseURL,
 		authClient: authClient,
 		// Generous: a loop image can be gigabytes.
-		client: &http.Client{Timeout: 30 * time.Minute},
+		client: &http.Client{Timeout: 30 * time.Minute, Transport: transport},
 	}
 }
 
@@ -126,20 +129,48 @@ type beginUploadRequestJSON struct {
 	EndKey       string `json:"end_key,omitempty"`
 	SnapshotName string `json:"snapshot_name,omitempty"`
 	LeaseNonce   string `json:"lease_nonce,omitempty"`
+	MD5          string `json:"md5,omitempty"`
+	CRC32C       string `json:"crc32c,omitempty"`
+	Size         int64  `json:"size,omitempty"`
 }
 
 type beginUploadResponseJSON struct {
-	UpdateID    string `json:"update_id"`
-	UploadURL   string `json:"upload_url"`
-	CompleteURL string `json:"complete_url"`
+	UpdateID        string `json:"update_id"`
+	UploadURL       string `json:"upload_url"`
+	CompleteURL     string `json:"complete_url"`
+	SupportsPrepare bool   `json:"supports_prepare"`
+	AlreadyActive   bool   `json:"already_active"`
+	Prepared        bool   `json:"prepared"`
+	Kind            string `json:"kind"`
+	OrderingKey     string `json:"ordering_key"`
+	MD5             string `json:"md5"`
+	CRC32C          string `json:"crc32c"`
+	Size            int64  `json:"size"`
 }
 
 type completeUploadRequestJSON struct {
-	MD5        string         `json:"md5"`
-	CRC32C     string         `json:"crc32c"`
-	Size       int64          `json:"size"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
-	LeaseNonce string         `json:"lease_nonce,omitempty"`
+	MD5         string         `json:"md5"`
+	CRC32C      string         `json:"crc32c"`
+	Size        int64          `json:"size"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	LeaseNonce  string         `json:"lease_nonce,omitempty"`
+	PrepareOnly bool           `json:"prepare_only,omitempty"`
+}
+
+// Preparation does the slow storage work without exposing an update to replay.
+// Only CompleteUpload publishes; callers must invoke it in ordering-key order.
+type stagedUpdatesClient interface {
+	PrepareUpload(context.Context, string, UploadRequest, io.ReadSeeker, int64) (*preparedUpload, error)
+	CompleteUpload(context.Context, *preparedUpload) (string, error)
+}
+
+type preparedUpload struct {
+	updateID    string
+	completeURL string
+	completion  completeUploadRequestJSON
+	volumeID    string
+	kind        UpdateKind
+	orderingKey string
 }
 
 type listUpdatesResponseJSON struct {
@@ -201,7 +232,8 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 	}
 
 	if out == nil {
-		return nil
+		_, err := io.Copy(io.Discard, resp.Body)
+		return err
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
@@ -210,81 +242,156 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 }
 
 func (c *cloudUpdatesClient) Upload(ctx context.Context, volumeID string, req UploadRequest, body io.Reader, size int64) (string, error) {
-	if req.Kind == "" {
-		return "", fmt.Errorf("update kind is required")
-	}
-	if req.OrderingKey == "" {
-		return "", fmt.Errorf("ordering key is required for kind %q", req.Kind)
-	}
-	if size <= 0 {
-		return "", fmt.Errorf("size must be positive, got %d", size)
-	}
-
-	// Step 1: claim the ordering key and get somewhere to put the bytes
-	beginURL, err := c.updatesPath(volumeID, "upload")
-	if err != nil {
-		return "", fmt.Errorf("failed to construct upload URL: %w", err)
-	}
-
-	var begun beginUploadResponseJSON
-	err = c.doJSON(ctx, "POST", beginURL, beginUploadRequestJSON{
-		Kind:         string(req.Kind),
-		OrderingKey:  req.OrderingKey,
-		EndKey:       req.EndKey,
-		SnapshotName: req.SnapshotName,
-		LeaseNonce:   req.LeaseNonce,
-	}, &begun)
+	prepared, err := c.uploadPayload(ctx, volumeID, req, body, size, false)
 	if err != nil {
 		return "", err
 	}
+	return c.CompleteUpload(ctx, prepared)
+}
 
-	// Step 2: PUT the payload, hashing as it streams past
+func (c *cloudUpdatesClient) PrepareUpload(ctx context.Context, volumeID string, req UploadRequest, body io.ReadSeeker, size int64) (*preparedUpload, error) {
+	return c.uploadPayload(ctx, volumeID, req, body, size, true)
+}
+
+func (c *cloudUpdatesClient) CompleteUpload(ctx context.Context, prepared *preparedUpload) (string, error) {
+	if err := c.doJSON(ctx, "POST", prepared.completeURL, prepared.completion, nil); err != nil {
+		return "", err
+	}
+	c.log.Info("update uploaded", "update_id", prepared.updateID, "volume_id", prepared.volumeID,
+		"kind", prepared.kind, "ordering_key", prepared.orderingKey, "size", prepared.completion.Size)
+	return prepared.updateID, nil
+}
+
+func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string, req UploadRequest, body io.Reader, size int64, prepareOnly bool) (*preparedUpload, error) {
+	if req.Kind == "" {
+		return nil, fmt.Errorf("update kind is required")
+	}
+	if req.OrderingKey == "" {
+		return nil, fmt.Errorf("ordering key is required for kind %q", req.Kind)
+	}
+	if size <= 0 {
+		return nil, fmt.Errorf("size must be positive, got %d", size)
+	}
+
+	// Bind the claim before sending bytes. The cloud can then recover the same
+	// identity after a lost begin response, failed PUT, or process restart.
 	md5h := md5.New()
 	crch := crc32.New(crc32cTable)
+	claim := beginUploadRequestJSON{
+		Kind: string(req.Kind), OrderingKey: req.OrderingKey, EndKey: req.EndKey,
+		SnapshotName: req.SnapshotName, LeaseNonce: req.LeaseNonce,
+	}
+	if seeker, ok := body.(io.ReadSeeker); ok {
+		position, err := seeker.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, err
+		}
+		n, err := io.Copy(io.MultiWriter(md5h, crch), seeker)
+		if err != nil {
+			return nil, err
+		}
+		if n != size {
+			return nil, fmt.Errorf("payload size %d does not match declared size %d", n, size)
+		}
+		if _, err := seeker.Seek(position, io.SeekStart); err != nil {
+			return nil, err
+		}
+		claim.MD5, claim.CRC32C, claim.Size = encodeHash(md5h), encodeHash(crch), size
+		md5h.Reset()
+		crch.Reset()
+	} else if prepareOnly {
+		return nil, fmt.Errorf("preparation requires a rewindable payload")
+	}
+
+	beginURL, err := c.updatesPath(volumeID, "upload")
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct upload URL: %w", err)
+	}
+
+	var begun beginUploadResponseJSON
+	err = c.doJSON(ctx, "POST", beginURL, claim, &begun)
+	if err != nil {
+		return nil, err
+	}
+	// Old servers ignore prepare_only. Refuse BEFORE the completion request,
+	// otherwise a concurrent preparation could publish a replay-visible hole.
+	if prepareOnly && !begun.SupportsPrepare {
+		return nil, fmt.Errorf("cloud does not support ordered upload preparation")
+	}
+	if begun.UpdateID == "" {
+		return nil, fmt.Errorf("cloud returned an empty upload identity")
+	}
+	if begun.CompleteURL == "" {
+		begun.CompleteURL, err = c.updatesPath(volumeID, begun.UpdateID, "complete")
+		if err != nil {
+			return nil, err
+		}
+	}
+	completeURL, err := c.resolveCompleteURL(begun.CompleteURL)
+	if err != nil {
+		return nil, err
+	}
+	prepared := &preparedUpload{updateID: begun.UpdateID, completeURL: completeURL,
+		volumeID: volumeID, kind: req.Kind, orderingKey: req.OrderingKey,
+		completion: completeUploadRequestJSON{MD5: claim.MD5, CRC32C: claim.CRC32C, Size: size,
+			Metadata: req.Metadata, LeaseNonce: req.LeaseNonce}}
+	// Prepared bytes are immutable and have no upload URL. Reuse the bound
+	// identity, but still authenticate publication through CompleteUpload.
+	if begun.AlreadyActive || begun.Prepared {
+		if claim.MD5 == "" || begun.Kind != string(req.Kind) || begun.OrderingKey != req.OrderingKey ||
+			begun.MD5 != claim.MD5 || begun.CRC32C != claim.CRC32C || begun.Size != size {
+			return nil, fmt.Errorf("existing update does not match local payload")
+		}
+		return prepared, nil
+	}
 
 	uploadReq, err := http.NewRequestWithContext(ctx, "PUT", begun.UploadURL,
 		io.TeeReader(body, io.MultiWriter(md5h, crch)))
 	if err != nil {
-		return "", fmt.Errorf("failed to create data upload request: %w", err)
+		return nil, fmt.Errorf("failed to create data upload request: %w", err)
 	}
 	uploadReq.ContentLength = size
 
 	uploadResp, err := c.client.Do(uploadReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to upload data: %w", err)
+		return nil, fmt.Errorf("failed to upload data: %w", err)
 	}
 	defer uploadResp.Body.Close()
 
 	if uploadResp.StatusCode < 200 || uploadResp.StatusCode >= 300 {
 		payload, _ := io.ReadAll(uploadResp.Body)
-		return "", fmt.Errorf("data upload failed with status %d: %s", uploadResp.StatusCode, string(payload))
+		return nil, fmt.Errorf("data upload failed with status %d: %s", uploadResp.StatusCode, string(payload))
 	}
-
-	// Step 3: report what we sent so the cloud can verify it
-	completeURL, err := c.resolveCompleteURL(begun.CompleteURL)
-	if err != nil {
-		return "", err
+	if _, err := io.Copy(io.Discard, uploadResp.Body); err != nil {
+		return nil, err
 	}
+	uploadResp.Body.Close()
 
-	err = c.doJSON(ctx, "POST", completeURL, completeUploadRequestJSON{
-		MD5:        encodeHash(md5h),
-		CRC32C:     encodeHash(crch),
-		Size:       size,
-		Metadata:   req.Metadata,
-		LeaseNonce: req.LeaseNonce,
-	}, nil)
-	if err != nil {
-		return "", err
+	prepared.completion.MD5, prepared.completion.CRC32C = encodeHash(md5h), encodeHash(crch)
+	if claim.MD5 != "" && (claim.MD5 != prepared.completion.MD5 || claim.CRC32C != prepared.completion.CRC32C) {
+		return nil, fmt.Errorf("payload changed during upload")
 	}
-
-	c.log.Info("update uploaded",
-		"update_id", begun.UpdateID,
-		"volume_id", volumeID,
-		"kind", req.Kind,
-		"ordering_key", req.OrderingKey,
-		"size", size,
-	)
-	return begun.UpdateID, nil
+	if prepareOnly {
+		completion := prepared.completion
+		completion.PrepareOnly = true
+		// A dedicated endpoint fails closed on an old replica; an old /complete
+		// handler could ignore prepare_only and accidentally publish out of order.
+		prepareURL, err := c.updatesPath(volumeID, begun.UpdateID, "prepare")
+		if err != nil {
+			return nil, err
+		}
+		var response struct {
+			Prepared bool   `json:"prepared"`
+			UpdateID string `json:"update_id"`
+		}
+		if err := c.doJSON(ctx, "POST", prepareURL, completion, &response); err != nil {
+			return nil, err
+		}
+		if !response.Prepared || response.UpdateID != begun.UpdateID {
+			return nil, fmt.Errorf("cloud did not confirm preparation")
+		}
+	}
+	return prepared, nil
 }
 
 func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {

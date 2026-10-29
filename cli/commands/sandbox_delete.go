@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 func SandboxDelete(ctx *Context, opts struct {
@@ -13,12 +14,14 @@ func SandboxDelete(ctx *Context, opts struct {
 }) error {
 	sandboxID := opts.SandboxID
 
-	client, err := ctx.RPCClient("entities")
-	if err != nil {
+	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "delete")
+	}
+	if err != nil && !isMissingRPC(err) {
 		return err
 	}
-
-	computeClient := compute.NewClient(ctx.Log, client)
 
 	// Confirm deletion unless forced
 	if !opts.Force {
@@ -31,7 +34,17 @@ func SandboxDelete(ctx *Context, opts struct {
 		}
 	}
 
-	err = computeClient.DeleteSandbox(ctx, sandboxID)
+	if err == nil {
+		_, err = compute_v1alpha.NewSandboxesClient(client).Delete(ctx, sandboxID)
+	}
+	if isMissingRPC(err) {
+		legacy, lookupErr := ctx.RPCClient("entities")
+		if lookupErr != nil {
+			return lookupErr
+		}
+		defer legacy.Close()
+		err = compute.NewClient(ctx.Log, legacy).DeleteSandbox(ctx, sandboxID)
+	}
 	if err != nil {
 		return err
 	}

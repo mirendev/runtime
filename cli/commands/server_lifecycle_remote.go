@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverlifecycle"
+	"miren.dev/runtime/pkg/ui"
 	lifecyclesrv "miren.dev/runtime/servers/serverlifecycle"
 )
 
@@ -67,9 +69,12 @@ func (c *Context) targetsLocalServer() bool {
 }
 
 // answered reports whether err is the server's answer rather than a failure
-// to reach it. Application errors cross the RPC as cond errors; connection
-// and resolution failures do not.
+// to reach it. Application errors cross the RPC as cond errors; lookup denials
+// retain their HTTP status in ResolveError.
 func answered(err error) bool {
+	if re, ok := errors.AsType[*rpc.ResolveError](err); ok && re.Kind == rpc.ResolveStatusError {
+		return re.StatusCode == http.StatusUnauthorized || re.StatusCode == http.StatusForbidden
+	}
 	if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, cond.ErrConflict{}) {
 		return true
 	}
@@ -170,7 +175,14 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 			// The server answered; waiting for a different answer is not
 			// going to help. Only an unreachable server is worth outlasting.
 			if answered(err) {
-				return op, err
+				if diagnostic, ok := errors.AsType[*ui.Diagnostic](err); ok {
+					diagnostic.Actions = append(diagnostic.Actions, ui.Action{
+						Command: "miren server operations show " + op.ID,
+						Note:    "the operation may still be running",
+					})
+					return op, err
+				}
+				return op, fmt.Errorf("%w (operation %s may still be running; check with miren server operations show %s)", err, op.ID, op.ID)
 			}
 			if unreachableSince.IsZero() {
 				unreachableSince = time.Now()

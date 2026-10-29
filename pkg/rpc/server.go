@@ -69,6 +69,10 @@ type Server struct {
 	// and ServeMux panics on a duplicate pattern, so re-registration is skipped
 	// rather than allowed to take the process down.
 	restRoutes map[string]string
+
+	// requests counts handlers still running, so a drain can tell a
+	// connection with work on it from one held open by a peer that has gone.
+	requests *requestCounter
 }
 
 type heldInterface struct {
@@ -113,6 +117,7 @@ func newServer() *Server {
 		knownAddresses: make(map[string]string),
 		resolvers:      make(map[string]HasReconstructFromState),
 		restRoutes:     make(map[string]string),
+		requests:       &requestCounter{},
 	}
 
 	s.setupMux()
@@ -123,6 +128,7 @@ func newServer() *Server {
 func (s *Server) Clone(state *State) *Server {
 	ns := *s
 	ns.state = state
+	ns.requests = &requestCounter{}
 
 	return &ns
 }
@@ -513,6 +519,9 @@ func (s *Server) mountHTTPHandlers(mounts []httpHandlerMount) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.requests.begin()
+	defer s.requests.end()
+
 	ctx := r.Context()
 	if s.state.top.Err() != nil && r.URL.Path != drainPath {
 		http.Error(w, "server draining", http.StatusServiceUnavailable)
@@ -1161,6 +1170,8 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx = ContextWithAuthorization(ctx, s.state.authorizer, strings.ToLower(mm.InterfaceName), strings.ToLower(mm.Name))
+
 	// Enforce authentication for non-public methods
 	if !mm.Public {
 		identity := IdentityFromContext(ctx)
@@ -1325,6 +1336,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+
+		ctx = ContextWithAuthorization(ctx, s.state.authorizer, strings.ToLower(mm.InterfaceName), strings.ToLower(mm.Name))
 
 		// Enforce authentication for non-public methods
 		if !mm.Public {

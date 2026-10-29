@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/logcount"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -39,6 +41,13 @@ type Context struct {
 	Stderr io.Writer
 
 	cancels []func()
+
+	// states are the RPC states this command opened. Close shuts them down so
+	// the server hears the connection end; a process that just exits leaves the
+	// server holding it until QUIC's idle timeout, and a server shutting down
+	// waits on it.
+	statesMu sync.Mutex
+	states   []*rpc.State
 
 	ClientConfig  *clientconfig.Config
 	ClusterConfig *clientconfig.ClusterConfig
@@ -108,11 +117,24 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 	s.levelVar.Set(level)
 
+	text := slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: &s.levelVar,
+	})
+	// Under systemd, tag each line with its priority so journalctl -p can
+	// filter on it. A line that CountAt says is really info, like the loud
+	// "Log leveling changed", is filed at info rather than err.
+	//
+	// Color goes too: journald stores a line holding escape codes as a byte
+	// array rather than text, which breaks -o json readers, and journalctl
+	// colors lines by priority on its own.
+	if slogfmt.OnJournalStream(os.Stderr) {
+		text = text.WithJournalPriority(logcount.MirenLevel)
+		color.NoColor = true
+	}
+
 	// Counted at the root so every printed line, relayed child output
 	// included, feeds miren_log_messages_total.
-	s.Log = slog.New(logcount.NewHandler(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: &s.levelVar,
-	}), logcount.Default))
+	s.Log = slog.New(logcount.NewHandler(text, logcount.Default))
 
 	// A separate logger for UI output, which is always at least debug level
 	s.UILog = slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -239,11 +261,26 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 }
 
 func (c *Context) Close() error {
+	c.statesMu.Lock()
+	states := c.states
+	c.states = nil
+	c.statesMu.Unlock()
+
+	for _, cs := range states {
+		_ = cs.Close()
+	}
+
 	for _, cancel := range c.cancels {
 		cancel()
 	}
 
 	return nil
+}
+
+func (c *Context) trackState(cs *rpc.State) {
+	c.statesMu.Lock()
+	c.states = append(c.states, cs)
+	c.statesMu.Unlock()
 }
 
 func (c *Context) SetExitCode(code int) {
@@ -341,6 +378,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 		if err != nil {
 			return nil, c.unusableClusterError(c.ClusterName, err)
 		}
+		c.trackState(cs)
 
 		client, err := cs.Client(name)
 		if err != nil {
@@ -361,6 +399,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 
 		cs, err = c.ClientConfig.State(rpcCtx, opts...)
 		if err == nil {
+			c.trackState(cs)
 			client, err := cs.Client(name)
 			if err != nil {
 				return nil, c.wrapRPCError(err)
@@ -388,6 +427,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 	if err != nil {
 		return nil, err
 	}
+	c.trackState(cs)
 
 	client, err := cs.Connect(c.Config.ServerAddress, name)
 	if err != nil {

@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -14,28 +12,17 @@ func RouteList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("entities")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	routes, err := ic.List(ctx)
+	res, err := ingress_v1alpha.NewRoutesClient(client).List(ctx, "")
 	if err != nil {
 		return err
 	}
 
-	resolveWAFLevel := func(route *ingress_v1alpha.HttpRoute) int {
-		if entity.Empty(route.WafProfile) {
-			return 0
-		}
-		profile, err := ic.GetWAFProfileByID(ctx, route.WafProfile)
-		if err != nil || profile == nil {
-			return 0
-		}
-		return int(profile.ParanoiaLevel)
-	}
+	routes := res.Routes()
 
 	if opts.IsJSON() {
 		type RouteInfo struct {
@@ -57,25 +44,29 @@ func RouteList(ctx *Context, opts struct {
 
 		var routeInfos []RouteInfo
 		for _, r := range routes {
-			host := r.Route.Host
-			if host == "" && r.Route.Default {
+			host := r.Host()
+			if host == "" && r.DefaultRoute() {
 				host = "(default)"
+			}
+			app := r.App()
+			if app != "" {
+				app = "app/" + app
 			}
 			routeInfos = append(routeInfos, RouteInfo{
 				Host:           host,
-				App:            string(r.Route.App),
-				Service:        routeService(r.Route),
-				Default:        r.Route.Default,
-				WafLevel:       resolveWAFLevel(r.Route),
-				RequestTimeout: r.Route.RequestTimeout,
-				CreatedAt:      r.CreatedAt,
-				UpdatedAt:      r.UpdatedAt,
+				App:            app,
+				Service:        r.Service(),
+				Default:        r.DefaultRoute(),
+				WafLevel:       int(r.WafLevel()),
+				RequestTimeout: r.RequestTimeout(),
+				CreatedAt:      r.CreatedAt(),
+				UpdatedAt:      r.UpdatedAt(),
 
-				Maintenance:          !r.Route.Maintenance.Empty(),
-				MaintenanceReason:    r.Route.Maintenance.Reason,
-				MaintenanceBackAt:    r.Route.Maintenance.BackAt,
-				MaintenanceStartedAt: r.Route.Maintenance.StartedAt,
-				MaintenanceStartedBy: r.Route.Maintenance.StartedBy,
+				Maintenance:          r.Maintenance(),
+				MaintenanceReason:    r.MaintenanceReason(),
+				MaintenanceBackAt:    r.MaintenanceBackAt(),
+				MaintenanceStartedAt: r.MaintenanceStartedAt(),
+				MaintenanceStartedBy: r.MaintenanceStartedBy(),
 			})
 		}
 
@@ -85,49 +76,47 @@ func RouteList(ctx *Context, opts struct {
 	var rows []ui.Row
 	headers := []string{"HOST", "APP", "SERVICE", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
 
-	for _, r := range routes {
-		route := r.Route
-
-		host := route.Host
-		if host == "" && route.Default {
+	for _, route := range routes {
+		host := route.Host()
+		if host == "" && route.DefaultRoute() {
 			host = "(default)"
 		}
 		if host == "" {
 			host = "-"
 		}
 
-		appDisplay := ui.CleanEntityID(string(route.App))
+		appDisplay := route.App()
 
 		defaultDisplay := "-"
-		if route.Default {
+		if route.DefaultRoute() {
 			defaultDisplay = "✓"
 		}
 
 		wafDisplay := "-"
-		if wafLevel := resolveWAFLevel(route); wafLevel > 0 {
+		if wafLevel := route.WafLevel(); wafLevel > 0 {
 			wafDisplay = fmt.Sprintf("%d", wafLevel)
 		}
 
 		timeoutDisplay := "-"
-		if route.RequestTimeout != "" {
-			timeoutDisplay = route.RequestTimeout
+		if route.RequestTimeout() != "" {
+			timeoutDisplay = route.RequestTimeout()
 		}
 
 		servingDisplay := "✓"
-		if !route.Maintenance.Empty() {
+		if route.Maintenance() {
 			servingDisplay = "maintenance"
 		}
 
 		rows = append(rows, ui.Row{
 			host,
 			appDisplay,
-			routeService(route),
+			route.Service(),
 			defaultDisplay,
 			wafDisplay,
 			timeoutDisplay,
 			servingDisplay,
-			humanFriendlyTimestamp(time.UnixMilli(r.CreatedAt)),
-			humanFriendlyTimestamp(time.UnixMilli(r.UpdatedAt)),
+			humanFriendlyTimestamp(time.UnixMilli(route.CreatedAt())),
+			humanFriendlyTimestamp(time.UnixMilli(route.UpdatedAt())),
 		})
 	}
 
@@ -144,11 +133,4 @@ func RouteList(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 	return nil
-}
-
-func routeService(route *ingress_v1alpha.HttpRoute) string {
-	if route.Service == "" {
-		return "web"
-	}
-	return route.Service
 }

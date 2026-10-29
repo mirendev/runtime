@@ -648,15 +648,21 @@ func TestStoreConformance_ReplaceEntityRevisionConflict(t *testing.T) {
 			Any(DBId, initial.Id()),
 			Any(Ident, "conf-occ-replace"),
 			Any(Doc, "stale"),
+			Any(Revision, staleRev),
 		), WithFromRevision(staleRev))
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, cond.ErrConflict{}),
 			"stale-revision replace must return cond.ErrConflict, got %v", err)
 
+		retained, err := store.GetEntity(ctx, initial.Id())
+		require.NoError(t, err)
+		assert.Equal(t, "bumped", MustGet(retained, Doc).Value.String())
+
 		_, err = store.ReplaceEntity(ctx, New(
 			Any(DBId, initial.Id()),
 			Any(Ident, "conf-occ-replace"),
 			Any(Doc, "current"),
+			Any(Revision, staleRev),
 		), WithFromRevision(bumped.GetRevision()))
 		require.NoError(t, err)
 	})
@@ -709,6 +715,27 @@ func TestStoreConformance_DeleteEntity(t *testing.T) {
 
 		// Deleting a missing entity is a no-op on both backends.
 		assert.NoError(t, store.DeleteEntity(ctx, Id("conf-delete-missing")))
+	})
+}
+
+func TestStoreConformance_DeleteEntityAtRevision(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		deleter := store.(interface {
+			DeleteEntityAtRevision(context.Context, Id, int64) error
+		})
+		created, err := store.CreateEntity(ctx, New(Ref(DBId, Id("conf-delete-revision"))))
+		require.NoError(t, err)
+		oldRevision := created.GetRevision()
+		updated, err := store.PatchEntity(ctx, New(Ref(DBId, created.Id()), String(Doc, "new owner")))
+		require.NoError(t, err)
+		require.Error(t, deleter.DeleteEntityAtRevision(ctx, created.Id(), oldRevision))
+		retained, err := store.GetEntity(ctx, created.Id())
+		require.NoError(t, err)
+		assert.Equal(t, "new owner", MustGet(retained, Doc).Value.String())
+		require.NoError(t, deleter.DeleteEntityAtRevision(ctx, created.Id(), updated.GetRevision()))
+		_, err = store.GetEntity(ctx, created.Id())
+		assert.True(t, isNotFound(err))
 	})
 }
 

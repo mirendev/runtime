@@ -3,8 +3,8 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 )
 
 func RouteSet(ctx *Context, opts struct {
@@ -31,20 +31,13 @@ func RouteSet(ctx *Context, opts struct {
 		return fmt.Errorf("app is required")
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Look up the app by name
-	appClient := app.NewClient(ctx.Log, client)
-	appEntity, err := appClient.GetByName(ctx, appName)
-	if err != nil {
-		return fmt.Errorf("failed to find app %q: %w", appName, err)
-	}
-
-	ic := ingress.NewClient(ctx.Log, client)
-	_, err = ic.SetRoute(ctx, opts.Host, appEntity.ID, opts.Service)
+	routes := ingress_v1alpha.NewRoutesClient(client)
+	_, err = routes.Set(ctx, opts.Host, appName, opts.Service)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,21 @@ apiVersion: miren.dev/rpc/v1
 kind: IDL
 
 types:
+  - type: SandboxPoolInfo
+    fields:
+      - {name: id, type: string, index: 0}
+      - {name: short_id, type: string, index: 1}
+      - {name: app, type: string, index: 2}
+      - {name: version, type: string, index: 3}
+      - {name: version_short_id, type: string, index: 4}
+      - {name: service, type: string, index: 5}
+      - {name: scaling_mode, type: string, index: 6}
+      - {name: desired_instances, type: int64, index: 7}
+      - {name: current_instances, type: int64, index: 8}
+      - {name: ready_instances, type: int64, index: 9}
+      - {name: created_at, type: int64, index: 10, doc: Unix milliseconds}
+      - {name: updated_at, type: int64, index: 11, doc: Unix milliseconds}
+      - {name: revision, type: int64, index: 12}
   # SandboxInfo is the operator-facing inventory record. It deliberately does
   # not contain a Sandbox or SandboxSpec: those carry resolved container
   # environment values and belong on the internal entity plane.
@@ -49,7 +64,61 @@ types:
         index: 12
         doc: Unix milliseconds
 
+  - type: SandboxSelection
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: short_id
+        type: string
+        index: 1
+      - name: service
+        type: string
+        index: 2
+      - name: version
+        type: string
+        index: 3
+      - name: candidate_count
+        type: int32
+        index: 4
+
 interfaces:
+  - name: SandboxPools
+    methods:
+      - name: list
+        parameters:
+          - name: app
+            type: string
+            doc: Empty lists all apps for unscoped callers, or the bound app for app-scoped callers.
+        results:
+          - name: pools
+            type: list
+            element: SandboxPoolInfo
+      - name: setDesired
+        parameters:
+          - {name: pool, type: string}
+          - name: count
+            type: int64
+            doc: Absolute instance count or relative delta; the final count must be between zero and MaxPoolSize.
+          - name: relative
+            type: bool
+            doc: Add count to the current desired instances atomically instead of replacing it.
+          - name: revision
+            type: int64
+            doc: Optional expected revision; zero uses the current revision. Conflicts are never retried.
+          - name: raw_id
+            type: bool
+            doc: Use pool exactly as supplied, without adding the pool/ prefix.
+        results:
+          - {name: previous_desired, type: int64}
+          - {name: desired, type: int64}
+          - {name: changed, type: bool}
+          - {name: revision, type: int64}
+          - {name: pool_id, type: string}
+          - {name: pool_short_id, type: string}
+          - {name: service, type: string}
+          - {name: current_instances, type: int64}
+          - {name: ready_instances, type: int64}
   - name: Sandboxes
     methods:
       - name: list
@@ -57,3 +126,28 @@ interfaces:
           - name: sandboxes
             type: list
             element: SandboxInfo
+      - name: stop
+        parameters:
+          - name: sandbox
+            type: string
+      - name: delete
+        parameters:
+          - name: sandbox
+            type: string
+      - name: selectForApp
+        doc: Select an existing running, scheduled service sandbox; never creates one.
+        parameters:
+          - name: app
+            type: string
+          - name: service
+            type: string
+        results:
+          - name: selection
+            type: SandboxSelection
+          - name: failure
+            type: string
+            doc: Empty on success; unknown_service, missing_default, or no_running for expected selection failures.
+          - name: services
+            type: list
+            element: string
+            doc: Known services for unknown_service, or eligible running services for missing_default.

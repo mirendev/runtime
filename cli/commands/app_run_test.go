@@ -137,3 +137,32 @@ func TestServerPredatesRunsOnlyForLookupFailures(t *testing.T) {
 		})
 	}
 }
+
+// The server's truncation error crosses the RPC boundary as text, wrapped by
+// the coordinator's proxy. It must be recognized there, and it must not be
+// mistaken for "not ready yet" and retried.
+func TestOutputTruncatedSurvivesTheProxy(t *testing.T) {
+	err := errors.New("failed to attach on node 10.0.0.5:8443: attach: output truncated: 4096 bytes of output never reached the client")
+
+	assert.True(t, outputTruncated(err))
+	assert.False(t, attachTargetMissing(err), "a truncated stream is final, not a reason to retry the attach")
+	assert.False(t, outputTruncated(errors.New("attach: container \"app\" of sandbox/x is not running yet")))
+}
+
+// `miren app attach` tells a truncated stream apart from other failures by
+// type, so the wrapping has to keep both the type and the server's reason.
+func TestRunOutputTruncatedError(t *testing.T) {
+	cause := errors.New("attach: output truncated: 4096 bytes of output never reached the client")
+	var err error = runOutputTruncatedError{runID: "run/x", cause: cause}
+
+	var truncated runOutputTruncatedError
+	assert.True(t, errors.As(err, &truncated))
+	assert.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "miren logs run run/x")
+
+	// Once the run's outcome is known it leads the message, so a script can
+	// tell a truncated success from a truncated failure.
+	err = runOutputTruncatedError{runID: "run/x", cause: cause, outcome: "it exited 0"}
+	assert.Contains(t, err.Error(), "run run/x finished and it exited 0, but its output did not all reach this terminal")
+	assert.ErrorIs(t, err, cause)
+}

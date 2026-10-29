@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -17,38 +16,63 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-// defaultExecService is the service we exec into when the caller didn't name
-// one. An app's other services exist to do work off the request path, so "the
-// app" almost always means the thing serving traffic.
 const defaultExecService = "web"
 
-// sandboxCandidate is a running sandbox that could serve an exec, reduced to
-// the fields the choice actually turns on. Narrowing works on these rather than
-// on entities so it stays a pure function that can be tested without a server.
+// sandboxCandidate contains only the selection details used in CLI notices.
 type sandboxCandidate struct {
-	// ID is the full entity id, which is what the exec RPC takes.
-	ID entity.Id
-	// Brief is the short id, for telling the user where they landed.
+	ID      entity.Id
 	Brief   string
 	Service string
 	Version entity.Id
 }
 
-// selectAppSandbox picks one running sandbox belonging to app to exec into. It
-// also returns how many sandboxes it was choosing between, so the caller can
-// stay quiet when there was never a decision to report.
-//
-// service, when set, is a hard filter; when empty the choice falls back to a
-// preference for the web service.
 func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, int, error) {
+	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "selectForApp")
+	}
+	if err != nil {
+		if isMissingRPC(err) {
+			return selectAppSandboxLegacy(ctx, appName, service)
+		}
+		return sandboxCandidate{}, 0, err
+	}
+	result, err := compute_v1alpha.NewSandboxesClient(client).SelectForApp(ctx, appName, service)
+	if err != nil {
+		if isMissingRPC(err) {
+			return selectAppSandboxLegacy(ctx, appName, service)
+		}
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return sandboxCandidate{}, 0, unknownAppError(appName, err, ctx.Verbose())
+		}
+		return sandboxCandidate{}, 0, err
+	}
+	switch result.Failure() {
+	case "unknown_service":
+		return sandboxCandidate{}, 0, unknownServiceError(appName, service, result.Services())
+	case "missing_default":
+		return sandboxCandidate{}, 0, noDefaultServiceError(appName, result.Services())
+	case "no_running":
+		return sandboxCandidate{}, 0, noRunningSandboxError(appName, service)
+	case "":
+	default:
+		return sandboxCandidate{}, 0, fmt.Errorf("unexpected sandbox selection failure: %s", result.Failure())
+	}
+	chosen := result.Selection()
+	if chosen == nil || chosen.Id() == "" {
+		return sandboxCandidate{}, 0, fmt.Errorf("sandbox selection returned no sandbox")
+	}
+	return sandboxCandidate{ID: entity.Id(chosen.Id()), Brief: chosen.ShortId(), Service: chosen.Service()}, int(chosen.CandidateCount()), nil
+}
+
+func selectAppSandboxLegacy(ctx *Context, appName, service string) (sandboxCandidate, int, error) {
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
 		return sandboxCandidate{}, 0, err
 	}
-
-	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	ec := entityserver.NewClient(ctx.Log, eac)
-
+	defer client.Close()
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
 	appEnt, err := app.NewClient(ctx.Log, client).GetByName(ctx, appName)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
@@ -56,17 +80,10 @@ func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, 
 		}
 		return sandboxCandidate{}, 0, err
 	}
-
-	// A sandbox reaches its app through its pool: the pool carries the indexed
-	// app ref, and every pool-created sandbox is labeled with its pool's id.
-	// Going this way rather than through sandbox.spec.version also excludes the
-	// ephemeral sandboxes `miren app run` creates, which have no pool — those
-	// belong to whoever is sitting in them.
 	pools, err := ec.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appEnt.ID))
 	if err != nil {
-		return sandboxCandidate{}, 0, fmt.Errorf("failed to list sandbox pools for %q: %w", appName, err)
+		return sandboxCandidate{}, 0, err
 	}
-
 	poolService := make(map[string]string)
 	var known []string
 	for pools.Next() {
@@ -74,189 +91,63 @@ func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, 
 		if err := pools.Read(&pool); err != nil {
 			continue
 		}
-
 		if !slices.Contains(known, pool.Service) {
 			known = append(known, pool.Service)
 		}
-
-		if service != "" && pool.Service != service {
-			continue
+		if service == "" || pool.Service == service {
+			poolService[pool.ID.String()] = pool.Service
 		}
-
-		poolService[pool.ID.String()] = pool.Service
 	}
-
 	if service != "" && len(poolService) == 0 {
 		return sandboxCandidate{}, 0, unknownServiceError(appName, service, known)
 	}
-
 	sandboxes, err := ec.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
-		return sandboxCandidate{}, 0, fmt.Errorf("failed to list sandboxes: %w", err)
+		return sandboxCandidate{}, 0, err
 	}
-
 	var candidates []sandboxCandidate
+	var running []string
 	for sandboxes.Next() {
 		var sb compute_v1alpha.Sandbox
-		if err := sandboxes.Read(&sb); err != nil {
+		if err := sandboxes.Read(&sb); err != nil || sb.Status != compute_v1alpha.RUNNING {
 			continue
 		}
-
 		md := sandboxes.Metadata()
 		if md == nil {
 			continue
 		}
-
 		pool, _ := md.Labels.Get("pool")
 		svc, ours := poolService[pool]
-		if !ours {
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(sandboxes.Entity())
+		if !ours || entity.Empty(schedule.Key.Node) {
 			continue
 		}
-
-		if sb.Status != compute_v1alpha.RUNNING {
+		if !slices.Contains(running, svc) {
+			running = append(running, svc)
+		}
+		if service == "" && slices.Contains(known, defaultExecService) && svc != defaultExecService {
 			continue
 		}
-
-		// Exec is forwarded to whichever node the sandbox landed on, so one
-		// that hasn't been placed yet has nowhere to forward to.
-		var sch compute_v1alpha.Schedule
-		sch.Decode(sandboxes.Entity())
-		if entity.Empty(sch.Key.Node) {
-			continue
-		}
-
-		candidates = append(candidates, sandboxCandidate{
-			ID:      sb.ID,
-			Brief:   ui.BriefId(sandboxes.Entity()),
-			Service: svc,
-			Version: sb.Spec.Version,
-		})
+		candidates = append(candidates, sandboxCandidate{ID: sb.ID, Brief: ui.BriefId(sandboxes.Entity()), Service: svc, Version: sb.Spec.Version})
 	}
-
-	choice := narrowSandboxCandidates(
-		candidates, appEnt.ActiveVersion, service, slices.Contains(known, defaultExecService))
-
-	switch {
-	case choice.MissingDefault:
-		return sandboxCandidate{}, 0, noDefaultServiceError(appName, choice.Running)
-	case len(choice.Candidates) == 0:
+	if len(candidates) == 0 {
+		if service == "" && slices.Contains(known, defaultExecService) {
+			slices.Sort(running)
+			return sandboxCandidate{}, 0, noDefaultServiceError(appName, running)
+		}
 		return sandboxCandidate{}, 0, noRunningSandboxError(appName, service)
 	}
-
-	return choice.Candidates[rand.IntN(len(choice.Candidates))], len(choice.Candidates), nil
-}
-
-// sandboxChoice is what narrowing produced: either a set to pick from, or the
-// reason there isn't one.
-type sandboxChoice struct {
-	Candidates []sandboxCandidate
-
-	// MissingDefault reports that the app has a web service but none of its
-	// running sandboxes are web. That is not the same as having nothing to
-	// offer, and it must not be answered by handing over a different service.
-	MissingDefault bool
-	// Running lists the services that do have something running, for telling
-	// the caller what they could ask for instead.
-	Running []string
-}
-
-// narrowSandboxCandidates decides which of the running sandboxes are the ones
-// to land in.
-//
-// Service is a requirement and version is a preference, in that order, and the
-// order is the whole design. Which service you get is the difference between a
-// web process and a background worker, so substituting one for the other is
-// never a kindness. Which version you get is the difference between newer and
-// older code for the same job, where insisting is what hurts: a failed deploy
-// leaves ActiveVersion pointing at a version that never came up while the old
-// instances keep serving traffic, and refusing those would lock you out of a
-// shell exactly when a deploy has just broken.
-//
-// So a rolling deploy that has taken web down to the old version still gives
-// you old web rather than new worker, and an app whose web service has nothing
-// running at all gets told so instead of quietly handed a worker.
-//
-// The result is sorted so that the only nondeterminism left is the caller's
-// random pick.
-func narrowSandboxCandidates(
-	candidates []sandboxCandidate,
-	activeVersion entity.Id,
-	service string,
-	appHasDefaultService bool,
-) sandboxChoice {
-	candidates = slices.Clone(candidates)
-
-	// An explicit --service was already applied as a hard filter against the
-	// pools, so this is only the default for a caller who didn't say. An app
-	// with no web service at all is a different case: there's no substitution
-	// to worry about, so every service stays in play.
-	if service == "" && appHasDefaultService {
-		web := keepSandboxes(candidates, func(c sandboxCandidate) bool {
-			return c.Service == defaultExecService
-		})
-
-		if len(web) == 0 {
-			return sandboxChoice{MissingDefault: true, Running: servicesOf(candidates)}
-		}
-
-		candidates = web
-	}
-
-	if !entity.Empty(activeVersion) {
-		candidates = preferSandboxes(candidates, func(c sandboxCandidate) bool {
-			return c.Version == activeVersion
-		})
-	}
-
-	slices.SortFunc(candidates, func(a, b sandboxCandidate) int {
-		return cmp.Compare(a.ID, b.ID)
-	})
-
-	return sandboxChoice{Candidates: candidates}
-}
-
-// servicesOf lists the distinct services present, sorted.
-func servicesOf(candidates []sandboxCandidate) []string {
-	var services []string
-	for _, c := range candidates {
-		if c.Service != "" && !slices.Contains(services, c.Service) {
-			services = append(services, c.Service)
+	var active []sandboxCandidate
+	for _, candidate := range candidates {
+		if !entity.Empty(appEnt.ActiveVersion) && candidate.Version == appEnt.ActiveVersion {
+			active = append(active, candidate)
 		}
 	}
-
-	slices.Sort(services)
-
-	return services
-}
-
-// keepSandboxes is a plain filter: what doesn't match is dropped, even if that
-// leaves nothing.
-func keepSandboxes(candidates []sandboxCandidate, want func(sandboxCandidate) bool) []sandboxCandidate {
-	kept := make([]sandboxCandidate, 0, len(candidates))
-	for _, c := range candidates {
-		if want(c) {
-			kept = append(kept, c)
-		}
+	if len(active) > 0 {
+		candidates = active
 	}
-
-	return kept
-}
-
-// preferSandboxes keeps the candidates matching want, unless that would keep
-// none, in which case the field is left as it was.
-func preferSandboxes(candidates []sandboxCandidate, want func(sandboxCandidate) bool) []sandboxCandidate {
-	preferred := make([]sandboxCandidate, 0, len(candidates))
-	for _, c := range candidates {
-		if want(c) {
-			preferred = append(preferred, c)
-		}
-	}
-
-	if len(preferred) == 0 {
-		return candidates
-	}
-
-	return preferred
+	return candidates[rand.IntN(len(candidates))], len(candidates), nil
 }
 
 func unknownAppError(appName string, cause error, verbose bool) error {

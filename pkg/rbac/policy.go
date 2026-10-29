@@ -1,7 +1,9 @@
 package rbac
 
 import (
+	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 )
@@ -41,6 +43,32 @@ type Rule struct {
 type Permission struct {
 	Resource string   `json:"resource"`
 	Actions  []string `json:"actions"`
+	Scope    string   `json:"scope,omitempty"` // Empty or * is unscoped; otherwise an instance glob or $owner.
+}
+
+// UnmarshalJSON rejects null scopes: treating an explicit, unreadable scope as
+// the empty default would turn a restricted permission into an unscoped grant.
+func (p *Permission) UnmarshalJSON(data []byte) error {
+	type permission Permission
+	var decoded struct {
+		permission
+		Scope json.RawMessage `json:"scope"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.Scope != nil {
+		var scope *string
+		if err := json.Unmarshal(decoded.Scope, &scope); err != nil {
+			return err
+		}
+		if scope == nil {
+			return fmt.Errorf("permission scope must be a string")
+		}
+		decoded.permission.Scope = *scope
+	}
+	*p = Permission(decoded.permission)
+	return nil
 }
 
 // Request represents an authorization request with tags
@@ -49,6 +77,8 @@ type Request struct {
 	Groups   []string       // Group IDs the subject belongs to
 	Resource string         // Resource being accessed
 	Action   string         // Action being performed
+	Instance string         // Target instance name; empty for create/collection requests
+	Owner    string         // Authoritative owner of the target instance
 	Tags     map[string]any // Tags to match against rule selectors
 	Context  map[string]any // Additional context
 }
@@ -156,18 +186,41 @@ func convertToArray(value any) []any {
 	}
 }
 
-// HasPermission checks if the rule grants permission for a resource and action
+// HasPermission checks an instance-less request. Scoped permissions require
+// evaluation with an instance through Evaluator.Evaluate.
 func (r *Rule) HasPermission(resource, action string) bool {
+	return r.hasPermission(&Request{Resource: resource, Action: action})
+}
+
+func (r *Rule) hasPermission(req *Request) bool {
 	for _, perm := range r.Permissions {
-		if matchResource(perm.Resource, resource) {
+		if matchResource(perm.Resource, req.Resource) && matchScope(perm.Scope, req) {
 			for _, permAction := range perm.Actions {
-				if matchAction(permAction, action) {
+				if matchAction(permAction, req.Action) {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+func matchScope(scope string, req *Request) bool {
+	if scope == "" || scope == "*" {
+		return true
+	}
+	if req.Instance == "" {
+		return false
+	}
+	if scope == "$owner" {
+		return req.Subject != "" && req.Owner != "" && req.Owner == req.Subject
+	}
+	// Reserve special scopes rather than interpreting an unknown one as a grant.
+	if strings.HasPrefix(scope, "$") {
+		return false
+	}
+	matched, err := path.Match(scope, req.Instance)
+	return err == nil && matched
 }
 
 // AppliesTo checks if the rule applies to given groups

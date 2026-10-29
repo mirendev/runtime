@@ -15,6 +15,11 @@ on:
     # required check. That trades one spare CI run for a PR that can merge
     # without having been tested. Labels land on roughly 1 PR in 60 here, so
     # the waste is theoretical and the hazard is not.
+    #
+    # The docs-only skip below is the one deliberate exception, and it is safe
+    # for the same reason the label gate would not be: it is decided by the
+    # PR's diff, so every run of a given PR, labeled or not, reaches the same
+    # answer.
     types: [opened, synchronize, reopened, labeled]
   merge_group:
   workflow_call:
@@ -28,6 +33,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # proxy.golang.org occasionally resets an HTTP/2 stream mid-download. With
+  # the default `,` separator Go only falls back to direct on a 404 or 410, so
+  # a reset fails the job; `|` falls back on any error. GOSUMDB stays on, so a
+  # direct fetch is still checked against the checksum database. iso containers
+  # get the same setting from .iso/Dockerfile.
+  GOPROXY: https://proxy.golang.org|direct
+
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
   contents: read
@@ -36,7 +49,11 @@ permissions:
 
 jobs:
   lint:
-    runs-on: depot-ubuntu-latest
+    # Fork PRs run on GitHub-hosted runners instead of Depot. Depot's cache is
+    # one namespace for the whole repo, so fork code running there could save
+    # entries that main and release jobs later restore; GitHub's cache keeps a
+    # fork PR's writes in its own scope. The blackbox jobs skip forks instead.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -56,6 +73,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Install system dependencies
       run: |
@@ -92,6 +115,19 @@ jobs:
         version: v2.12.2
         working-directory: x
 
+    # Go tests that read files under docs/ live in docs_test.go and are named
+    # TestDocs*. They run here because lint always runs, while the test
+    # runners skip on docs-only PRs, which are exactly the PRs that can break
+    # them.
+    - name: Docs-bound Go tests
+      run: |
+        mapfile -t pkgs < <(git ls-files '*docs_test.go' | xargs -r -n1 dirname | sort -u | sed 's|^|./|')
+        if [ ${#pkgs[@]} -eq 0 ]; then
+          echo "no docs_test.go files found"
+          exit 0
+        fi
+        go test -run '^TestDocs' -count=1 "${pkgs[@]}"
+
     - name: Check the vendored lbd source matches go.mod
       run: ./hack/sync-lbd-src.sh --check
 
@@ -121,9 +157,16 @@ jobs:
   # Which parts of the tree a PR touches, for jobs that are too expensive to
   # run on every PR but too important to leave to someone remembering a label.
   # Only consulted for pull_request; other events don't gate on it at all.
+  #
+  # `code` is false when every changed file is under docs/. The Go test and
+  # blackbox jobs skip on it, and the `test` gate accepts those skips only
+  # when it is false. lint and build are required checks that no gate backs
+  # up, so they always run: a skip there would pass on its own say-so, and
+  # lint carries the docs lint and the Go tests that read docs/ anyway.
   changes:
     runs-on: ubuntu-26.04
     outputs:
+      code: ${{ steps.filter.outputs.code }}
       distributed: ${{ steps.filter.outputs.distributed }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,27 +177,42 @@ jobs:
         # unquoted `&& 0 ||` would always fall through to the other side.
         fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
-    - name: Detect distributed-relevant changes
+    - name: Detect relevant changes
       id: filter
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: |
         set -euo pipefail
 
-        # Non-PR events don't consult this output, so don't spend a diff on them.
+        # Non-PR events don't consult these outputs, so don't spend a diff on them.
         if [ "${{ github.event_name }}" != "pull_request" ]; then
+          echo "code=true" >> "$GITHUB_OUTPUT"
           echo "distributed=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        changed=$(git diff --name-only "$BASE_SHA" HEAD)
+        # --no-renames lists both sides of a move. Otherwise a Go file moved
+        # into docs/ shows up only under its new name and reads as docs-only.
+        changed=$(git diff --no-renames --name-only "$BASE_SHA" HEAD)
         echo "Changed files:"
         echo "$changed"
+
+        # Herestrings, not `echo | grep -q`: grep -q exits on its first match,
+        # and on a list bigger than a pipe buffer echo then dies of SIGPIPE.
+        # Under pipefail that makes the if false, which here would mean
+        # skipping the suite on a large code PR.
+        if grep -qv '^docs/' <<<"$changed"; then
+          echo "code changes found"
+          echo "code=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "docs-only change"
+          echo "code=false" >> "$GITHUB_OUTPUT"
+        fi
 
         # The code paths that can break the multi-node topology, plus this
         # workflow itself so a change to the gating is exercised by the PR
         # that makes it.
-        if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|hack/blackbox-groups-distributed\.json|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
+        if grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|hack/blackbox-groups-distributed\.json|\.iso/peers\.yml|\.github/workflows/test\.yml)' <<<"$changed"; then
           echo "distributed-relevant changes found"
           echo "distributed=true" >> "$GITHUB_OUTPUT"
         else
@@ -163,6 +221,8 @@ jobs:
         fi
 
   test-groups:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -200,7 +260,7 @@ jobs:
   test-runner:
     name: test (runner ${{ matrix.group.runner }})
     needs: test-groups
-    runs-on: depot-ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -215,6 +275,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     # Test fixtures intentionally emit compiler errors. testfmt reports real
     # failures explicitly; the Go matcher would also annotate fixture output.
@@ -245,8 +311,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-
+        key: iso-cache-unit-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-unit-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -258,6 +324,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Test (runner ${{ matrix.group.runner }})
       run: |
@@ -278,7 +349,9 @@ jobs:
   # Deliberately not in the `test` gate yet. Once this job has shown a low
   # flake rate, add it to that job's needs so it becomes required.
   test-stackbuild:
-    runs-on: depot-ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -288,7 +361,10 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        cache: true
+        # Host Go only installs iso; the tests build inside the container. A
+        # host cache saved from here would hold little besides iso's own
+        # modules, and could win the shared key ahead of a job that needs it.
+        cache: false
 
     - name: Resolve iso version
       id: iso-version
@@ -314,8 +390,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-
+        key: iso-cache-unit-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-unit-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -327,6 +403,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Test stackbuild
       run: |
@@ -346,6 +427,8 @@ jobs:
         fi
 
   blackbox-groups:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -398,6 +481,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -426,8 +515,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-blackbox-
+        key: iso-cache-blackbox-shard-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-blackbox-shard-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -439,6 +528,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Start dev environment
       run: ISO_CACHE_DIR=/tmp/iso-cache make dev-start
@@ -473,7 +567,11 @@ jobs:
       run: make dev-stop || true
 
   test-blackbox-pop:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [changes]
+    if: >-
+      needs.changes.outputs.code == 'true' && (
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository )
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -485,6 +583,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -513,7 +617,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-pop-${{ hashFiles('go.sum') }}
+        key: iso-cache-blackbox-pop-${{ hashFiles('go.sum', 'x/go.sum') }}
         restore-keys: iso-cache-blackbox-pop-
 
     - name: Restore Docker image cache
@@ -526,6 +630,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     # POP tests need the cloud repo to build cloud and pop binaries from source.
     # Requires CLOUD_REPO_TOKEN secret — a PAT with read access to mirendev/cloud.
@@ -609,12 +718,16 @@ jobs:
     # authoritative even if the `changes` job fails — a failed dependency would
     # otherwise skip this on main and tags, quietly dropping the release coverage
     # this whole gate exists to protect.
+    #
+    # Fork PRs skip it like the other blackbox jobs: the shards run on Depot,
+    # whose cache every branch shares (see the comment on `lint`).
     needs: [changes]
     if: >-
       !cancelled() && (
-      github.event_name != 'pull_request' ||
+      github.event_name != 'pull_request' || (
+      github.event.pull_request.head.repo.full_name == github.repository && (
       needs.changes.outputs.distributed == 'true' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
+      contains(github.event.pull_request.labels.*.name, 'ci:distributed') )))
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -673,6 +786,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -701,7 +820,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum') }}
+        key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum', 'x/go.sum') }}
         restore-keys: iso-cache-blackbox-distributed-
 
     - name: Restore Docker image cache
@@ -714,6 +833,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Start distributed environment
       run: ISO_CACHE_DIR=/tmp/iso-cache make dev-distributed
@@ -765,8 +889,16 @@ jobs:
         echo "blackbox-groups-distributed result: ${{ needs.blackbox-groups-distributed.result }}"
         echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
         echo "changes result: ${{ needs.changes.result }}"
+        echo "changes code output: ${{ needs.changes.outputs.code }}"
 
-        if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
+        # A docs-only PR skips the Go tests and the blackbox suite outright.
+        # That is the only case where the jobs required below may be skipped.
+        docs_only="${{ needs.changes.outputs.code == 'false' }}"
+        ran_or_docs_only() {
+          [[ "$1" == "success" || ( "$1" == "skipped" && "$docs_only" == "true" ) ]]
+        }
+
+        if ! ran_or_docs_only "${{ needs.test-runner.result }}"; then
           exit 1
         fi
         # changes decides whether the distributed job runs on a PR. If it
@@ -778,8 +910,8 @@ jobs:
         fi
         # blackbox-groups builds the shard matrix. If it fails, the sharded
         # test-blackbox job is skipped, which would otherwise look benign below,
-        # so require it to succeed outright.
-        if [[ "${{ needs.blackbox-groups.result }}" != "success" ]]; then
+        # so require it to succeed unless the PR is docs-only.
+        if ! ran_or_docs_only "${{ needs.blackbox-groups.result }}"; then
           exit 1
         fi
         # Blackbox tests are skipped for external (fork) PRs. A matrix job's
@@ -807,7 +939,7 @@ jobs:
   build:
     # Skip when called from release.yml - it has its own build jobs with signing
     if: github.event_name != 'workflow_call'
-    runs-on: depot-ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -818,9 +950,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
 
     - name: Download modules
-      run: go mod download
+      run: hack/ci-mod-download.sh
 
     - name: Cross-compile all targets
       run: |

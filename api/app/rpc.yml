@@ -7,6 +7,34 @@ imports:
     import: miren.dev/runtime/pkg/rpc/stream
 
 types:
+  - type: AppVersionSummary
+    doc: Safe version-history metadata; never includes runtime configuration or environment.
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: version
+        type: string
+        index: 1
+      - name: status
+        type: string
+        index: 2
+        doc: "active, ephemeral, or replaced. Active takes precedence over ephemeral."
+      - name: created_at
+        type: standard.Timestamp
+        index: 3
+      - name: ephemeral_label
+        type: string
+        index: 4
+      - name: ephemeral_ttl
+        type: string
+        index: 5
+      - name: expires_at
+        type: standard.Timestamp
+        index: 6
+        optional: true
+        doc: Present only for a labeled ephemeral version with a known expiry.
+
   - type: LogTarget
     fields:
       - name: app
@@ -152,6 +180,10 @@ types:
         element: string
         index: 10
         doc: "Hostnames of this app's routes currently in maintenance. The default route appears as an empty string."
+      - name: owned_by
+        type: string
+        index: 11
+        doc: "Cloud principal owner subject; empty for legacy apps and non-Cloud creators"
 
   - type: CpuUsage
     fields:
@@ -394,6 +426,10 @@ types:
         type: list
         element: '*ServiceHealth'
         index: 22
+      - name: ownedBy
+        type: string
+        index: 23
+        doc: "Cloud principal owner subject; empty for legacy apps and non-Cloud creators"
 
   - type: LogEntry
     fields:
@@ -438,6 +474,52 @@ types:
       - name: capacity
         type: int64
         index: 2
+
+  - type: AddonCatalogEntry
+    doc: Public catalog metadata only; excludes provider config and container images.
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: display_name
+        type: string
+        index: 1
+      - name: description
+        type: string
+        index: 2
+      - name: default_variant
+        type: string
+        index: 3
+      - name: default_version
+        doc: Default version tag. Providers accept arbitrary version tags or image references, not a fixed supported-version list.
+        type: string
+        index: 4
+      - name: variants
+        type: list
+        element: AddonCatalogVariant
+        index: 5
+
+  - type: AddonCatalogVariant
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: description
+        type: string
+        index: 1
+      - name: details
+        type: list
+        element: AddonCatalogDetail
+        index: 2
+
+  - type: AddonCatalogDetail
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
 
   - type: AddonInstance
     fields:
@@ -579,15 +661,6 @@ interfaces:
           - name: disabledReason
             type: string
             doc: "Why the app was disabled, as given to app disable"
-      - name: setHost
-        http:
-          put: /apps/{app}/host
-          body: "*"
-        parameters:
-          - name: app
-            type: string
-          - name: host
-            type: string
       - name: setWorkloadRole
         doc: |
           Set the authorization role that identity tokens minted for this app's
@@ -733,6 +806,24 @@ interfaces:
           - name: restored_pools
             type: int32
             doc: "Fixed-mode pools returned to their configured count"
+
+      - name: listVersions
+        doc: List an app's version history newest first, including replaced and ephemeral versions.
+        http:
+          get: /apps/{app}/versions
+        parameters:
+          - name: app
+            type: string
+          - name: ephemeral
+            type: bool
+            doc: Show only versions with an ephemeral label, including the active version if labeled.
+          - name: limit
+            type: int64
+            doc: Maximum versions after filtering and sorting; nonpositive means unlimited.
+        results:
+          - name: versions
+            type: list
+            element: AppVersionSummary
 
   - name: UserQuery
     methods:
@@ -885,6 +976,25 @@ interfaces:
     http:
       prefix: /api/v1
     methods:
+      - name: listAvailable
+        doc: Cluster-wide catalog discovery, independent of attached addon instances.
+        http:
+          get: /addons
+        results:
+          - name: addons
+            type: list
+            element: AddonCatalogEntry
+
+      - name: getCatalog
+        http:
+          get: /addons/{name}
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: addon
+            type: AddonCatalogEntry
+
       - name: createInstance
         http:
           post: /apps/{app}/addons

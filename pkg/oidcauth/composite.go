@@ -32,6 +32,7 @@ var oidcDeployRole = map[string]map[string]bool{
 	},
 	"crud": {
 		"list":             true,
+		"listversions":     true,
 		"getconfiguration": true,
 	},
 	"builder": {
@@ -43,6 +44,9 @@ var oidcDeployRole = map[string]map[string]bool{
 	},
 	"appstatus": {
 		"appinfo": true,
+	},
+	"sandboxpools": {
+		"list": true,
 	},
 }
 
@@ -194,6 +198,65 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 		// AuthMethod was granted everything wherever primary was nil — i.e. on
 		// the local-only path, the common configuration.
 		return fmt.Errorf("access denied: unknown authentication method %q", identity.Method)
+	}
+}
+
+// UsesLogicalAuthorization enables Cloud policy checks only for Cloud callers.
+func (c *CompositeAuthorizer) UsesLogicalAuthorization(ctx context.Context, identity *rpc.Identity) bool {
+	if identity == nil {
+		return true
+	}
+	switch identity.Method {
+	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
+		if mode, ok := c.primary.(rpc.LogicalAuthorizer); ok {
+			return mode.UsesLogicalAuthorization(ctx, identity)
+		}
+		_, ok := c.primary.(rpc.ResourceAuthorizer)
+		return ok
+	case rpc.AuthMethodCert, rpc.AuthMethodOIDC, rpc.AuthMethodWorkload:
+		return false
+	case rpc.AuthMethodSystem, rpc.AuthMethodSigned:
+		return true
+	default:
+		return true
+	}
+}
+
+// AuthorizeResource retains the method-role gate for OIDC/workload identities
+// while delegating human resource decisions to the primary policy provider.
+func (c *CompositeAuthorizer) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {
+	if identity == nil {
+		return rpc.ErrUnauthorized
+	}
+	switch identity.Method {
+	case rpc.AuthMethodCert:
+		return nil
+	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
+		if primary, ok := c.primary.(rpc.ResourceAuthorizer); ok {
+			return primary.AuthorizeResource(ctx, identity, request)
+		}
+		return nil
+	case rpc.AuthMethodOIDC, rpc.AuthMethodWorkload:
+		if request.Resource != "app" {
+			resource, action := rpc.RPCPermissionFromContext(ctx)
+			if rpc.BoundApp(ctx) != "" || resource == "" || action == "" {
+				return rpc.ErrUnauthorized
+			}
+			return c.Authorize(ctx, identity, resource, action)
+		}
+		if !rpc.AllowApp(ctx, request.Instance) {
+			return rpc.ErrUnauthorized
+		}
+		// Implicit app creation during a build is a separate privilege, not an
+		// accidental consequence of a deploy grant.
+		if request.Action == "create" {
+			return c.Authorize(ctx, identity, "crud", "new")
+		}
+		return nil
+	case rpc.AuthMethodSystem, rpc.AuthMethodSigned:
+		return rpc.ErrUnauthorized
+	default:
+		return rpc.ErrUnauthorized
 	}
 }
 

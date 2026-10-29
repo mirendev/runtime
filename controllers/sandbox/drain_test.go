@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/testutils"
@@ -194,18 +196,62 @@ func TestDestroySubContainersAcrossRestart(t *testing.T) {
 		requireGone(t, cont)
 	})
 
-	t.Run("dead sandbox without a drain is left alone", func(t *testing.T) {
+	t.Run("dead sandbox without a drain resumes teardown", func(t *testing.T) {
 		r := require.New(t)
-		id, cont, task := startSubContainer(t, ignoreOnTerm, map[string]string{
+		id, cont, _ := startSubContainer(t, exitOnTerm, map[string]string{
 			shutdownTimeoutLabel: "3s",
 		})
 
 		r.NoError(co.Create(ctx, &compute.Sandbox{ID: id, Status: compute.DEAD}, nil))
+		requireGone(t, cont)
+	})
 
+	t.Run("disk lease survives interrupted shutdown until app is gone", func(t *testing.T) {
+		r := require.New(t)
+		id, cont, task := startSubContainer(t, ignoreOnTerm, map[string]string{
+			shutdownTimeoutLabel: "2s",
+		})
+		_, err := co.EAC.Create(ctx, entity.New(entity.DBId, co.NodeId.Id(), (&compute.Node{}).Encode).Attrs())
+		r.NoError(err)
+		schedule := &compute.Schedule{Key: compute.Key{Kind: compute.KindSandbox, Node: co.NodeId.Id()}}
+		_, err = co.EAC.Create(ctx, entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.RUNNING}).Encode, schedule.Encode).Attrs())
+		r.NoError(err)
+		pause, err := co.CC.NewContainer(ctx, pauseContainerId(id), containerd.WithNewSpec(oci.WithDefaultSpec()))
+		r.NoError(err)
+		t.Cleanup(func() { testutils.ClearContainer(context.WithoutCancel(ctx), pause) })
+		leaseID := entity.Id(idgen.GenNS("disk_lease"))
+		lease := &storage.DiskLease{ID: leaseID, SandboxId: id, NodeId: co.NodeId.Id(), Status: storage.BOUND}
+		_, err = co.EAC.Create(ctx, entity.New(entity.DBId, leaseID, lease.Encode).Attrs())
+		r.NoError(err)
+		leaseStatus := func() storage.DiskLeaseStatus {
+			resp, err := co.EAC.Get(ctx, leaseID.String())
+			r.NoError(err)
+			var stored storage.DiskLease
+			stored.Decode(resp.Entity().Entity())
+			return stored.Status
+		}
+		stopCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		r.ErrorIs(co.Create(stopCtx, &compute.Sandbox{ID: id, Status: compute.RUNNING}, nil), errDrainHandedOff)
+		r.Equal(compute.DEAD, reloadSandbox(r, ctx, co, id).Status, "unhealthy reconciliation marks DEAD before drain completes")
 		status, err := task.Status(ctx)
 		r.NoError(err)
 		r.Equal(containerd.Running, status.Status)
-		_, err = testDeps.CC.LoadContainer(ctx, cont.ID())
-		r.NoError(err)
+		r.Equal(storage.BOUND, leaseStatus(), "an app still shutting down retains its disk fencing")
+		failedCtx, failedCancel := context.WithCancel(ctx)
+		failedCancel()
+		r.Error(co.Create(failedCtx, &compute.Sandbox{ID: id, Status: compute.DEAD}, nil))
+		r.Error(co.ReleaseDiskLeases(ctx, id), "direct release also requires actual teardown")
+		orphanController := disk.NewDiskLeaseController(co.Log, co.EAC, co.NodeId, "universal")
+		orphanController.SetSandboxContainersGone(func(ctx context.Context, id entity.Id) (bool, error) {
+			return SubContainersGone(ctx, co.CC, id)
+		})
+		r.NoError(orphanController.Init(ctx))
+		r.NoError(orphanController.ReconcileOrphanLeases(ctx, 0))
+		r.NoError(co.Periodic(ctx, 0))
+		r.Equal(storage.BOUND, leaseStatus(), "DEAD and old/missing entities do not prove task shutdown")
+		r.NoError(co.Create(ctx, &compute.Sandbox{ID: id, Status: compute.DEAD}, nil))
+		requireGone(t, cont)
+		r.Equal(storage.RELEASED, leaseStatus())
 	})
 }

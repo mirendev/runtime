@@ -22,7 +22,14 @@ type buildkitBootOutput struct {
 	component *buildkit.Component
 }
 
+// buildkitBoot is two components. The handle constructs the buildkit component
+// and is what the cluster foundation consumes; starting the daemon, which pulls
+// its image on a version change and takes a couple of seconds even when it does
+// not, is a separate component nothing on the serving path waits for. The
+// build server holds the handle from the start, and work admission keeps builds
+// and deployments from being accepted until the daemon is up.
 type buildkitBoot struct {
+	handle        *boot.Component
 	component     *boot.Component
 	inputs        buildkitBootInputs
 	observability observabilityBootOutput
@@ -37,38 +44,20 @@ func buildkitInputs(options StartOptions) buildkitBootInputs {
 func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput], tracing boot.Output[tracingBootOutput]) *buildkitBoot {
 	b := &buildkitBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
-	switch {
-	case inputs.config.GetStartEmbedded():
-		b.component, b.output = boot.Provide5("buildkit", containerd, registryHostMapping, network, observability, tracing, b.startEmbedded, stop)
-	case inputs.config.GetSocketPath() != "":
-		b.component, b.output = boot.Provide1("buildkit", observability, b.start, stop)
-	default:
-		b.component, b.output = boot.Provide0("buildkit", b.startDisabled, stop)
-	}
+	b.handle, b.output = boot.Provide2("buildkit-handle", containerd, observability, b.newEmbedded)
+	b.component = boot.Run4("buildkit", b.output, registryHostMapping, network, tracing, b.startEmbedded, stop)
 	return b
 }
 
-func (b *buildkitBoot) start(ctx context.Context, observability observabilityBootOutput) (buildkitBootOutput, error) {
+func (b *buildkitBoot) newEmbedded(_ context.Context, containerd containerdBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
 	b.observability = observability
-	log := observability.log
-	log.Info("using external buildkit daemon", "socket", b.inputs.config.GetSocketPath())
-	b.result.component = buildkit.NewExternalComponent(log, b.inputs.config.GetSocketPath())
-	if err := b.result.component.Start(ctx, buildkit.Config{}); err != nil {
-		return buildkitBootOutput{}, err
-	}
-	log.Info("connected to external buildkit", "socket-path", b.result.component.SocketPath())
+	b.result.component = buildkit.NewComponent(observability.log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	return b.result, nil
 }
 
-func (b *buildkitBoot) startDisabled(context.Context) (buildkitBootOutput, error) {
-	return buildkitBootOutput{}, nil
-}
-
-func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, network networkBootOutput, observability observabilityBootOutput, tracing tracingBootOutput) (buildkitBootOutput, error) {
-	b.observability = observability
-	log := observability.log
+func (b *buildkitBoot) startEmbedded(ctx context.Context, handle buildkitBootOutput, hostMapping registryHostMappingBootOutput, network networkBootOutput, tracing tracingBootOutput) error {
+	log := b.observability.log
 	log.Info("starting embedded buildkit daemon", "socket-dir", b.inputs.config.GetSocketDir())
-	b.result.component = buildkit.NewComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	gcStorage, err := units.ParseData(b.inputs.config.GetGcKeepStorage())
 	if err != nil {
 		log.Warn("invalid buildkit.gc_keep_storage, falling back to default",
@@ -90,7 +79,7 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 	if network.routerAddress.IsValid() {
 		dnsNameservers = []string{network.routerAddress.String()}
 	}
-	if err := b.result.component.Start(ctx, buildkit.Config{
+	if err := handle.component.Start(ctx, buildkit.Config{
 		SocketDir:      socketDir,
 		RegistryIP:     hostMapping.registryIP.String(),
 		GCKeepStorage:  int64(gcStorage.Bytes()),
@@ -99,10 +88,10 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 		DNSNameservers: dnsNameservers,
 		Traces:         buildkitTraces(tracing),
 	}); err != nil {
-		return buildkitBootOutput{}, err
+		return err
 	}
-	log.Info("embedded buildkit started", "socket-path", b.result.component.SocketPath())
-	return b.result, nil
+	log.Info("embedded buildkit started", "socket-path", handle.component.SocketPath())
+	return nil
 }
 
 // buildkitTraces decides where buildkitd's spans go from where the server's go.
@@ -121,12 +110,8 @@ func buildkitTraces(tracing tracingBootOutput) buildkit.TracesExport {
 	}
 }
 
-func buildkitEnabled(config serverconfig.BuildkitConfig) bool {
-	return config.GetStartEmbedded() || config.GetSocketPath() != ""
-}
-
 func (b *buildkitBoot) stop(ctx context.Context) error {
-	if b.result.component == nil || !b.inputs.config.GetStartEmbedded() {
+	if b.result.component == nil {
 		return nil
 	}
 	b.observability.log.Info("stopping embedded buildkit")

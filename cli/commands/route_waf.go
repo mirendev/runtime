@@ -3,9 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -29,34 +27,19 @@ func RouteWaf(ctx *Context, opts struct {
 		return fmt.Errorf("WAF level must be between 1 and 4, got %d", opts.Level)
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	var route *ingress_v1alpha.HttpRoute
-	var routeLabel string
-
+	ic := ingress_v1alpha.NewRoutesClient(client)
+	res, err := ic.Show(ctx, opts.Host, opts.Default)
+	if err != nil {
+		return err
+	}
+	routeLabel := opts.Host
 	if opts.Default {
-		route, err = ic.LookupDefault(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to lookup default route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("no default route configured")
-		}
 		routeLabel = "default"
-	} else {
-		route, err = ic.Lookup(ctx, opts.Host)
-		if err != nil {
-			return fmt.Errorf("failed to lookup route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("route not found for host: %s", opts.Host)
-		}
-		routeLabel = opts.Host
 	}
 
 	type RouteWafJSON struct {
@@ -65,7 +48,7 @@ func RouteWaf(ctx *Context, opts struct {
 	}
 
 	if opts.Disable {
-		if entity.Empty(route.WafProfile) {
+		if !res.Route().WafEnabled() {
 			if opts.IsJSON() {
 				return PrintJSON(RouteWafJSON{Route: routeLabel, WafLevel: 0})
 			}
@@ -73,7 +56,7 @@ func RouteWaf(ctx *Context, opts struct {
 			return nil
 		}
 
-		_, err = ic.DetachWAFProfileFromRoute(ctx, route)
+		_, err = ic.Waf(ctx, opts.Host, opts.Default, 0)
 		if err != nil {
 			return fmt.Errorf("failed to disable WAF on route: %w", err)
 		}
@@ -85,7 +68,7 @@ func RouteWaf(ctx *Context, opts struct {
 		return nil
 	}
 
-	_, err = ic.SetRouteWAFLevelOnRoute(ctx, route, opts.Level)
+	_, err = ic.Waf(ctx, opts.Host, opts.Default, int64(opts.Level))
 	if err != nil {
 		return fmt.Errorf("failed to enable WAF on route: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/pkg/atomicfile"
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
@@ -339,13 +340,13 @@ func SaveRegistration(dir string, reg *StoredRegistration) error {
 		return fmt.Errorf("failed to marshal registration: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := atomicfile.Write(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write registration file: %w", err)
 	}
 
 	// Also save the private key separately for easier access
 	keyPath := filepath.Join(dir, "service-account.key")
-	if err := os.WriteFile(keyPath, []byte(reg.PrivateKey), 0600); err != nil {
+	if err := atomicfile.Write(keyPath, []byte(reg.PrivateKey), 0600); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
@@ -366,6 +367,24 @@ var RegistrationFiles = []string{
 	"service-account.key",
 }
 
+// cloudStateFiles are what the server saves from its cloud so a restart while
+// cloud is unreachable keeps admitting cloud users. Each records the cluster
+// or cloud it came from and is ignored under any other, so this cleanup is
+// tidiness rather than what keeps a new registration from trusting them.
+var cloudStateFiles = []string{
+	cloudauth.AuthorizationSnapshotFile,
+	cloudauth.CloudKeysFile,
+}
+
+func removeCloudState(dir string) error {
+	for _, name := range cloudStateFiles {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // ClearRegistration removes the registration data from the specified
 // directory, leaving the rest of the server directory alone. Missing files are
 // not an error, so a partially cleared directory can be finished off by
@@ -377,7 +396,7 @@ func ClearRegistration(dir string) error {
 		}
 	}
 
-	return nil
+	return removeCloudState(dir)
 }
 
 // LoadRegistration loads the registration data from the specified directory

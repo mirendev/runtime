@@ -128,7 +128,7 @@ func (e *Evaluator) Evaluate(req *Request, opts ...EvaluateOption) Decision {
 		}
 
 		// Check if rule grants the requested permission
-		if rule.HasPermission(req.Resource, req.Action) {
+		if rule.hasPermission(req) {
 			if options.Explainer != nil {
 				options.Explainer.RuleMatched(rule, req.Resource, req.Action)
 			}
@@ -231,13 +231,13 @@ func (dc *decisionCache) clear() {
 func (dc *decisionCache) requestKey(req *Request) string {
 	// Include all relevant fields in cache key
 	var key strings.Builder
-	fmt.Fprintf(&key, "%s:%s:%s", req.Subject, req.Resource, req.Action)
+	fmt.Fprintf(&key, "%q:%q:%q:%q:%q", req.Subject, req.Resource, req.Action, req.Instance, req.Owner)
 
 	sort.Strings(req.Groups)
 
 	// Add groups to key
 	for _, g := range req.Groups {
-		key.WriteString(":" + g)
+		fmt.Fprintf(&key, ":%q", g)
 	}
 
 	// Add tags to key

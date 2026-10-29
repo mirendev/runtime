@@ -15,10 +15,10 @@ import (
 	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/runnerconfig"
-	"miren.dev/runtime/pkg/ui"
 )
 
 func RunnerStatus(ctx *Context, opts struct {
@@ -139,15 +139,26 @@ func describePid(pidFile, contents string) string {
 }
 
 // describeSandboxes asks the coordinator what it has scheduled to this runner.
-// The count deliberately comes from the same node-scoped index that backs
-// `miren sandbox list`, so the two commands agree by construction rather than
-// by two independent guesses at containerd's on-disk layout (MIR-1502).
+// The coordinator derives node scope from the runner certificate and excludes
+// stopped/dead sandboxes; no sandbox records are sent to the CLI.
 func describeSandboxes(ctx *Context, cfg *runnerconfig.Config) string {
-	statuses, err := fetchSandboxStatuses(ctx, cfg)
+	counts, err := fetchSandboxCounts(ctx, cfg)
 	if err != nil {
 		return fmt.Sprintf("unknown (%s)", err)
 	}
-	return formatSandboxCounts(statuses)
+	return counts
+}
+
+func formatRunnerSandboxCounts(counts *runner_v1alpha.RunnerRegistrationClientSandboxCountsResults) string {
+	line := fmt.Sprintf("%d running", counts.Running())
+	if len(counts.Others()) == 0 {
+		return line
+	}
+	parts := make([]string, 0, len(counts.Others()))
+	for _, count := range counts.Others() {
+		parts = append(parts, fmt.Sprintf("%d %s", count.Count(), count.Status()))
+	}
+	return fmt.Sprintf("%s (%s)", line, strings.Join(parts, ", "))
 }
 
 // sandboxQueryTimeout bounds the whole coordinator round trip. This is a status
@@ -156,7 +167,7 @@ func describeSandboxes(ctx *Context, cfg *runnerconfig.Config) string {
 // "unknown", not a hang.
 const sandboxQueryTimeout = 15 * time.Second
 
-func fetchSandboxStatuses(ctx *Context, cfg *runnerconfig.Config) ([]compute_v1alpha.SandboxStatus, error) {
+func fetchSandboxCounts(ctx *Context, cfg *runnerconfig.Config) (string, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, sandboxQueryTimeout)
 	defer cancel()
 
@@ -168,78 +179,71 @@ func fetchSandboxStatuses(ctx *Context, cfg *runnerconfig.Config) ([]compute_v1a
 		ClientKey:  cfg.ClientKey,
 	})
 	if err := clientCfg.SetActiveCluster("coordinator"); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	state, err := clientCfg.State(queryCtx, rpc.WithLogger(ctx.Log))
 	if err != nil {
-		return nil, fmt.Errorf("coordinator unreachable: %w", err)
+		return "", fmt.Errorf("coordinator unreachable: %w", err)
 	}
 
-	client, err := state.Client("entities")
+	client, err := state.Client(rpc.ServiceRunner)
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(queryCtx, client, "SandboxCounts")
+	}
+	if isMissingRPC(err) {
+		client, err := state.Client("entities")
+		if err != nil {
+			return "", fmt.Errorf("coordinator unreachable: %w", err)
+		}
+		defer client.Close()
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		res, err := eac.List(queryCtx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, compute_v1alpha.NewNodeId(cfg.RunnerID).Id()))
+		if err != nil {
+			return "", fmt.Errorf("coordinator query failed: %w", err)
+		}
+		running := 0
+		others := map[string]int{}
+		for _, record := range res.Values() {
+			var sb compute_v1alpha.Sandbox
+			sb.Decode(record.Entity())
+			if compute.SandboxDead(sb.Status) {
+				continue
+			}
+			if sb.Status == compute_v1alpha.RUNNING {
+				running++
+			} else {
+				status := strings.TrimPrefix(string(sb.Status), "status.")
+				if status == "" {
+					status = "unknown"
+				}
+				others[status]++
+			}
+		}
+		line := fmt.Sprintf("%d running", running)
+		var parts []string
+		var names []string
+		for name := range others {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			parts = append(parts, fmt.Sprintf("%d %s", others[name], name))
+		}
+		if len(parts) > 0 {
+			line += " (" + strings.Join(parts, ", ") + ")"
+		}
+		return line, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("coordinator unreachable: %w", err)
+		return "", fmt.Errorf("coordinator unreachable: %w", err)
 	}
-	defer client.Close()
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-
-	nodeId := compute_v1alpha.NewNodeId(cfg.RunnerID)
-	res, err := eac.List(queryCtx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, nodeId.Id()))
+	res, err := runner_v1alpha.NewRunnerRegistrationClient(client).SandboxCounts(queryCtx)
 	if err != nil {
-		return nil, fmt.Errorf("coordinator query failed: %w", err)
+		return "", fmt.Errorf("coordinator query failed: %w", err)
 	}
 
-	var statuses []compute_v1alpha.SandboxStatus
-	for _, e := range res.Values() {
-		var sb compute_v1alpha.Sandbox
-		sb.Decode(e.Entity())
-		statuses = append(statuses, sb.Status)
-	}
-
-	return statuses, nil
-}
-
-// formatSandboxCounts renders the sandbox line from the statuses the coordinator
-// reports for this runner. Stopped and dead sandboxes are left out so the number
-// lines up with what `miren sandbox list` shows by default.
-func formatSandboxCounts(statuses []compute_v1alpha.SandboxStatus) string {
-	running := 0
-	others := map[string]int{}
-
-	for _, status := range statuses {
-		if compute.SandboxDead(status) {
-			continue
-		}
-
-		if status == compute_v1alpha.RUNNING {
-			running++
-			continue
-		}
-
-		// An unset status still gets counted, just not as something we can name.
-		name := ui.CleanStatus(string(status))
-		if name == "" {
-			name = "unknown"
-		}
-		others[name]++
-	}
-
-	line := fmt.Sprintf("%d running", running)
-	if len(others) == 0 {
-		return line
-	}
-
-	names := make([]string, 0, len(others))
-	for name := range others {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	parts := make([]string, 0, len(names))
-	for _, name := range names {
-		parts = append(parts, fmt.Sprintf("%d %s", others[name], name))
-	}
-
-	return fmt.Sprintf("%s (%s)", line, strings.Join(parts, ", "))
+	return formatRunnerSandboxCounts(res), nil
 }

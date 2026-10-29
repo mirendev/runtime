@@ -259,3 +259,32 @@ func TestAllowCertificate(t *testing.T) {
 		require.True(t, f.allow(t, "mirener.example.com"))
 	})
 }
+
+// A preview whose label no longer resolves gets a page that says so, rather
+// than the generic "page could not be found."
+func TestExpiredPreviewPage(t *testing.T) {
+	f := newTLSCheckFixture(t)
+	f.route(t, "app.example.com", "", "")
+	f.ephemeral(t, "pr-old", time.Now().Add(-time.Hour))
+
+	get := func(host, accept string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
+		r.Header.Set("Accept", accept)
+		w := httptest.NewRecorder()
+		appName := ""
+		f.srv.serveHTTPWithMetrics(w, r, &appName)
+		return w
+	}
+
+	for _, host := range []string{"pr-old.app.example.com", "pr-never.app.example.com"} {
+		w := get(host, "text/html")
+		require.Equal(t, http.StatusNotFound, w.Code, host)
+		require.Contains(t, w.Body.String(), "This preview has expired or doesn&#39;t exist.", host)
+		require.Contains(t, w.Body.String(), "redeploy it from there", host)
+	}
+
+	w := get("pr-old.app.example.com", "text/plain")
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Equal(t, "preview \"pr-old\" has expired or does not exist\n", w.Body.String())
+}

@@ -99,6 +99,20 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
+## Private dependencies
+
+For a private registry, define it in a committed `.cargo/config.toml` and pass its token
+as `CARGO_REGISTRIES_<NAME>_TOKEN`:
+
+```toml
+[[build.secrets]]
+id = "cargo"
+ref = "registry/cargo-acme"
+env = "CARGO_REGISTRIES_ACME_TOKEN"
+```
+
+For private Git repositories, store a netrc with a read token and mount it with `file = "~/.netrc"`. That covers crates from Git, too. See [Private Dependencies](../private-dependencies.md) for the full walkthrough.
+
 ## Environment variables
 
 Set variables with `miren env set` — `-e` for plain values, `-s` for secrets (masked
@@ -135,6 +149,7 @@ See [App Configuration — Environment Variables](../app-configuration.md#enviro
 - **Start command:** `web: /bin/app` (default); bind `0.0.0.0:$PORT` via `std::env::var("PORT")`
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; `env = "CARGO_REGISTRIES_<NAME>_TOKEN"` with `.cargo/config.toml`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 

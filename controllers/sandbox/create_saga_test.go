@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -157,6 +158,7 @@ type mockContainerRuntime struct {
 	bootInitialTaskErr   error
 	configureVolumesErr  error
 	bootContainersErr    error
+	bootTimings          []ContainerStartupTiming
 	destroySubCtrsErr    error
 	releaseDiskLeasesErr error
 	waitForPortErr       error
@@ -235,14 +237,14 @@ func (m *mockContainerRuntime) ConfigureVolumes(ctx context.Context, sb *compute
 	return map[string]string{}, nil
 }
 
-func (m *mockContainerRuntime) BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, error) {
+func (m *mockContainerRuntime) BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, []ContainerStartupTiming, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bootContainersCalls++
 	if m.bootContainersErr != nil {
-		return nil, m.bootContainersErr
+		return nil, m.bootTimings, m.bootContainersErr
 	}
-	return []WaitPort{{ID: "web", Port: 8080}}, nil
+	return []WaitPort{{ID: "web", Port: 8080}}, m.bootTimings, nil
 }
 
 func (m *mockContainerRuntime) DestroySubContainers(ctx context.Context, id entity.Id) error {
@@ -538,6 +540,10 @@ func (h *testHarness) execution(t *testing.T) *saga.Execution {
 
 func TestCreateSandboxSaga_HappyPath(t *testing.T) {
 	h := newTestHarness(t)
+	h.runtime.bootTimings = []ContainerStartupTiming{
+		{Name: "web", Image: "app:v1", ImageCache: "hit", DurationsNS: map[string]time.Duration{"image_lookup": time.Millisecond, "task_start": 2 * time.Millisecond}},
+		{Name: "sidecar", Image: "proxy:v2", ImageCache: "miss", DurationsNS: map[string]time.Duration{"image_pull_unpack": time.Second}},
+	}
 
 	err := h.execute(t)
 	require.NoError(t, err)
@@ -545,6 +551,9 @@ func TestCreateSandboxSaga_HappyPath(t *testing.T) {
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusCompleted, exec.Status)
 	assert.Equal(t, "node/test-node", exec.RecoveryScope)
+	var out bootContainersOut
+	require.NoError(t, json.Unmarshal(exec.ExecutedActions[actionBootCtrs].Output, &out))
+	assert.Equal(t, h.runtime.bootTimings, out.StartupTimings)
 
 	// All forward actions called
 	assert.Equal(t, 1, h.networking.allocateCalls)
@@ -639,6 +648,10 @@ func TestCreateSandboxSaga_BootTaskFails(t *testing.T) {
 func TestCreateSandboxSaga_BootContainersFails(t *testing.T) {
 	h := newTestHarness(t)
 	h.runtime.bootContainersErr = fmt.Errorf("port already in use")
+	h.runtime.bootTimings = []ContainerStartupTiming{{
+		Name: "web", Image: "app:v1", ImageCache: "miss",
+		DurationsNS: map[string]time.Duration{"image_lookup": time.Millisecond, "image_pull_unpack": 3 * time.Second},
+	}}
 
 	// Set up container mock's Task() to return the mock task for undo
 	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
@@ -650,6 +663,10 @@ func TestCreateSandboxSaga_BootContainersFails(t *testing.T) {
 
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
+	var out bootContainersOut
+	require.NoError(t, json.Unmarshal(exec.ExecutedActions[actionBootCtrs].Output, &out))
+	assert.Equal(t, h.runtime.bootTimings, out.StartupTimings)
+	assert.Nil(t, exec.ExecutedActions[actionBootCtrs].UndoneAt)
 
 	// undoBootTask: firewall unconfigured, task killed
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)

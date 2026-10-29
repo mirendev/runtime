@@ -1,6 +1,6 @@
 ---
 title: Language Guides
-description: Step-by-step deployment guides for a wide range of languages — Python, JavaScript, Go, Ruby, Rust, Elixir, Gleam, Swift, Kotlin, COBOL, and many more — on Miren.
+description: Deployment guides for Python, JavaScript, Go, Ruby, Rust, Elixir, and dozens more languages on Miren.
 keywords: [guides, languages, python, javascript, node, bun, go, ruby, rust, elixir, gleam, dockerfile, build, deploy]
 ---
 

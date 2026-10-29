@@ -1,10 +1,137 @@
+types:
+  - type: RouteClaimMapping
+    fields:
+      - {name: claim, type: string, index: 0}
+      - {name: header, type: string, index: 1}
+  - type: RouteInfo
+    doc: Safe routing configuration; never includes provider credentials or raw entities.
+    fields:
+      - {name: host, type: string, index: 0}
+      - {name: app, type: string, index: 1}
+      - {name: service, type: string, index: 2}
+      - {name: default_route, type: bool, index: 3}
+      - {name: provider, type: string, index: 4}
+      - {name: provider_type, type: string, index: 5}
+      - {name: connector_type, type: string, index: 6}
+      - {name: claim_mappings, type: list, element: RouteClaimMapping, index: 7}
+      - {name: waf_level, type: int64, index: 8}
+      - {name: request_timeout, type: string, index: 9}
+      - {name: tls_check, type: string, index: 10}
+      - {name: maintenance_reason, type: string, index: 11}
+      - {name: maintenance_back_at, type: string, index: 12}
+      - {name: maintenance_started_at, type: string, index: 13}
+      - {name: maintenance_started_by, type: string, index: 14}
+      - {name: created_at, type: int64, index: 15}
+      - {name: updated_at, type: int64, index: 16}
+      - {name: protected, type: bool, index: 17}
+      - {name: provider_url, type: string, index: 18}
+      - {name: waf_enabled, type: bool, index: 19}
+      - {name: maintenance, type: bool, index: 20}
+  - type: ProviderInfo
+    doc: Safe provider metadata. Credentials and arbitrary connector configuration are never returned.
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: kind
+        type: string
+        index: 1
+      - name: provider_url
+        type: string
+        index: 2
+      - name: client_id
+        type: string
+        index: 3
+      - name: scopes
+        type: list
+        element: string
+        index: 4
+      - name: orgs
+        type: list
+        element: GitHubOrganization
+        index: 5
+  - type: GitHubOrganization
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: teams
+        type: list
+        element: string
+        index: 1
+
 interfaces:
+  - name: IdentityProviders
+    doc: Cluster operator management of shared ingress identities. Not app-owned; unavailable to workload and deploy identities.
+    methods:
+      - name: addOIDC
+        index: 0
+        parameters:
+          - name: name
+            type: string
+          - name: provider_url
+            type: string
+          - name: client_id
+            type: string
+          - name: client_secret
+            type: string
+          - name: scopes
+            type: list
+            element: string
+          - name: update
+            type: bool
+      - name: addGitHub
+        index: 1
+        parameters:
+          - name: name
+            type: string
+          - name: client_id
+            type: string
+          - name: client_secret
+            type: string
+          - name: orgs
+            type: list
+            element: GitHubOrganization
+          - name: update
+            type: bool
+      - name: addPassword
+        index: 2
+        parameters:
+          - name: name
+            type: string
+          - name: password
+            type: string
+            doc: Plaintext credential, hashed server-side; never returned or logged.
+          - name: update
+            type: bool
+      - name: list
+        index: 3
+        results:
+          - name: providers
+            type: list
+            element: ProviderInfo
+      - name: show
+        index: 4
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: provider
+            type: ProviderInfo
+      - name: remove
+        index: 5
+        parameters:
+          - name: name
+            type: string
+          - name: force
+            type: bool
+            doc: Permit removal while referenced; does not mutate routes.
   - name: Routes
     doc: >-
-      Operator controls over an existing HTTP route. Route records themselves
-      are still created and removed through the entity store; this interface
-      exists for the operations that need the server to establish something the
-      caller cannot be trusted to assert about itself.
+      Route management with server-side validation and app ownership checks.
+      Named routes are app-scoped; default routes are cluster infrastructure
+      and are unavailable to app-bound identities, including reads and settings.
+      Maintenance remains operator-only. EntityAccess is not required by callers.
     methods:
       - name: setMaintenance
         index: 0
@@ -71,3 +198,88 @@ interfaces:
           - name: changed
             type: bool
             doc: False when the route was already serving normally.
+      - name: list
+        index: 2
+        doc: List visible routes, optionally restricted to an app name. App-bound callers see only their named routes.
+        parameters:
+          - {name: app, type: string}
+        results:
+          - {name: routes, type: list, element: RouteInfo}
+      - name: show
+        index: 3
+        parameters:
+          - {name: host, type: string}
+          - {name: default_route, type: bool}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: set
+        index: 4
+        doc: Create or reassign a named route; claiming a new hostname requires cluster-level access. App-bound callers can update existing routes they own. An omitted service validates and selects web. Reassignment requires access to both apps. Existing settings are retained.
+        parameters:
+          - {name: host, type: string}
+          - {name: app, type: string}
+          - {name: service, type: string}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: remove
+        index: 5
+        parameters:
+          - {name: host, type: string}
+      - name: setDefault
+        index: 6
+        doc: Cluster-only. Set the default target app, preserving settings on an existing default route. Does not require an active deployment.
+        parameters:
+          - {name: app, type: string}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: unsetDefault
+        index: 7
+        doc: Cluster-only. Remove the default route; succeeds if none exists. No named route is promoted.
+        results:
+          - {name: changed, type: bool}
+          - {name: app, type: string}
+      - name: protect
+        index: 8
+        parameters:
+          - {name: host, type: string}
+          - {name: default_route, type: bool}
+          - {name: provider, type: string}
+          - {name: claim_mappings, type: list, element: RouteClaimMapping}
+          - name: ignore_password_claim_mappings
+            type: bool
+            doc: Ignore mappings for password providers, permitting a human-facing client to warn instead of failing. Other providers still validate mappings.
+        results:
+          - {name: route, type: RouteInfo}
+      - name: unprotect
+        index: 9
+        parameters:
+          - {name: host, type: string}
+          - {name: default_route, type: bool}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: waf
+        index: 10
+        doc: Set WAF paranoia level (1-4), or zero to disable.
+        parameters:
+          - {name: host, type: string}
+          - {name: default_route, type: bool}
+          - {name: level, type: int64}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: timeout
+        index: 11
+        doc: Set a positive request duration, or empty to restore the server default. Show reads the current value.
+        parameters:
+          - {name: host, type: string}
+          - {name: default_route, type: bool}
+          - {name: timeout, type: string}
+        results:
+          - {name: route, type: RouteInfo}
+      - name: tlsCheck
+        index: 12
+        doc: Set the TLS authorization path, or empty to clear it. Only named routes are supported.
+        parameters:
+          - {name: host, type: string}
+          - {name: path, type: string}
+        results:
+          - {name: route, type: RouteInfo}

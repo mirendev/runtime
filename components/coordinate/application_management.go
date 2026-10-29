@@ -32,6 +32,7 @@ import (
 	"miren.dev/runtime/servers/build"
 	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
+	"miren.dev/runtime/servers/identityproviders"
 	"miren.dev/runtime/servers/logs"
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	routessrv "miren.dev/runtime/servers/routes"
@@ -139,6 +140,7 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	// pre-durable-runs release and silently fall back to legacy exec.
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
 	server.ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(c.Log, ec)))
+	server.ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(ec)))
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(
 		app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker()),
 	))
@@ -167,8 +169,12 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	}
 	c.deploymentHandler = deployment_v1alpha.AdaptDeployment(deploymentServer)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcbindingsrv.NewServer(c.Log, ec, eac)))
+	ingressClient := ingress.NewClient(c.Log, loopback)
+	server.ExposeValue("dev.miren.runtime/identity-providers", ingress_v1alpha.AdaptIdentityProviders(
+		identityproviders.NewServer(ingressClient),
+	))
 	server.ExposeValue("dev.miren.runtime/routes", ingress_v1alpha.AdaptRoutes(
-		routessrv.NewServer(c.Log, ingress.NewClient(c.Log, loopback)),
+		routessrv.NewServer(c.Log, ingressClient),
 	))
 	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
 	if err != nil {

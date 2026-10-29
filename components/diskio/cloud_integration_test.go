@@ -97,7 +97,7 @@ func (m *mockCloudServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.handleUploadRequest(w, r)
 	case r.Method == "PUT" && strings.HasPrefix(path, "/upload/"):
 		m.handleUploadData(w, r)
-	case r.Method == "POST" && strings.Contains(path, "/updates/") && strings.HasSuffix(path, "/complete"):
+	case r.Method == "POST" && strings.Contains(path, "/updates/") && (strings.HasSuffix(path, "/complete") || strings.HasSuffix(path, "/prepare")):
 		m.handleComplete(w, r)
 
 	// Update list/download
@@ -245,9 +245,10 @@ func (m *mockCloudServer) handleUploadRequest(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(beginUploadResponseJSON{
-		UpdateID:    segID,
-		UploadURL:   m.server.URL + "/upload/" + segID,
-		CompleteURL: m.server.URL + "/api/v1/disk/volumes/" + volumeID + "/updates/" + segID + "/complete",
+		UpdateID:        segID,
+		UploadURL:       m.server.URL + "/upload/" + segID,
+		CompleteURL:     m.server.URL + "/api/v1/disk/volumes/" + volumeID + "/updates/" + segID + "/complete",
+		SupportsPrepare: true,
 	})
 }
 
@@ -316,8 +317,10 @@ func (m *mockCloudServer) handleComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	seg.Complete = true
-	w.WriteHeader(http.StatusOK)
+	if !req.PrepareOnly {
+		seg.Complete = true
+	}
+	json.NewEncoder(w).Encode(map[string]any{"update_id": segID, "prepared": req.PrepareOnly})
 }
 
 func (m *mockCloudServer) handleListSegments(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +578,7 @@ func TestCloudIntegrationLogWatcherUpload(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmpFile, []byte("partial"), 0644))
 
 	state := NewState()
+	state.SetPath(tmpDir)
 	state.SetVolume("disk_volume/"+volumeID, &VolumeState{
 		EntityId:      "disk_volume/" + volumeID,
 		VolumeId:      volumeID,
@@ -813,6 +817,7 @@ func TestCloudIntegrationLeasedWatcherUploadIncludesNonce(t *testing.T) {
 	require.NotEmpty(t, nonce)
 
 	state := NewState()
+	state.SetPath(tmpDir)
 	state.SetVolume(entityID, &VolumeState{
 		EntityId:      entityID,
 		VolumeId:      localVolumeID,
@@ -826,6 +831,7 @@ func TestCloudIntegrationLeasedWatcherUploadIncludesNonce(t *testing.T) {
 		EntityId:   "disk_mount/mnt-1634",
 		VolumeId:   entityID,
 		Mode:       storage_v1alpha.VM_ACCELERATOR,
+		Mounted:    true,
 		LeaseNonce: nonce,
 	})
 

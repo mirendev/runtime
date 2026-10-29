@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"miren.dev/runtime/pkg/imagerefs"
 )
 
@@ -127,7 +128,7 @@ func (h *highlevelBuilder) installNpm(cur llb.State, distro string) llb.State {
 // installBun copies the bun binary from the official bun image. Distro-agnostic
 // because bun ships as a single static binary.
 func (h *highlevelBuilder) installBun(cur llb.State) llb.State {
-	bunImg := llb.Image(imagerefs.GetBunImage("1"))
+	bunImg := pinnedImage(imagerefs.GetBunImage("1"), imagemetaresolver.New())
 	return cur.File(
 		llb.Copy(bunImg, "/usr/local/bin/bun", "/usr/local/bin/bun", &llb.CopyInfo{
 			FollowSymlinks: true,

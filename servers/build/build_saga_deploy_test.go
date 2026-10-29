@@ -142,6 +142,29 @@ func TestBuildSaga_PersistsInitiatingOrganizationWithoutActionIdentity(t *testin
 	require.Equal(t, "org-42", actor.OrganizationId)
 	require.Equal(t, "ada@example.com", actor.Email)
 	require.Equal(t, "Ada Lovelace", actor.Name)
+	app, err := h.builder.appClient.GetByName(t.Context(), "demo")
+	require.NoError(t, err)
+	require.Equal(t, "user-42", app.OwnedBy)
+}
+
+func TestBuildSaga_EphemeralPreservesCreatorWithoutActionIdentity(t *testing.T) {
+	for _, method := range []rpc.AuthMethod{rpc.AuthMethodJWT, rpc.AuthMethodCert, rpc.AuthMethodWorkload, rpc.AuthMethodOIDC, rpc.AuthMethodSystem} {
+		t.Run(string(method), func(t *testing.T) {
+			h := newDeploySagaHarness(t)
+			h.streams.Register("stream-ephemeral-owner", makeTar(t, imageOnlyTarball(t)))
+			requestCtx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "ephemeral-owner", Method: method})
+			sb := &SagaBuilder{executor: h.executor}
+			require.NoError(t, sb.startBuild(requestCtx, t.Context(), "test-ephemeral-owner", "preview", "stream-ephemeral-owner", nil,
+				&ephemeralOpts{label: "preview"}, nil))
+			app, err := h.builder.appClient.GetByName(t.Context(), "preview")
+			require.NoError(t, err)
+			if method == rpc.AuthMethodJWT {
+				require.Equal(t, "ephemeral-owner", app.OwnedBy)
+			} else {
+				require.Empty(t, app.OwnedBy)
+			}
+		})
+	}
 }
 
 // A direct-image deploy has no build or push phase to report, but it must still

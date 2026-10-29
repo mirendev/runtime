@@ -208,6 +208,7 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 	ctx := context.Background()
 	env, cleanup := newTestServer(t)
 	defer cleanup()
+	env.server.EtcdPrefix = "/miren/"
 
 	secret := env.createInviteAndDecode(t, ctx)
 
@@ -234,6 +235,9 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 
 	if joinResult.NetworkBackend() != "wireguard" {
 		t.Errorf("Join returned network backend %q, want wireguard", joinResult.NetworkBackend())
+	}
+	if joinResult.EtcdPrefix() != "/miren//sub/flannel" {
+		t.Errorf("Join returned etcd prefix %q, want /miren//sub/flannel", joinResult.EtcdPrefix())
 	}
 
 	// Verify the issued certificate includes proper IP SANs

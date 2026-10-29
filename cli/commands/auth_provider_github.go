@@ -1,13 +1,10 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/connectors"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -28,43 +25,18 @@ func AuthProviderAddGitHub(ctx *Context, opts struct {
 		return fmt.Errorf("--client-id and --client-secret are required")
 	}
 
-	configJSON, err := buildGitHubConfigJSON(opts.Orgs)
+	orgs, err := parseProviderOrgs(opts.Orgs)
 	if err != nil {
 		return err
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	existing, err := ic.GetOIDCProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing auth provider: %w", err)
-	}
-	if existing != nil && !opts.Update {
-		return fmt.Errorf("auth provider %q already exists. Pass --update to overwrite (rotates client secret)", opts.Name)
-	}
-
-	pwExisting, err := ic.GetPasswordProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing password provider: %w", err)
-	}
-	if pwExisting != nil {
-		return fmt.Errorf("a password provider named %q already exists. Provider names must be unique across types", opts.Name)
-	}
-
-	provider := &ingress_v1alpha.OidcProvider{
-		Name:          opts.Name,
-		ConnectorType: "github",
-		ClientId:      opts.ClientID,
-		ClientSecret:  opts.ClientSecret,
-		ConfigJson:    configJSON,
-	}
-
-	if _, err := ic.CreateOrUpdateOIDCProvider(ctx, provider); err != nil {
+	if _, err := ingress_v1alpha.NewIdentityProvidersClient(client).AddGitHub(ctx,
+		opts.Name, opts.ClientID, opts.ClientSecret, orgs, opts.Update); err != nil {
 		return fmt.Errorf("failed to create github provider: %w", err)
 	}
 
@@ -81,42 +53,32 @@ func AuthProviderAddGitHub(ctx *Context, opts struct {
 	return nil
 }
 
-// buildGitHubConfigJSON marshals --org flag inputs into the config_json blob
-// stored on the OidcProvider entity for github connectors.
-//
-// Each --org spec takes one of:
-//   - "name"               authorizes any member of the org
-//   - "name:team1,team2"   restricts to listed teams and populates X-User-Groups
-//
-// Bare "name" authorizes but emits no groups claim because Dex only surfaces
-// team-prefixed entries.
-func buildGitHubConfigJSON(orgs []string) (string, error) {
-	var cfg struct {
-		Orgs []connectors.GitHubOrg `json:"orgs,omitempty"`
-	}
+// parseProviderOrgs accepts name or name:team1,team2. Bare names authorize
+// membership without emitting groups; only team-prefixed Dex entries do that.
+func parseProviderOrgs(orgs []string) ([]*ingress_v1alpha.GitHubOrganization, error) {
+	var result []*ingress_v1alpha.GitHubOrganization
 	for _, spec := range orgs {
 		name, teamsPart, hasTeams := strings.Cut(spec, ":")
 		name = strings.TrimSpace(name)
 		if name == "" {
-			return "", fmt.Errorf("invalid --org %q: empty org name", spec)
+			return nil, fmt.Errorf("invalid --org %q: empty org name", spec)
 		}
-		org := connectors.GitHubOrg{Name: name}
+		org := &ingress_v1alpha.GitHubOrganization{}
+		org.SetName(name)
 		if hasTeams {
+			var teams []string
 			for t := range strings.SplitSeq(teamsPart, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
-					org.Teams = append(org.Teams, t)
+					teams = append(teams, t)
 				}
 			}
-			if len(org.Teams) == 0 {
-				return "", fmt.Errorf("invalid --org %q: \":\" present but no teams listed", spec)
+			if len(teams) == 0 {
+				return nil, fmt.Errorf("invalid --org %q: \":\" present but no teams listed", spec)
 			}
+			org.SetTeams(teams)
 		}
-		cfg.Orgs = append(cfg.Orgs, org)
+		result = append(result, org)
 	}
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		return "", fmt.Errorf("encode github config: %w", err)
-	}
-	return string(b), nil
+	return result, nil
 }

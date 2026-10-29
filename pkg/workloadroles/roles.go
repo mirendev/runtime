@@ -63,8 +63,12 @@ type perms map[string]map[string]bool
 var (
 	// appRead: read one app's own state.
 	appRead = perms{
-		"appstatus": set("appinfo"),
-		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
+		"appstatus":    set("appinfo"),
+		"sandboxpools": set("list"),
+		"routes":       set("list", "show"),
+		"logs":         set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
+		"crud":         set("listversions"),
+		"runs":         set("listruns", "getrun"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),
@@ -83,11 +87,14 @@ var (
 	// appConfig: mutate one app's configuration. These handlers gain their
 	// rpc.AllowApp guard in this change; before that they were cluster-wide.
 	appConfig = perms{
+		"sandboxpools": set("setdesired"),
 		"crud": set(
 			"setconfiguration", "setenvvar", "setenvvars",
-			"setinitialenvvars", "deleteenvvar", "restart", "sethost",
+			"setinitialenvvars", "deleteenvvar", "restart",
 		),
 		"deployment": set("setenvvars", "deleteenvvars"),
+		"routes":     set("set", "remove", "protect", "unprotect", "waf", "timeout", "tlscheck"),
+		"sandboxes":  set("stop", "delete"),
 	}
 
 	// appLifecycle: turn one app off and back on. Reversible, unlike
@@ -100,6 +107,8 @@ var (
 	// exec: open a shell / run a command in a sandbox. Guarded in this change.
 	execBlock = perms{
 		"sandboxexec": set("exec"),
+		"sandboxes":   set("selectforapp"),
+		"runs":        set("createrun", "submitrun", "cancelrun"),
 	}
 
 	// clusterRead: read across the cluster and its infrastructure.
@@ -107,7 +116,8 @@ var (
 		"crud":               set("list"),
 		"logs":               set("sandboxlogs"),
 		"disks":              set("list", "getbyid", "getbyname"),
-		"addons":             set("listinstances"),
+		"diskhealth":         set("list"),
+		"addons":             set("listinstances", "listavailable", "getcatalog"),
 		"runnerregistration": set("listinvites", "listrunners", "workloadissuerinfo"),
 		"netdb":              set("listleases", "status"),
 		"sandboxmetrics":     set("snapshot"),
@@ -175,7 +185,9 @@ func clusterAdminPerms() perms {
 			"admin":        set("invoke", "listmethods", "describemethods"),
 			"internalhttp": set("dorequest"),
 			"disks":        set("new", "delete"),
-			"addons":       set("createinstance", "deleteinstance"),
+			"addons":       set("createinstance", "deleteinstance", "rotatecredential"),
+			// Defaults steer unmatched traffic cluster-wide, not just one app.
+			"routes": set("setdefault", "unsetdefault"),
 			// Backup, restore and recovery read and rewrite a disk's contents
 			// wholesale, so they sit with the other disk mutations rather than
 			// with reads — listdeleted included, since what it lists is the

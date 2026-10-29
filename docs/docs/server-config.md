@@ -31,8 +31,6 @@ The server reads its config from the first file found:
 ### Example
 
 ```toml
-mode = "standalone"
-
 [server]
 address = ":8443"
 data_path = "/var/lib/miren"
@@ -44,30 +42,61 @@ mode = "tls-autoprovision"
 [tls]
 acme_email = "admin@example.com"
 
-[etcd]
-start_embedded = true
-
 [buildkit]
 gc_keep_storage = "20GB"
 gc_keep_duration = "14d"
 ```
 
-## Server Modes
+## Embedded Components
 
-Miren has two operating modes:
+The server runs etcd, containerd, BuildKit, VictoriaLogs, and VictoriaMetrics
+itself and manages their lifecycle, data, and upgrades. Additional machines join
+as [distributed runners](./distributed-runners.md).
 
-| Mode | Description |
-|------|-------------|
-| `standalone` | All components (etcd, containerd, buildkit, logs, metrics) run embedded within a single process. **This is the default.** |
-| `distributed` | Components run as separate services. Experimental. |
+Earlier releases had an experimental `distributed` server mode that pointed the
+server at external data stores instead. That mode is gone. A server whose
+configuration still selects it refuses to start and names the setting, so it
+never comes up on empty embedded stores in place of your data. If you are
+upgrading, the upgrade rolls back to the previous release. The settings that
+are refused, whether they come from the config file, environment, or flags, are:
 
-In standalone mode, embedded services start automatically unless explicitly disabled.
+- `mode` set to anything other than `"standalone"`
+- `start_embedded = false` in any of `[etcd]`, `[containerd]`, `[buildkit]`,
+  `[victorialogs]`, or `[victoriametrics]`
+
+`mode = "standalone"`, `--mode standalone`, and `start_embedded = true` are still
+accepted and have no effect. So are `[etcd] endpoints`, `[buildkit] socket_path`,
+and the `[victorialogs]` and `[victoriametrics]` `address` settings, which only
+took effect alongside one of the refused settings above. Configs written by
+`miren server config generate --defaults` in earlier releases include the
+Victoria addresses, and they keep working.
+
+## Coordinator metadata
+
+On startup, the coordinator imports existing small metadata into etcd. This includes the cluster CA and API credentials, cloud registration, workload identity keys and anchor history, OIDC session signing key, ACME accounts and certificates, secret keyring, and runner-fleet upgrade checkpoints. Ordinary standalone servers use this storage; redundancy is not required.
+
+Etcd is authoritative after migration. Local credential files are recoverable caches, except for the cluster sealing key described below. Registration commands and manual workload-key changes still take effect on the next coordinator start; the coordinator fingerprints its caches to distinguish deliberate changes from unchanged files or a restore directory.
+
+Registration and workload identity are restored before their boot consumers run, including telemetry and cloud storage clients. Credential caches are published atomically; the CA's private `ca.bundle` keeps its certificate and key in one bootstrap generation, with separate PEM files retained for compatibility.
+
+An etcd snapshot is not a full data-path backup. Server configuration, node-local executor state, SQLite databases, OCI images, application disks, staged disk transfers, build data, logs, and metrics remain outside etcd and need their own backup strategy. Keep the same server configuration when restoring, including the etcd prefix and workload identity hostname settings.
+
+Flannel cleans its etcd registry keys with `path.Join`. For example, runners may have `/miren//sub/flannel` saved in their configuration, but their actual leases and network config remain under `/miren/sub/flannel/`. RBAC covers that cleaned key range; existing runners do not need to rejoin. Keep the configured etcd prefix unchanged during the upgrade because other stores also depend on it.
+
+:::warning[Back up the cluster sealing key separately]
+On first migration, Miren generates a random 32-byte key at `<data-path>/server/cluster-sealing.key`, with permissions `0600`. This host-only key seals the CA, the secret keyring, and all other coordinator metadata in etcd. It is never stored in etcd or sent to Miren Cloud. An etcd snapshot alone cannot decrypt this metadata or mint cluster identities.
+
+Back up this key to a separate, restricted location, not alongside snapshots uploaded to Cloud. Losing both the host key and its backup makes encrypted metadata and secrets unrecoverable. Miren does not regenerate a missing key when metadata already exists; there is no automatic sealing-key rotation or KMS recovery yet.
+
+To restore on another host, restore the etcd snapshot and place the **original** key at `<data-path>/server/cluster-sealing.key` with permissions `0600` **before starting the coordinator**. No other original metadata files are required. Keep the same server configuration and etcd prefix. A wrong or missing key fails startup instead of overwriting the restored metadata.
+
+Protect snapshots with restricted access as well: application/entity data is not all encrypted. Migration completes only after a successful coordinator startup; retain existing filesystem backups until then. The sealing key remains required for every later backup and restore.
+:::
 
 ## Top-Level Fields
 
 | Field | Type | Default | Env Var | CLI Flag |
 |-------|------|---------|---------|----------|
-| `mode` | string | `standalone` | `MIREN_MODE` | `--mode`, `-m` |
 | `labs` | string[] | `[]` | `MIREN_LABS` | `--labs` |
 
 ## `[server]` — Core Settings {#server}
@@ -219,35 +248,48 @@ Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provide
 
 ## `[etcd]` — Etcd Settings {#etcd}
 
-Miren uses etcd as its entity store. In standalone mode, an embedded etcd server starts automatically.
+Miren uses etcd as its entity store and runs it embedded.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `endpoints` | string[] | `[]` | Etcd endpoints (auto-configured when embedded) | `MIREN_ETCD_ENDPOINTS` | `--etcd`, `-e` |
 | `prefix` | string | `/miren` | Key prefix in etcd | `MIREN_ETCD_PREFIX` | `--etcd-prefix`, `-p` |
-| `start_embedded` | bool | `true`\* | Start embedded etcd server | `MIREN_ETCD_START_EMBEDDED` | `--start-etcd` |
 | `client_port` | int | `12379` | Embedded etcd client port | `MIREN_ETCD_CLIENT_PORT` | `--etcd-client-port` |
 | `peer_port` | int | `12380` | Embedded etcd peer port | `MIREN_ETCD_PEER_PORT` | `--etcd-peer-port` |
 | `http_client_port` | int | `12381` | Embedded etcd HTTP client port (bound to loopback) | `MIREN_ETCD_HTTP_CLIENT_PORT` | `--etcd-http-client-port` |
-
-\* Defaults to `true` in standalone mode only.
 
 :::info[Embedded etcd always comes up with mTLS]
 `client_port` binds to all interfaces since embedded etcd always starts with
 mTLS. `peer_port` and `http_client_port` bind to `127.0.0.1`. etcd's JSON
 gateway is disabled outright; its health and metrics endpoints are
 unaffected.
+
+Before importing coordinator credentials, Miren enables etcd certificate-identity
+authorization. The coordinator's `etcd-client-coordinator` certificate has
+administrative access; enrolled runners are restricted to `<prefix>/sub/flannel/`
+and cannot read or modify coordinator credentials. Existing runner identities
+are provisioned on startup. Direct administrative etcd clients must use the
+coordinator certificate and key under `<data-path>/etcd-certs`.
+
+Before upgrading an existing coordinator, check that every runner certificate's
+CommonName is `runner-<runner_id>`. Re-provision runners with a different name
+using `miren runner remove` and `miren runner join` with the same runner ID before
+the coordinator upgrade; otherwise their etcd networking may stop when auth is
+enabled. Certificate refresh also provisions a verified legacy CommonName when
+it can still be mapped to a registered node, but this does not repair workload
+token authorization or guarantee uninterrupted networking during the upgrade.
+
+For a downgrade to a binary predating etcd authorization, restore its
+pre-upgrade etcd snapshot using the managed rollback path. An in-place binary
+downgrade leaves authorization enabled: older maintenance clients and newly
+joined runners do not have the required etcd identities.
 :::
 
 ## `[containerd]` — Containerd Settings {#containerd}
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded containerd daemon | `MIREN_CONTAINERD_START_EMBEDDED` | `--start-containerd` |
 | `binary_path` | string | `containerd` | Path to containerd binary | `MIREN_CONTAINERD_BINARY_PATH` | `--containerd-binary` |
-| `socket_path` | string | — | Path to containerd socket | `MIREN_CONTAINERD_SOCKET_PATH` | `--containerd-socket` |
-
-\* Defaults to `true` in standalone mode only.
+| `socket_path` | string | `<data_path>/containerd/containerd.sock` | Socket the embedded containerd listens on | `MIREN_CONTAINERD_SOCKET_PATH` | `--containerd-socket` |
 
 ## `[buildkit]` — BuildKit Settings {#buildkit}
 
@@ -255,13 +297,9 @@ Controls the BuildKit daemon used for building container images.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded BuildKit daemon | `MIREN_BUILDKIT_START_EMBEDDED` | `--start-buildkit` |
-| `socket_path` | string | — | Path to external BuildKit socket (distributed mode) | `MIREN_BUILDKIT_SOCKET_PATH` | `--buildkit-socket` |
 | `socket_dir` | string | — | Directory for embedded BuildKit socket | `MIREN_BUILDKIT_SOCKET_DIR` | `--buildkit-socket-dir` |
 | `gc_keep_storage` | string | `10GB` | Maximum BuildKit layer cache size | `MIREN_BUILDKIT_GC_KEEP_STORAGE` | `--buildkit-gc-storage` |
 | `gc_keep_duration` | string | `7d` | How long to keep cache entries | `MIREN_BUILDKIT_GC_KEEP_DURATION` | `--buildkit-gc-duration` |
-
-\* Defaults to `true` in standalone mode only.
 
 ## `[victorialogs]` — Log Storage Settings {#victorialogs}
 
@@ -269,16 +307,12 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded VictoriaLogs server | `MIREN_VICTORIALOGS_START_EMBEDDED` | `--start-victorialogs` |
 | `http_port` | int | `9428` | HTTP port in embedded mode | `MIREN_VICTORIALOGS_HTTP_PORT` | `--victorialogs-http-port` |
 | `retention_period` | string | `30d` | Retention period (e.g. `30d`, `2w`, `1y`) | `MIREN_VICTORIALOGS_RETENTION_PERIOD` | `--victorialogs-retention` |
-| `address` | string | `victorialogs:9428` | Address when not using embedded | `MIREN_VICTORIALOGS_ADDRESS` | `--victorialogs-addr` |
 
-\* Defaults to `true` in standalone mode only.
-
-Miren snapshots embedded VictoriaLogs data before image upgrades. See
+Miren snapshots VictoriaLogs data before image upgrades. See
 [VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md) for backup
-retention and rollback details. External VictoriaLogs is not managed by Miren.
+retention and rollback details.
 
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 
@@ -288,12 +322,8 @@ destination and are not copied into this instance.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded VictoriaMetrics server | `MIREN_VICTORIAMETRICS_START_EMBEDDED` | `--start-victoriametrics` |
 | `http_port` | int | `8428` | HTTP port in embedded mode | `MIREN_VICTORIAMETRICS_HTTP_PORT` | `--victoriametrics-http-port` |
 | `retention_period` | string | `1` | Retention period in months | `MIREN_VICTORIAMETRICS_RETENTION_PERIOD` | `--victoriametrics-retention` |
-| `address` | string | `victoriametrics:8428` | Address when not using embedded | `MIREN_VICTORIAMETRICS_ADDRESS` | `--victoriametrics-addr` |
-
-\* Defaults to `true` in standalone mode only.
 
 ## `[telemetry.metrics]` — Managed Application Metrics {#managed-app-metrics}
 

@@ -295,8 +295,16 @@ func (c *DiskVolumeController) reconcileVolumeAbsent(ctx context.Context, volume
 
 	switch volume.ActualState {
 	case storage_v1alpha.DV_DELETED:
+		unlock, err := c.lockVolumeDeletion(ctx, entityId, volume.CloudVolumeId)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		volState := c.state.GetVolume(entityId)
 		if volState != nil && volState.DiskPath != "" && c.ops.VolumePathExists(volState.DiskPath) {
+			if err := c.preserveLegacyLoopIdentities(volState); err != nil {
+				return err
+			}
 			c.log.Info("cleaning up local volume data", "entity_id", entityId, "disk_path", volState.DiskPath)
 			if err := c.ops.RemoveVolumeDir(volState.DiskPath); err != nil {
 				c.log.Warn("failed to remove volume directory", "entity_id", entityId, "error", err)
@@ -418,6 +426,11 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 
 func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
 	entityId := string(volume.ID)
+	unlock, err := c.lockVolumeDeletion(ctx, entityId, volume.CloudVolumeId)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	c.log.Info("deleting disk volume", "entity_id", entityId)
 
@@ -447,6 +460,11 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 		}
 	}
 
+	if volState != nil {
+		if err := c.preserveLegacyLoopIdentities(volState); err != nil {
+			return err
+		}
+	}
 	if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_DELETING, "", ""); err != nil {
 		c.log.Warn("failed to update volume state to deleting", "error", err)
 	}
@@ -486,6 +504,96 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 		c.log.Warn("failed to update volume state to deleted", "error", err)
 	}
 
+	return nil
+}
+
+// Keep the original directory available until final publication and lease
+// release finish. The lock also excludes a watcher batch already in flight.
+func (c *DiskVolumeController) lockVolumeDeletion(ctx context.Context, entityId, cloudID string) (func(), error) {
+	accelerator := false
+	if volume := c.state.GetVolume(entityId); volume != nil {
+		accelerator = volume.Mode == storage_v1alpha.VM_ACCELERATOR
+		if volume.CloudVolumeId != "" {
+			cloudID = volume.CloudVolumeId
+		}
+	}
+	if cloudID == "" {
+		for _, mount := range c.state.ListMounts() {
+			if mount.VolumeId == entityId && mount.CloudVolumeId != "" {
+				cloudID = mount.CloudVolumeId
+				break
+			}
+		}
+	}
+	unlock, err := c.state.LockCloudVolume(ctx, cloudID)
+	if err != nil {
+		return nil, err
+	}
+	if cloudID == "" {
+		return unlock, nil
+	}
+	if c.state.HasPendingCloudUpload(cloudID) {
+		unlock()
+		return nil, fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+	}
+	for _, mount := range c.state.ListMounts() {
+		// Loop modes have no final log drain and retain their inode-based
+		// rename/unlink recovery; only accelerator attachments need the path.
+		if mount.VolumeId == entityId && (accelerator || mount.Mode == storage_v1alpha.VM_ACCELERATOR) &&
+			(mount.LeaseOwned || mount.LeaseNonce != "" || mount.LeaseAcquisitionID != "" || mount.DevicePath != "" || mount.Mounted) {
+			unlock()
+			return nil, fmt.Errorf("volume %s still has attachment or lease progress in mount %s", entityId, mount.EntityId)
+		}
+	}
+	return unlock, nil
+}
+
+// Capture legacy ownership before we rename/unlink the only independently
+// known backing file. A device's current pathname is never bootstrap evidence.
+func (c *DiskVolumeController) preserveLegacyLoopIdentities(volume *VolumeState) error {
+	image := filepath.Join(volume.DiskPath, "disk.img")
+	needsCheckpoint := false
+	for _, mount := range c.state.ListMounts() {
+		if mount.VolumeId != volume.EntityId || mount.Mode == storage_v1alpha.VM_ACCELERATOR ||
+			alwaysMount(mount.Mode) || mount.DevicePath == "" {
+			continue
+		}
+		needsCheckpoint = true
+		if mount.BackingIdentity != nil {
+			continue
+		}
+		identity, err := c.mntOps.LoopIdentity(mount.DevicePath)
+		if err != nil {
+			return fmt.Errorf("inspect legacy loop before volume deletion: %w", err)
+		}
+		if identity == nil {
+			continue
+		}
+		identity, err = legacyLoopIdentity(c.mntOps, c.state, volume.EntityId, image, identity)
+		if err != nil {
+			return fmt.Errorf("preserve legacy loop ownership before volume deletion: %w", err)
+		}
+		if identity == nil {
+			mountedDevice, err := c.mntOps.MountDevice(mount.MountPath)
+			if err != nil {
+				return fmt.Errorf("inspect legacy mount before disowning device: %w", err)
+			}
+			if mountedDevice == mount.DevicePath {
+				return fmt.Errorf("mounted device %s has mismatched legacy backing ownership", mountedDevice)
+			}
+			if err := c.state.DisownLegacyMountDeviceAndSave(mount.EntityId, mount.DevicePath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := c.state.SetLegacyMountIdentityAndSave(mount.EntityId, mount.DevicePath, identity); err != nil {
+			return err
+		}
+	}
+	// Existing in-memory identities may be from an earlier failed checkpoint.
+	if needsCheckpoint {
+		return c.state.Save()
+	}
 	return nil
 }
 
@@ -618,6 +726,21 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 
 	// Already mounted — nothing to do
 	if c.mntOps.IsMounted(mountPath) {
+		if volState.BackingIdentity == nil {
+			device, err := c.mntOps.MountDevice(mountPath)
+			if err != nil {
+				return err
+			}
+			identity, err := verifiedLoopIdentity(c.mntOps, device, filepath.Join(volState.DiskPath, "disk.img"))
+			if err != nil {
+				return err
+			}
+			volState.DevicePath, volState.BackingIdentity = device, identity
+			c.state.SetVolume(entityId, volState)
+			if err := c.state.Save(); err != nil {
+				return err
+			}
+		}
 		if !volState.Mounted || volState.MountPath != mountPath {
 			volState.MountPath = mountPath
 			volState.Mounted = true
@@ -656,6 +779,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 	// our target path. We now own it — rollback cleanup on failure will
 	// detach it like any other device we created.
 	var devicePath string
+	var backingIdentity *BackingIdentity
 	existing, findErr := c.mntOps.FindLoopByBacking(imagePath)
 	if findErr != nil {
 		// Fail closed: if we can't see the kernel's loop state, we
@@ -671,6 +795,11 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 			"device", existing,
 		)
 		devicePath = existing
+		var err error
+		backingIdentity, err = verifiedLoopIdentity(c.mntOps, devicePath, imagePath)
+		if err != nil {
+			return fmt.Errorf("verify adopted loop backing: %w", err)
+		}
 	} else {
 		// A loop device may still be holding the file that used to be at this
 		// path — after a restore replaced the image, say. It is not adopted,
@@ -685,7 +814,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 		volState.DevicePath = ""
 
 		var err error
-		devicePath, err = c.mntOps.LoopAttach(imagePath)
+		devicePath, backingIdentity, err = c.mntOps.LoopAttach(imagePath)
 		if err != nil {
 			return fmt.Errorf("failed to attach loop device: %w", err)
 		}
@@ -756,6 +885,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 
 	// Update state with mount info
 	volState.DevicePath = devicePath
+	volState.BackingIdentity = backingIdentity
 	volState.MountPath = mountPath
 	volState.Mounted = true
 	c.state.SetVolume(entityId, volState)
@@ -1002,6 +1132,17 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 
 		c.log.Info("cleaning up orphaned disk volume", "entity_id", volState.EntityId)
 
+		unlock, err := c.lockVolumeDeletion(ctx, volState.EntityId, volState.CloudVolumeId)
+		if err != nil {
+			c.log.Warn("cannot delete orphaned volume", "entity_id", volState.EntityId, "error", err)
+			continue
+		}
+		if err := c.preserveLegacyLoopIdentities(volState); err != nil {
+			unlock()
+			c.log.Warn("cannot preserve orphan loop ownership", "entity_id", volState.EntityId, "error", err)
+			continue
+		}
+
 		// Unmount orphaned alwaysMount volumes before removing
 		if alwaysMount(volState.Mode) && volState.Mounted {
 			c.unmountVolume(volState)
@@ -1015,6 +1156,7 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 
 		c.state.DeleteVolume(volState.EntityId)
 		orphanCleaned = true
+		unlock()
 	}
 
 	if orphanCleaned {

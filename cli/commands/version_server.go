@@ -28,6 +28,9 @@ type serverVersion struct {
 // RPC, which itself means it is older than this CLI.
 var errServerVersionUnsupported = errors.New("server does not report its version")
 
+// Distinguish a failed call after resolution from failures to establish a client.
+var errServerVersionQuery = errors.New("query server version")
+
 func fetchServerVersion(ctx *Context) (*serverVersion, error) {
 	client, err := ctx.RPCClient(serverInfoService)
 	if err != nil {
@@ -40,7 +43,7 @@ func fetchServerVersion(ctx *Context) (*serverVersion, error) {
 
 	results, err := server_v1alpha.NewServerInfoClient(client).Version(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("query server version: %w", err)
+		return nil, fmt.Errorf("%w: %w", errServerVersionQuery, err)
 	}
 	info := &serverVersion{
 		Version:     results.Version(),

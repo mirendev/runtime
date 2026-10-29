@@ -47,6 +47,10 @@ func (m *mockCloudDiskClient) AcquireLease(_ context.Context, volumeID string) (
 	return m.acquireLeaseNonce, m.acquireLeaseErr
 }
 
+func (m *mockCloudDiskClient) AcquireLeaseWithIdentity(ctx context.Context, volumeID, _ string) (string, error) {
+	return m.AcquireLease(ctx, volumeID)
+}
+
 func (m *mockCloudDiskClient) ReleaseLease(_ context.Context, volumeID, nonce string) error {
 	m.releaseLeaseCalls = append(m.releaseLeaseCalls, mockReleaseLease{volumeID, nonce})
 	return m.releaseLeaseErr
@@ -534,6 +538,7 @@ func TestLeaseReleasedOnUnmount(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	state := NewState()
+	state.SetPath(tmpDir)
 	// The local entity id and the cloud id differ; the release must use the
 	// cloud id, resolved through volume state, not the local id on the mount
 	// (MIR-1634).
@@ -548,16 +553,21 @@ func TestLeaseReleasedOnUnmount(t *testing.T) {
 		VolumeId:   "disk_volume/vol1",
 		LeaseNonce: "nonce-abc",
 	})
+	state.SetMount("active", &MountState{
+		EntityId: "active", CloudVolumeId: "cloud-active", DevicePath: "/dev/lbd0",
+		Mounted: true, LeaseNonce: "nonce-active",
+	})
 
 	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), state, newMockDiskMountOps())
 	mc.SetCloudClient(cloud)
 
-	// Shutdown should release leases
+	// Only detached leases can be released; app tasks can outlive the daemon.
 	mc.Shutdown()
 
 	require.Len(t, cloud.releaseLeaseCalls, 1)
 	assert.Equal(t, "vol-cloud-1", cloud.releaseLeaseCalls[0].volumeID)
 	assert.Equal(t, "nonce-abc", cloud.releaseLeaseCalls[0].nonce)
+	assert.Equal(t, "nonce-active", state.LeaseNonceForCloudVolume("cloud-active"))
 }
 
 func TestLeaseNotReleasedWithoutNonce(t *testing.T) {

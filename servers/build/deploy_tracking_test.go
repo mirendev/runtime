@@ -331,7 +331,7 @@ func TestEphemeralFromArgs(t *testing.T) {
 	got := ephemeralFromArgs(fakeBuildArgs{hasLabel: true, label: "pr-1"})
 	require.NotNil(t, got)
 	assert.Equal(t, "pr-1", got.label)
-	assert.Equal(t, "24h", got.ttl, "ttl defaults when unset")
+	assert.Equal(t, "7d", got.ttl, "ttl defaults when unset")
 
 	got = ephemeralFromArgs(fakeBuildArgs{hasLabel: true, label: "pr-1", hasTTL: true, ttl: "48h"})
 	require.NotNil(t, got)

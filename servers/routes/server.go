@@ -1,16 +1,11 @@
-// Package routes serves operator controls over existing HTTP routes.
-//
-// Routes are otherwise managed straight through the entity store, so this
-// package is deliberately narrow: it exists for the operations where the server
-// has to establish something the caller cannot be trusted to assert about
-// itself. Maintenance windows record who opened them and when, and both of
-// those are only worth reading if the server stamped them.
+// Package routes serves safe, ownership-checked route management.
 package routes
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/api/ingress"
@@ -19,8 +14,9 @@ import (
 )
 
 type Server struct {
-	Log *slog.Logger
-	IC  *ingress.Client
+	Log      *slog.Logger
+	IC       *ingress.Client
+	defaults sync.Mutex
 }
 
 var _ ingress_v1alpha.Routes = (*Server)(nil)

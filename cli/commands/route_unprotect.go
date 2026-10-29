@@ -3,9 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/entity"
 )
 
 func RouteUnprotect(ctx *Context, opts struct {
@@ -21,42 +19,27 @@ func RouteUnprotect(ctx *Context, opts struct {
 		return fmt.Errorf("--default cannot be used with a hostname")
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	var route *ingress_v1alpha.HttpRoute
-	var routeLabel string
-
+	ic := ingress_v1alpha.NewRoutesClient(client)
+	res, err := ic.Show(ctx, opts.Host, opts.Default)
+	if err != nil {
+		return err
+	}
+	routeLabel := opts.Host
 	if opts.Default {
-		route, err = ic.LookupDefault(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to lookup default route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("no default route configured")
-		}
 		routeLabel = "default"
-	} else {
-		route, err = ic.Lookup(ctx, opts.Host)
-		if err != nil {
-			return fmt.Errorf("failed to lookup route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("route not found for host: %s", opts.Host)
-		}
-		routeLabel = opts.Host
 	}
 
-	if entity.Empty(route.AuthProvider) {
+	if !res.Route().Protected() {
 		ctx.Printf("Route is not protected: %s\n", routeLabel)
 		return nil
 	}
 
-	_, err = ic.DetachAuthProviderFromRoute(ctx, route)
+	_, err = ic.Unprotect(ctx, opts.Host, opts.Default)
 	if err != nil {
 		return fmt.Errorf("failed to remove route protection: %w", err)
 	}

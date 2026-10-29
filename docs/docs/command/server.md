@@ -23,7 +23,7 @@ miren server [flags]
 - `--app-version-retention-period` — Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
 - `--buildkit-gc-duration` — How long to keep BuildKit cache entries (e.g., 7d, 24h)
 - `--buildkit-gc-storage` — Maximum BuildKit layer cache size (e.g., 10GB, 50GB)
-- `--buildkit-socket` — Path to external BuildKit Unix socket (for distributed mode)
+- `--buildkit-socket` — Retired and ignored: miren always runs its own BuildKit
 - `--buildkit-socket-dir` — Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)
 - `--config` — Path to configuration file
 - `--config-cluster-name, -C` — Name for this cluster in client config and as the telemetry label fallback when it is not registered with Miren Cloud
@@ -34,7 +34,7 @@ miren server [flags]
 - `--deployment-retention-period` — Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely.
 - `--disk-mode` — Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)
 - `--dns-names` — Additional DNS names assigned to the server cert
-- `--etcd, -e` — Etcd endpoints
+- `--etcd, -e` — Retired and ignored: miren always runs its own etcd
 - `--etcd-client-port` — Etcd client port
 - `--etcd-http-client-port` — Etcd HTTP client port
 - `--etcd-peer-port` — Etcd peer port
@@ -48,7 +48,7 @@ miren server [flags]
 - `--labs` — Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable.
 - `--metrics-remote-write-audience` — Deprecated: use --telemetry-metrics-audience
 - `--metrics-remote-write-url` — Deprecated: use --telemetry-metrics-remote-write-url
-- `--mode, -m` — Server mode: standalone (default), distributed (experimental)
+- `--mode, -m` — Deprecated: standalone is the only server mode
 - `--release-path` — Path to release directory containing binaries
 - `--runner-address` — Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444".
 - `--runner-id, -r` — Runner ID
@@ -57,20 +57,20 @@ miren server [flags]
 - `--self-signed-tls` — Use self-signed certificates for TLS (for development/testing only)
 - `--serve-tls` — Deprecated and ignored. Retained as a no-op so existing systemd unit files, env vars, and config files from pre-RFD-84 installs still parse. Use ingress.mode to pick the deployment shape.
 - `--skip-client-config` — Skip writing client config file to clientconfig.d
-- `--start-buildkit` — Start embedded BuildKit daemon for container image builds
-- `--start-containerd` — Start embedded containerd daemon
-- `--start-etcd` — Start embedded etcd server
-- `--start-victorialogs` — Start embedded VictoriaLogs server
-- `--start-victoriametrics` — Start embedded VictoriaMetrics server
+- `--start-buildkit` — Retired: BuildKit always runs embedded
+- `--start-containerd` — Retired: containerd always runs embedded
+- `--start-etcd` — Retired: etcd always runs embedded
+- `--start-victorialogs` — Retired: VictoriaLogs always runs embedded
+- `--start-victoriametrics` — Retired: VictoriaMetrics always runs embedded
 - `--stop-sandboxes-on-shutdown` — Stop all sandboxes when server shuts down (useful in development)
 - `--telemetry-metrics-audience` — Workload identity audience for the metrics destination
 - `--telemetry-metrics-remote-write-url` — Prometheus Remote Write destination for managed application metrics
 - `--telemetry-traces-audience` — Authenticate trace export with a workload identity token for this audience
 - `--telemetry-traces-endpoint` — OTLP/HTTP base URL for traces (defaults to OTEL_EXPORTER_OTLP_ENDPOINT)
-- `--victorialogs-addr` — VictoriaLogs address (when not using embedded)
+- `--victorialogs-addr` — Retired and ignored: miren always runs its own VictoriaLogs
 - `--victorialogs-http-port` — VictoriaLogs HTTP port in embedded mode
 - `--victorialogs-retention` — VictoriaLogs retention period (e.g. 30d, 2w, 1y)
-- `--victoriametrics-addr` — VictoriaMetrics address (when not using embedded)
+- `--victoriametrics-addr` — Retired and ignored: miren always runs its own VictoriaMetrics
 - `--victoriametrics-http-port` — VictoriaMetrics HTTP port in embedded mode
 - `--victoriametrics-retention` — VictoriaMetrics retention period in months
 
@@ -82,10 +82,10 @@ miren server [flags]
 
 ## Examples
 
-**Start in standalone mode:**
+**Start the server:**
 
 ```bash
-miren server --mode standalone
+sudo miren server
 ```
 
 ## Subcommands

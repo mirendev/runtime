@@ -1,6 +1,6 @@
 ---
 title: Workload Identity
-description: Every Miren sandbox receives a signed OIDC identity token it can use to authenticate to external services — no long-lived cloud credentials baked into your app.
+description: Every Miren sandbox gets a signed OIDC token for authenticating to external services, so no long-lived cloud credentials live in your app.
 keywords: [workload identity, oidc, jwt, aws sts, federation, sandbox, token, identity token]
 ---
 
@@ -239,7 +239,7 @@ The issuer URL is whichever anchor the cluster is using — see below. Either wa
 
 Two things have to be true for federation to work: something has to *sign* the tokens, and something has to *serve* the public keys an outside verifier fetches to check them. Miren splits those deliberately.
 
-**The signing key never leaves your cluster.** It's generated on the cluster, written to `<data_path>/server/workload-identity.key`, and is not uploaded anywhere — not to Miren Cloud, not to us. That's the property that matters: a compromise of Miren Cloud yields public keys and no ability to mint an identity for your workloads.
+**The signing key never leaves your cluster.** It's generated on the cluster, stored authoritatively in etcd with a local cache at `<data_path>/server/workload-identity.key`, and is not uploaded to Miren Cloud or to us. That's the property that matters: a compromise of Miren Cloud yields public keys and no ability to mint an identity for your workloads. Etcd backups contain the signing keys and must be protected as credentials.
 
 Who serves the keys follows from registration (see [server config](./server-config.md#workload-identity)):
 
@@ -321,7 +321,7 @@ The token server authenticates on-demand requests using a per-sandbox secret (`M
 
 ### Key rotation is operator-driven
 
-The cluster's signing key lives alongside the server data. Rotation supports an overlap window so in-flight tokens keep verifying:
+The cluster's signing key is held in etcd and cached alongside the server data. Local key changes are imported on the next coordinator start. Rotation supports an overlap window so in-flight tokens keep verifying:
 
 - The current key can be demoted to a `.prev` file, which is still published in the JWKS for verification but no longer used to sign.
 - Additional live keys can be placed in a `workload-identity.d/` directory; all live keys are published, but only the primary signs.

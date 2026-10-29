@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,8 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -264,6 +267,8 @@ func TestSandbox(t *testing.T) {
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
 		case exitStatus = <-ch:
+			// Process exit can precede stdout copying; drain it before closing the pipe.
+			proc.IO().Wait()
 			pw.Close()
 		}
 
@@ -346,6 +351,20 @@ func TestSandbox(t *testing.T) {
 
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
+
+		exec, err := co.sagaStorage.Get(ctx, createSandboxSagaID(&tco))
+		r.NoError(err)
+		var boot bootContainersOut
+		r.NoError(json.Unmarshal(exec.ExecutedActions[actionBootCtrs].Output, &boot))
+		r.Len(boot.StartupTimings, 1)
+		timing := boot.StartupTimings[0]
+		r.Equal("sort", timing.Name)
+		r.Equal("mn-sort:latest", timing.Image)
+		r.Equal("hit", timing.ImageCache)
+		r.Len(timing.DurationsNS, 4)
+		for _, stage := range []string{"image_lookup", "container_create", "task_create", "task_start"} {
+			r.Positive(timing.DurationsNS[stage], stage)
+		}
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
@@ -1417,8 +1436,8 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:  "app",
 					Image: "docker.io/library/busybox:latest",
-					// As PID 1 with no handler installed, sleep ignores SIGTERM.
-					Command:         "exec sleep 3600",
+					// Install SIGTERM ignore before readiness; it survives exec.
+					Command:         `trap "" TERM; echo ready; exec sleep 3600`,
 					ShutdownTimeout: "1s",
 				},
 			},
@@ -1446,6 +1465,19 @@ func TestSandbox(t *testing.T) {
 			sb.Encode))
 
 		r.NoError(co.Create(ctx, &tco, meta))
+
+		r.Eventually(func() bool {
+			logs, err := testDeps.Logs.Read(ctx, id.String(), observability.WithLimit(100))
+			if err != nil {
+				return false
+			}
+			for _, entry := range logs {
+				if entry.Body == "ready" {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "app must ignore SIGTERM before shutdown begins")
 
 		r.NoError(co.StopSandbox(ctx, id, &tco))
 
@@ -1491,7 +1523,7 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:            "app",
 					Image:           "docker.io/library/busybox:latest",
-					Command:         "exec sleep 3600",
+					Command:         `trap "" TERM; echo ready; exec sleep 3600`,
 					ShutdownTimeout: "3s",
 				},
 			},
@@ -1522,6 +1554,19 @@ func TestSandbox(t *testing.T) {
 		defer func() {
 			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id, &tco))
 		}()
+
+		r.Eventually(func() bool {
+			logs, err := testDeps.Logs.Read(ctx, id.String(), observability.WithLimit(100))
+			if err != nil {
+				return false
+			}
+			for _, entry := range logs {
+				if entry.Body == "ready" {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "app must ignore SIGTERM before shutdown begins")
 
 		drainCtx, drainCancel := context.WithTimeout(ctx, time.Second)
 		defer drainCancel()
@@ -1710,9 +1755,14 @@ func TestSandbox(t *testing.T) {
 
 // mockTask implements containerd.Task for testing monitorTaskExit
 type mockTask struct {
+	mu        sync.Mutex
 	waitCalls int
-	waitErr   error
 	waitCh    chan containerd.ExitStatus
+
+	// rewait, if set, supplies the status each Wait call delivers. Like the
+	// real client, Wait never fails itself: an RPC error arrives on the
+	// channel as an errored status.
+	rewait func(call int) containerd.ExitStatus
 }
 
 func (m *mockTask) ID() string                  { return "mock-task" }
@@ -1723,12 +1773,33 @@ func (m *mockTask) Delete(context.Context, ...containerd.ProcessDeleteOpts) (*co
 }
 func (m *mockTask) Kill(context.Context, syscall.Signal, ...containerd.KillOpts) error { return nil }
 func (m *mockTask) Wait(context.Context) (<-chan containerd.ExitStatus, error) {
+	m.mu.Lock()
 	m.waitCalls++
-	if m.waitCalls > 1 {
-		// After the first call, return an error to simulate failed re-establishment
-		return nil, m.waitErr
+	call := m.waitCalls
+	m.mu.Unlock()
+
+	if m.rewait == nil {
+		return m.waitCh, nil
 	}
-	return m.waitCh, nil
+	ch := make(chan containerd.ExitStatus, 1)
+	ch <- m.rewait(call)
+	return ch, nil
+}
+
+func (m *mockTask) calls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.waitCalls
+}
+
+func errStatus(code codes.Code) containerd.ExitStatus {
+	return *containerd.NewExitStatus(containerd.UnknownExitStatus, time.Time{}, grpcstatus.Error(code, "simulated"))
+}
+
+func shortExitWaitBackoff(t *testing.T) {
+	origBase, origMax := exitWaitRetryBase, exitWaitRetryMax
+	exitWaitRetryBase, exitWaitRetryMax = 10*time.Millisecond, 40*time.Millisecond
+	t.Cleanup(func() { exitWaitRetryBase, exitWaitRetryMax = origBase, origMax })
 }
 func (m *mockTask) CloseIO(context.Context, ...containerd.IOCloserOpts) error { return nil }
 func (m *mockTask) Resize(ctx context.Context, w, h uint32) error             { return nil }
@@ -1793,16 +1864,12 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 	exitStatus := containerd.NewExitStatus(containerd.UnknownExitStatus, time.Time{}, testErr)
 	exitCh <- *exitStatus
 
-	// Create a mock task that will fail to re-establish monitoring
-	// Set waitCalls to 1 so the first call to Wait() from inside monitorTaskExit
-	// (which happens when trying to re-establish after the error status)
-	// will return an error immediately
+	// Re-establishing finds the task gone, which ends monitoring.
+	shortExitWaitBackoff(t)
 	task := &mockTask{
-		waitCalls: 1,
-		waitErr:   fmt.Errorf("task not found"),
+		rewait: func(int) containerd.ExitStatus { return errStatus(codes.NotFound) },
 	}
 
-	// Call monitorTaskExit - it should ignore the error status and fail to re-establish
 	co.monitorTaskExit(&sb, "test-container", "app", task, exitCh)
 
 	// Verify the sandbox status was NOT changed to STOPPED
@@ -1815,6 +1882,97 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 		checkSb.Decode(result.Entity().Entity())
 		return checkSb.Status == compute.RUNNING
 	}, 5*time.Second, 50*time.Millisecond, "sandbox should remain RUNNING when exit status has an error")
+}
+
+// TestMonitorTaskExitBacksOffWhileContainerdDown reproduces MIR-2102: with
+// containerd unreachable, every Wait delivers an errored status at once, and
+// the monitor used to re-wait in a hot loop.
+func TestMonitorTaskExitBacksOffWhileContainerdDown(t *testing.T) {
+	shortExitWaitBackoff(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &SandboxController{
+		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		topCtx: ctx,
+	}
+
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitCh <- errStatus(codes.Unavailable)
+	task := &mockTask{
+		rewait: func(int) containerd.ExitStatus { return errStatus(codes.Unavailable) },
+	}
+
+	var sb compute.Sandbox
+	sb.ID = entity.Id("sandbox/test")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.monitorTaskExit(&sb, "test-container", "app", task, exitCh)
+	}()
+
+	// 10+20+40+40+... ms: about 8 waits in 300ms. A spin does millions.
+	time.Sleep(300 * time.Millisecond)
+	calls := task.calls()
+	require.GreaterOrEqual(t, calls, 3, "monitor should keep retrying")
+	require.LessOrEqual(t, calls, 15, "monitor should back off between retries")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("monitor did not stop when the controller context was cancelled")
+	}
+}
+
+// TestMonitorTaskExitRecoversAfterOutage checks that a monitor which rode out
+// a containerd outage still records the process's exit once Wait works again.
+func TestMonitorTaskExitRecoversAfterOutage(t *testing.T) {
+	r := require.New(t)
+	shortExitWaitBackoff(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+	r.NoError(co.Init(ctx))
+
+	id := entity.Id(idgen.GenNS("sb"))
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitCh <- errStatus(codes.Unavailable)
+	exitedAt := time.Now().Truncate(time.Second)
+	task := &mockTask{
+		rewait: func(call int) containerd.ExitStatus {
+			if call < 3 {
+				return errStatus(codes.Unavailable)
+			}
+			return *containerd.NewExitStatus(3, exitedAt, nil)
+		},
+	}
+
+	co.monitorTaskExit(&sb, "test-container", "app", task, exitCh)
+
+	result, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+	var got compute.Sandbox
+	got.Decode(result.Entity().Entity())
+	r.Equal(compute.STOPPED, got.Status)
+	r.Equal(int64(3), got.Exit.Code)
+	r.Equal(3, task.calls())
 }
 
 func TestRecordExitStartupOutcome(t *testing.T) {

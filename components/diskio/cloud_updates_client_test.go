@@ -84,6 +84,9 @@ func TestCloudUpdatesClientUploadFullFlow(t *testing.T) {
 	crch := crc32.New(crc32cTable)
 	crch.Write(payload)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(crch.Sum(nil)), completeBody.CRC32C)
+	assert.Equal(t, completeBody.MD5, begunBody.MD5)
+	assert.Equal(t, completeBody.CRC32C, begunBody.CRC32C)
+	assert.Equal(t, int64(len(payload)), begunBody.Size)
 }
 
 func TestCloudUpdatesClientUploadValidatesRequest(t *testing.T) {
@@ -348,4 +351,59 @@ func TestCloudUpdatesClientListStaysAscendingByDefault(t *testing.T) {
 	require.Len(t, seenQueries, 1)
 	assert.NotContains(t, seenQueries[0], "order=")
 	assert.NotContains(t, seenQueries[0], "limit=")
+}
+
+func TestCloudUpdatesClientRejectsUnmatchedProof(t *testing.T) {
+	for _, state := range []string{"already_active", "prepared"} {
+		for _, field := range []string{"kind", "ordering_key", "md5", "crc32c", "size"} {
+			t.Run(state+"/"+field, func(t *testing.T) {
+				ts, h, auth := newTestUploaderServer(t)
+				h.handler = func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/updates/upload") {
+						t.Error("mismatched claim must not upload or complete")
+						http.Error(w, "unexpected request", http.StatusBadRequest)
+						return
+					}
+					var claim map[string]any
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&claim))
+					claim["update_id"], claim[state] = "volup-existing", true
+					if field == "size" {
+						claim[field] = 99
+					} else {
+						claim[field] = "different"
+					}
+					json.NewEncoder(w).Encode(claim)
+				}
+				client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
+				_, err := client.Upload(context.Background(), "vol-test", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000100000001"}, bytes.NewReader([]byte("payload")), 7)
+				require.ErrorContains(t, err, "update does not match local payload")
+			})
+		}
+	}
+}
+
+func TestCloudPreparationFailsClosedOnOldReplica(t *testing.T) {
+	for _, capability := range []bool{false, true} {
+		t.Run(fmt.Sprint(capability), func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			published := false
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/updates/upload"):
+					json.NewEncoder(w).Encode(map[string]any{"update_id": "volup-old", "upload_url": ts.URL + "/put", "supports_prepare": capability})
+				case r.Method == "PUT":
+					io.Copy(io.Discard, r.Body)
+				case strings.HasSuffix(r.URL.Path, "/complete"):
+					published = true // old handler ignores any prepare_only field
+				default:
+					http.NotFound(w, r)
+				}
+			}
+			client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
+			u := NewCloudSegmentUploaderWithClient(slog.Default(), client, nil)
+			err := u.UploadSegments(context.Background(), "vol-test", t.TempDir(), []string{writeTestSegment(t, "400000000000000100000001", []byte("data"))}, func(string) error { t.Error("must not retire"); return nil })
+			require.Error(t, err)
+			require.False(t, published)
+		})
+	}
 }

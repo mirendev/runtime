@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,7 +26,9 @@ import (
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
@@ -147,6 +150,135 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	info, err = client.GetRun(ctx, terminal.String())
 	require.NoError(t, err)
 	assert.Equal(t, "none", info.Run().WorkerStatus())
+}
+
+func TestWorkloadRunsAccess(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	manager := &AppInfo{Log: slog.Default(), EC: inmem.Client}
+	versions := map[string]string{}
+	runs := map[string]string{}
+	for _, name := range []string{"web", "other"} {
+		appID, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{})
+		require.NoError(t, err)
+		cfg, err := inmem.Client.Create(t.Context(), name+"-config", &core_v1alpha.ConfigVersion{
+			App: appID, Spec: core_v1alpha.ConfigSpec{Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "job"}}},
+		})
+		require.NoError(t, err)
+		ver, err := inmem.Client.Create(t.Context(), name+"-version", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cfg})
+		require.NoError(t, err)
+		require.NoError(t, inmem.Client.Patch(t.Context(), appID, 0, entity.Ref(core_v1alpha.AppActiveVersionId, ver)))
+		versions[name] = ver.String()
+		run, err := inmem.Client.Create(t.Context(), name+"-run", &run_v1alpha.Run{App: appID, Status: run_v1alpha.PENDING})
+		require.NoError(t, err)
+		runs[name] = strings.TrimPrefix(run.String(), "run/")
+	}
+	for _, tc := range []struct {
+		role          string
+		read, exec    bool
+		clusterScoped bool
+	}{
+		{workloadroles.RoleNone, false, false, false},
+		{workloadroles.RoleAppReadonly, true, false, false},
+		{workloadroles.RoleAppDeployer, true, false, false},
+		{workloadroles.RoleAppDebugger, true, true, false},
+		{workloadroles.RoleAppAdmin, true, true, false},
+		{workloadroles.RoleClusterReadonly, true, false, true},
+		{workloadroles.RoleClusterDeployer, true, false, true},
+		{workloadroles.RoleClusterDebugger, true, true, true},
+		{workloadroles.RoleClusterAdmin, true, true, true},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			identity := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"role": tc.role}}
+			if !tc.clusterScoped {
+				identity.Metadata["app"] = "web"
+			}
+			ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithRESTBindAddr("localhost:0"),
+				rpc.WithAuthenticator(catalogAuthenticator{identity}), rpc.WithAuthorizer(oidcauth.NewCompositeAuthorizer(nil)))
+			require.NoError(t, err)
+			ss.Server().ExposeValue("runs", app_v1alpha.AdaptRuns(manager))
+			transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+			defer transport.CloseIdleConnections()
+			httpClient := &http.Client{Transport: transport}
+			for _, app := range []string{"web", "other"} {
+				inScope := app == "web" || tc.clusterScoped
+				body, err := json.Marshal(map[string]any{"task": "job", "command": []string{"true"},
+					"version": versions[app], "request_id": tc.role})
+				require.NoError(t, err)
+				for _, request := range []struct {
+					method, path string
+					allowed      bool
+				}{
+					{http.MethodGet, "/apps/" + app + "/runs", tc.read && inScope},
+					{http.MethodGet, "/runs/" + runs[app], tc.read && inScope},
+					{http.MethodPost, "/runs/" + runs[app] + "/cancel", tc.exec && inScope},
+					{http.MethodPost, "/apps/" + app + "/runs/submit", tc.exec && inScope},
+				} {
+					req, err := http.NewRequestWithContext(ctx, request.method, "https://"+ss.RESTListenAddr()+"/api/v1"+request.path, bytes.NewReader(body))
+					require.NoError(t, err)
+					resp, err := httpClient.Do(req)
+					require.NoError(t, err)
+					require.NoError(t, resp.Body.Close())
+					want := http.StatusForbidden
+					if request.allowed {
+						want = http.StatusOK
+					}
+					assert.Equal(t, want, resp.StatusCode, "%s %s", request.method, request.path)
+				}
+			}
+			cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+			require.NoError(t, err)
+			conn, err := cs.Connect(ss.ListenAddr(), "runs")
+			require.NoError(t, err)
+			defer conn.Close()
+			client := app_v1alpha.NewRunsClient(conn)
+			for _, app := range []string{"web", "other"} {
+				_, err := client.CreateRun(ctx, app, "job", []string{"true"}, false)
+				if tc.exec && (app == "web" || tc.clusterScoped) {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+			}
+		})
+	}
+}
+
+func TestBoundWorkloadsCancelOwnedRuns(t *testing.T) {
+	for _, role := range []string{workloadroles.RoleAppDebugger, workloadroles.RoleAppAdmin} {
+		t.Run(role, func(t *testing.T) {
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			manager := &AppInfo{Log: slog.Default(), EC: inmem.Client}
+			identity := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "web", "role": role}}
+			auth := oidcauth.NewCompositeAuthorizer(nil)
+			ctx := rpc.ContextWithIdentity(t.Context(), identity)
+			// Legacy exec-by-app uses this exported run-manager method for
+			// cleanup, retaining its authorized sandboxexec method context.
+			ctx = rpc.ContextWithAuthorization(ctx, auth, "sandboxexec", "exec")
+			require.NoError(t, auth.Authorize(ctx, identity, "sandboxexec", "exec"))
+			for _, name := range []string{"web", "other"} {
+				appID, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{})
+				require.NoError(t, err)
+				runID, err := inmem.Client.Create(t.Context(), name+"-run", &run_v1alpha.Run{App: appID, Status: run_v1alpha.PENDING})
+				require.NoError(t, err)
+				canceled, err := manager.CancelRunEntity(ctx, runID.String())
+				var stored run_v1alpha.Run
+				require.NoError(t, inmem.Client.GetById(t.Context(), runID, &stored))
+				if name == "web" {
+					require.NoError(t, err)
+					require.True(t, canceled)
+					require.False(t, stored.CancelRequestedAt.IsZero())
+				} else {
+					require.ErrorIs(t, err, rpc.ErrUnauthorized)
+					require.False(t, canceled)
+					require.True(t, stored.CancelRequestedAt.IsZero())
+				}
+			}
+		})
+	}
 }
 
 // A canceled or timed-out run does produce an observed exit code -- the

@@ -112,6 +112,12 @@ Complete reference for all `miren` CLI commands.
 | [`miren deploy target remove`](./command/deploy-target-remove.md) | Remove a deployment target |
 | [`miren deploy target set-default`](./command/deploy-target-set-default.md) | Set the default deployment target |
 
+## detective
+
+| Command | Description |
+|---------|-------------|
+| [`miren detective`](./command/detective.md) | Debug with Workbench and read-only local source tools |
+
 ## disk
 
 | Command | Description |

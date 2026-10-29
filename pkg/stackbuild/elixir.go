@@ -210,7 +210,7 @@ func (s *ElixirStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 	// The builder never becomes the final image, so resolve its config for the
 	// build steps without folding its env into the result (see GoStack).
 	mr := imagemetaresolver.New()
-	builder := llb.Image(imagerefs.GetElixirImage(tag), llb.WithMetaResolver(mr))
+	builder := pinnedImage(imagerefs.GetElixirImage(tag), mr)
 
 	h := &highlevelBuilder{opts}
 

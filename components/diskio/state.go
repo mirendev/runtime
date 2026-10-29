@@ -1,6 +1,7 @@
 package diskio
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,9 +15,12 @@ const stateFileName = "diskio-state.json"
 
 // State represents the persisted state of disk volumes and mounts
 type State struct {
-	mu      sync.RWMutex
-	Volumes map[string]*VolumeState `json:"volumes"`
-	Mounts  map[string]*MountState  `json:"mounts"`
+	mu                  sync.RWMutex
+	Volumes             map[string]*VolumeState `json:"volumes"`
+	Mounts              map[string]*MountState  `json:"mounts"`
+	PendingCloudUploads map[string]string       `json:"pending_cloud_uploads,omitempty"`
+
+	cloudLocks map[string]chan struct{}
 
 	// Path to the state file (not persisted)
 	path string
@@ -59,6 +63,8 @@ type VolumeState struct {
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
 
+	BackingIdentity *BackingIdentity `json:"backing_identity,omitempty"`
+
 	// MountPath is where the volume is mounted (alwaysMount modes only)
 	MountPath string `json:"mount_path,omitempty"`
 
@@ -84,6 +90,13 @@ type MountState struct {
 	// DevicePath is the path to the loop device node
 	DevicePath string `json:"device_path"`
 
+	// BackingPath identifies the attachment independently of reusable device names.
+	BackingPath string `json:"backing_path,omitempty"`
+
+	// BackingIdentity survives loop backing-file rename/unlink. Nil is legacy,
+	// not permission to adopt the identity of whatever occupies DevicePath now.
+	BackingIdentity *BackingIdentity `json:"backing_identity,omitempty"`
+
 	// MountPath is where the volume is mounted
 	MountPath string `json:"mount_path"`
 
@@ -98,6 +111,14 @@ type MountState struct {
 
 	// LeaseNonce is the volume lease nonce from remote Disk API
 	LeaseNonce string `json:"lease_nonce,omitempty"`
+
+	// LeaseOwned preserves ownership across unmount and failed release. Legacy
+	// records without this field are eligible only while mounted.
+	LeaseOwned bool `json:"lease_owned,omitempty"`
+
+	// LeaseAcquisitionID is persisted before requesting ownership, so a lost
+	// response or restart can recover the original grant, not acquire twice.
+	LeaseAcquisitionID string `json:"lease_acquisition_id,omitempty"`
 }
 
 // NewState creates a new empty state
@@ -226,8 +247,13 @@ func (s *State) saveLocked() error {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
-
-	return nil
+	// The rename must survive power loss before a transition can rely on it.
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 // SetPath sets the path for the state file
@@ -235,6 +261,63 @@ func (s *State) SetPath(dataPath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.path = filepath.Join(dataPath, stateFileName)
+}
+
+// LockCloudVolume serializes uploads and lease transitions, including their
+// persistence boundaries. Callers must not nest locks for the same volume.
+func (s *State) LockCloudVolume(ctx context.Context, cloudID string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cloudID == "" {
+		return func() {}, nil
+	}
+	s.mu.Lock()
+	if s.cloudLocks == nil {
+		s.cloudLocks = make(map[string]chan struct{})
+	}
+	lock := s.cloudLocks[cloudID]
+	if lock == nil {
+		lock = make(chan struct{}, 1)
+		s.cloudLocks[cloudID] = lock
+	}
+	s.mu.Unlock()
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// SetPendingCloudUpload persists an upload intent before begin. Empty clears
+// it only after confirmed completion/reconciliation. Hold LockCloudVolume.
+func (s *State) SetPendingCloudUpload(cloudID, marker string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.PendingCloudUploads == nil {
+		s.PendingCloudUploads = make(map[string]string)
+	}
+	previous := s.PendingCloudUploads[cloudID]
+	if marker == "" {
+		delete(s.PendingCloudUploads, cloudID)
+	} else {
+		s.PendingCloudUploads[cloudID] = marker
+	}
+	if err := s.saveLocked(); err != nil {
+		// Failed clearing must continue to fence transitions in this process.
+		if marker == "" && previous != "" {
+			s.PendingCloudUploads[cloudID] = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *State) HasPendingCloudUpload(cloudID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloudID != "" && s.PendingCloudUploads[cloudID] != ""
 }
 
 // GetVolume returns a copy of a volume state by entity ID
@@ -324,6 +407,47 @@ func (s *State) SetMountAndSave(entityId string, mount *MountState) error {
 	return s.saveLocked()
 }
 
+// SetLegacyMountIdentityAndSave cannot resurrect a record or overwrite cleanup
+// progress while the volume controller preserves identity before deletion.
+func (s *State) SetLegacyMountIdentityAndSave(entityId, device string, identity *BackingIdentity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.Mounts[entityId]
+	if current == nil || current.DevicePath != device || current.BackingIdentity != nil {
+		return nil
+	}
+	updated := *current
+	updated.BackingIdentity = identity
+	s.Mounts[entityId] = &updated
+	if err := s.saveLocked(); err != nil {
+		s.Mounts[entityId] = current
+		return err
+	}
+	return nil
+}
+
+// DisownLegacyMountDeviceAndSave preserves lease progress while checkpointing
+// a positively proven reused device before deletion removes bootstrap evidence.
+func (s *State) DisownLegacyMountDeviceAndSave(entityId, device string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.Mounts[entityId]
+	if current == nil {
+		return nil
+	}
+	if current.DevicePath != device || current.BackingIdentity != nil {
+		return fmt.Errorf("legacy attachment changed for %s; retry ownership inspection", entityId)
+	}
+	updated := *current
+	updated.DevicePath, updated.MountPath, updated.Mounted = "", "", false
+	s.Mounts[entityId] = &updated
+	if err := s.saveLocked(); err != nil {
+		s.Mounts[entityId] = current
+		return err
+	}
+	return nil
+}
+
 // DeleteMount removes a mount state
 func (s *State) DeleteMount(entityId string) {
 	s.mu.Lock()
@@ -358,6 +482,7 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	}
 
 	mount.DevicePath = v.DevicePath
+	mount.BackingIdentity = v.BackingIdentity
 	mount.MountPath = v.MountPath
 	s.Mounts[mount.EntityId] = mount
 	return v.DevicePath, v.MountPath, nil
@@ -378,25 +503,27 @@ func (s *State) LeaseNonceForCloudVolume(cloudVolumeId string) string {
 	defer s.mu.RUnlock()
 
 	// Prefer the cloud id recorded directly on the mount.
+	var nonce string
 	for _, m := range s.Mounts {
-		if m.CloudVolumeId == cloudVolumeId && m.LeaseNonce != "" {
-			return m.LeaseNonce
-		}
-	}
-
-	// Fall back to resolving through volume state for mounts persisted before
-	// the cloud id was recorded on the mount.
-	for _, v := range s.Volumes {
-		if v.CloudVolumeId != cloudVolumeId {
+		if (!m.Mounted && !m.LeaseOwned) || m.LeaseNonce == "" {
 			continue
 		}
-		for _, m := range s.Mounts {
-			if m.VolumeId == v.EntityId && m.LeaseNonce != "" {
-				return m.LeaseNonce
+		id := m.CloudVolumeId
+		if id == "" {
+			if v := s.Volumes[m.VolumeId]; v != nil {
+				id = v.CloudVolumeId
 			}
 		}
+		if id != cloudVolumeId {
+			continue
+		}
+		// Conflicting live owners are not safe to authorize by map order.
+		if nonce != "" && nonce != m.LeaseNonce {
+			return ""
+		}
+		nonce = m.LeaseNonce
 	}
-	return ""
+	return nonce
 }
 
 // GetVolumeByVolumeId returns a copy of a volume state by volume ID

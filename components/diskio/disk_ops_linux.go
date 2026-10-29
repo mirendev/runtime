@@ -84,17 +84,33 @@ func (r *realDiskMountOps) CreateDir(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
-func (r *realDiskMountOps) LoopAttach(imagePath string) (string, error) {
+const loopAttachAttempts = 5
+
+func (r *realDiskMountOps) LoopAttach(imagePath string) (string, *BackingIdentity, error) {
+	for attempt := 1; ; attempt++ {
+		device, identity, err := r.loopAttachOnce(imagePath)
+		// LOOP_CTL_GET_FREE only reports a device that was free when asked.
+		// Another attacher can configure it first, and the kernel answers our
+		// LOOP_CONFIGURE with EBUSY. Ask for a fresh device, as losetup does.
+		if errors.Is(err, unix.EBUSY) && attempt < loopAttachAttempts {
+			time.Sleep(time.Duration(attempt) * 10 * time.Millisecond)
+			continue
+		}
+		return device, identity, err
+	}
+}
+
+func (r *realDiskMountOps) loopAttachOnce(imagePath string) (string, *BackingIdentity, error) {
 	// Open loop-control to get a free device
 	ctl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("failed to open /dev/loop-control: %w", err)
+		return "", nil, fmt.Errorf("failed to open /dev/loop-control: %w", err)
 	}
 	defer ctl.Close()
 
 	idx, _, errno := syscall.Syscall(syscall.SYS_IOCTL, ctl.Fd(), loopCtlGetFree, 0)
 	if errno != 0 {
-		return "", fmt.Errorf("LOOP_CTL_GET_FREE failed: %w", errno)
+		return "", nil, fmt.Errorf("LOOP_CTL_GET_FREE failed: %w", errno)
 	}
 
 	devicePath := fmt.Sprintf("/dev/loop%d", idx)
@@ -103,23 +119,29 @@ func (r *realDiskMountOps) LoopAttach(imagePath string) (string, error) {
 	if _, err := os.Stat(devicePath); err != nil {
 		dev := unix.Mkdev(loopMajor, uint32(idx))
 		if err := unix.Mknod(devicePath, unix.S_IFBLK|0660, int(dev)); err != nil && !errors.Is(err, unix.EEXIST) {
-			return "", fmt.Errorf("failed to create device node %s: %w", devicePath, err)
+			return "", nil, fmt.Errorf("failed to create device node %s: %w", devicePath, err)
 		}
 	}
 
 	// Open the loop device
 	loopDev, err := os.OpenFile(devicePath, os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("failed to open loop device %s: %w", devicePath, err)
+		return "", nil, fmt.Errorf("failed to open loop device %s: %w", devicePath, err)
 	}
 	defer loopDev.Close()
 
 	// Open the backing file
 	backingFile, err := os.OpenFile(imagePath, os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("failed to open backing file %s: %w", imagePath, err)
+		return "", nil, fmt.Errorf("failed to open backing file %s: %w", imagePath, err)
 	}
 	defer backingFile.Close()
+
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(backingFile.Fd()), &stat); err != nil {
+		return "", nil, fmt.Errorf("stat backing file: %w", err)
+	}
+	identity := &BackingIdentity{Device: uint64(stat.Dev), Inode: stat.Ino}
 
 	// Use LOOP_CONFIGURE to attach with 4K sector size in a single ioctl.
 	//
@@ -142,7 +164,7 @@ func (r *realDiskMountOps) LoopAttach(imagePath string) (string, error) {
 	}
 
 	if err := unix.IoctlLoopConfigure(int(loopDev.Fd()), &config); err != nil {
-		return "", fmt.Errorf("LOOP_CONFIGURE failed for %s: %w", devicePath, err)
+		return "", nil, fmt.Errorf("LOOP_CONFIGURE failed for %s: %w", devicePath, err)
 	}
 
 	r.log.Info("attached loop device",
@@ -151,7 +173,44 @@ func (r *realDiskMountOps) LoopAttach(imagePath string) (string, error) {
 		"direct_io", true,
 	)
 
-	return devicePath, nil
+	return devicePath, identity, nil
+}
+
+func (r *realDiskMountOps) FileIdentity(path string) (*BackingIdentity, error) {
+	var stat unix.Stat_t
+	if err := unix.Stat(path, &stat); err != nil {
+		return nil, err
+	}
+	return &BackingIdentity{Device: uint64(stat.Dev), Inode: stat.Ino}, nil
+}
+
+func (r *realDiskMountOps) LoopIdentity(device string) (*BackingIdentity, error) {
+	f, err := os.Open(device)
+	if errors.Is(err, os.ErrNotExist) {
+		// Private /dev nodes disappear across reboot, even for loops still
+		// present in sysfs. Recreate and validate the node before querying it.
+		if _, statErr := os.Stat(filepath.Join("/sys/block", filepath.Base(device))); errors.Is(statErr, os.ErrNotExist) {
+			return nil, nil
+		} else if statErr != nil {
+			return nil, statErr
+		}
+		if err := ensureDeviceNode(device); err != nil {
+			return nil, err
+		}
+		f, err = os.Open(device)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	status, err := unix.IoctlLoopGetStatus64(int(f.Fd()))
+	if errors.Is(err, unix.ENXIO) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &BackingIdentity{Device: status.Device, Inode: status.Inode}, nil
 }
 
 func (r *realDiskMountOps) LoopDetach(devicePath string) error {
@@ -437,21 +496,64 @@ func (r *realDiskMountOps) Unmount(path string) error {
 	return nil
 }
 
-func (r *realDiskMountOps) IsMounted(path string) bool {
+func (r *realDiskMountOps) DeviceBacking(device string) (string, error) {
+	name := filepath.Base(device)
+	deviceDir := filepath.Join("/sys/block", name)
+	path := deviceDir
+	if strings.HasPrefix(name, "loop") {
+		path = filepath.Join(path, "loop", "backing_file")
+	} else if strings.HasPrefix(name, "lbd") {
+		path = filepath.Join(path, "lbd", "backing_path")
+	} else {
+		return "", fmt.Errorf("unsupported attachment device %s", device)
+	}
+	// Glob silently ignores filesystem errors; cleanup must inspect the exact
+	// device and distinguish a missing/unbound device from failed inspection.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			inspectDir := filepath.Dir(path)
+			if strings.HasPrefix(name, "lbd") {
+				inspectDir = deviceDir
+			}
+			if _, statErr := os.Stat(inspectDir); errors.Is(statErr, os.ErrNotExist) {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("inspect backing of %s: %w", device, err)
+	}
+	backing := strings.TrimSpace(string(data))
+	if backing == "" {
+		return "", fmt.Errorf("empty backing identity for %s", device)
+	}
+	return backing, nil
+}
+
+func (r *realDiskMountOps) MountDevice(path string) (string, error) {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
-		return false
+		return "", err
 	}
 	defer f.Close()
 
+	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	var device string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) >= 2 && fields[1] == path {
-			return true
+		if len(fields) >= 2 && unescape.Replace(fields[1]) == path {
+			if device != "" {
+				return device, fmt.Errorf("multiple mounts at %s", path)
+			}
+			device = unescape.Replace(fields[0])
 		}
 	}
-	return false
+	return device, scanner.Err()
+}
+
+func (r *realDiskMountOps) IsMounted(path string) bool {
+	device, _ := r.MountDevice(path)
+	return device != ""
 }
 
 func (r *realDiskMountOps) IsDeviceMounted(device string) (bool, error) {

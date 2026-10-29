@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -137,8 +138,10 @@ func TestNodeAdminAuthenticatesCoordinatorOverWire(t *testing.T) {
 			require.Error(t, err)
 
 			_, err = call(nil, nil)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "401")
+			var denial cond.ErrRemote
+			require.ErrorAs(t, err, &denial)
+			assert.Equal(t, "permission", denial.Category)
+			assert.Equal(t, "unauthorized", denial.Code)
 		})
 	}
 }

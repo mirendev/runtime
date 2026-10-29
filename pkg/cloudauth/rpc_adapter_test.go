@@ -1,6 +1,7 @@
 package cloudauth
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 )
@@ -118,7 +119,10 @@ func TestDefaultCloudURL(t *testing.T) {
 		Logger:   slog.Default(),
 	}
 
-	auth, err := NewRPCAuthenticator(t.Context(), config)
+	// Cancelled so the signing-key refresher never reaches the real cloud.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	auth, err := NewRPCAuthenticator(ctx, config)
 	if err != nil {
 		t.Fatalf("failed to create authenticator: %v", err)
 	}

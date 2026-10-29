@@ -9,6 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -401,4 +405,179 @@ func TestJWTValidatorProfileAndUnknownClaims(t *testing.T) {
 	assert.Equal(t, "usr-ada", claims.Subject)
 	assert.Equal(t, "ada@example.com", claims.Email)
 	assert.Equal(t, "Ada Lovelace", claims.Name)
+}
+
+// jwksServer serves Ed25519 keys under the given kids and can be made to fail,
+// counting the fetches it sees.
+type jwksServer struct {
+	*httptest.Server
+	mu       sync.Mutex
+	keys     map[string]ed25519.PrivateKey
+	down     bool
+	requests atomic.Int64
+}
+
+func newJWKSServer(t *testing.T, kids ...string) *jwksServer {
+	s := &jwksServer{keys: map[string]ed25519.PrivateKey{}}
+	for _, kid := range kids {
+		s.addKey(t, kid)
+	}
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s.requests.Add(1)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.down {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		var jwks JWKS
+		for kid, key := range s.keys {
+			jwks.Keys = append(jwks.Keys, JWK{Kty: "OKP", Crv: "Ed25519", Kid: kid, X: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))})
+		}
+		_ = json.NewEncoder(w).Encode(jwks)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func (s *jwksServer) addKey(t *testing.T, kid string) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	s.mu.Lock()
+	s.keys[kid] = key
+	s.mu.Unlock()
+}
+
+func (s *jwksServer) setDown(down bool) {
+	s.mu.Lock()
+	s.down = down
+	s.mu.Unlock()
+}
+
+func (s *jwksServer) token(t *testing.T, kid string) string {
+	s.mu.Lock()
+	key := s.keys[kid]
+	s.mu.Unlock()
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{"sub": "usr-test", "exp": time.Now().Add(time.Hour).Unix()})
+	token.Header["kid"] = kid
+	raw, err := token.SignedString(key)
+	require.NoError(t, err)
+	return raw
+}
+
+func TestJWTValidatorRefresherKeepsKeysWhileCloudIsUnreachable(t *testing.T) {
+	cloud := newJWKSServer(t, "cloud-key")
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	v.refreshInterval = 20 * time.Millisecond
+	v.retryInterval = 10 * time.Millisecond
+	v.Start(t.Context())
+	require.Eventually(t, func() bool { return cloud.requests.Load() >= 1 }, 3*time.Second, time.Millisecond,
+		"the refresher fetches at start, before any token needs a key")
+	_, err := v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.NoError(t, err)
+
+	cloud.setDown(true)
+	failedFrom := cloud.requests.Load()
+	require.Eventually(t, func() bool { return cloud.requests.Load() >= failedFrom+3 }, 3*time.Second, time.Millisecond,
+		"the refresher keeps retrying on its own")
+	for range 100 {
+		_, err = v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+		require.NoError(t, err, "known keys stay trusted while cloud is down")
+	}
+
+	cloud.addKey(t, "rotated-key")
+	cloud.setDown(false)
+	require.Eventually(t, func() bool {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		_, ok := v.keys["rotated-key"]
+		return ok && !v.failing
+	}, 3*time.Second, time.Millisecond, "the refresher recovers once cloud is back")
+}
+
+func TestJWTValidatorRequestsDoNotRefreshKnownKeys(t *testing.T) {
+	cloud := newJWKSServer(t, "cloud-key")
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	_, err := v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.NoError(t, err)
+	v.mu.Lock()
+	v.fetchedAt = time.Now().Add(-2 * jwksRefreshInterval)
+	v.lastAttempt = time.Now().Add(-2 * jwksRetryInterval)
+	v.mu.Unlock()
+	for range 100 {
+		_, err = v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+		require.NoError(t, err)
+	}
+	require.Equal(t, int64(1), cloud.requests.Load(), "refreshing known keys is the refresher's job alone")
+}
+
+func TestJWTValidatorRefetchesForUnknownKey(t *testing.T) {
+	cloud := newJWKSServer(t, "old-key")
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	_, err := v.ValidateToken(t.Context(), cloud.token(t, "old-key"))
+	require.NoError(t, err)
+
+	cloud.addKey(t, "new-key")
+	_, err = v.ValidateToken(t.Context(), cloud.token(t, "new-key"))
+	require.ErrorContains(t, err, "key with ID new-key not found", "a fetch within the retry limit is not repeated")
+	require.Equal(t, int64(1), cloud.requests.Load())
+
+	v.mu.Lock()
+	v.lastAttempt = time.Now().Add(-2 * jwksRetryInterval)
+	v.mu.Unlock()
+	_, err = v.ValidateToken(t.Context(), cloud.token(t, "new-key"))
+	require.NoError(t, err, "a key cloud published since the last fetch is picked up before the refresh is due")
+	_, err = v.ValidateToken(t.Context(), cloud.token(t, "old-key"))
+	require.NoError(t, err)
+}
+
+func TestJWTValidatorWithoutKeysFailsFastWhileCloudIsDown(t *testing.T) {
+	cloud := newJWKSServer(t, "cloud-key")
+	cloud.setDown(true)
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	for range 5 {
+		_, err := v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+		require.ErrorContains(t, err, "failed to get public keys")
+	}
+	require.Equal(t, int64(1), cloud.requests.Load())
+}
+
+func TestJWTValidatorKeyCacheSurvivesRestart(t *testing.T) {
+	cloud := newJWKSServer(t, "cloud-key")
+	path := filepath.Join(t.TempDir(), "cloud-jwks.json")
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	v.UseKeyCache(path)
+	_, err := v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.NoError(t, err)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	cloud.setDown(true)
+	restarted := NewJWTValidator(cloud.URL, slog.Default())
+	restarted.UseKeyCache(path)
+	_, err = restarted.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.NoError(t, err)
+
+	other := NewJWTValidator("https://other-cloud.invalid", slog.Default())
+	other.UseKeyCache(path)
+	other.mu.Lock()
+	require.Nil(t, other.keys, "keys saved from one cloud are not trusted for another")
+	other.mu.Unlock()
+
+	require.NoError(t, os.WriteFile(path, []byte("{"), 0600))
+	corrupt := NewJWTValidator(cloud.URL, slog.Default())
+	corrupt.UseKeyCache(path)
+	_, err = corrupt.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.ErrorContains(t, err, "failed to get public keys")
+}
+
+func TestJWTValidatorCancelledRequestDoesNotBlockKeyFetch(t *testing.T) {
+	cloud := newJWKSServer(t, "cloud-key")
+	v := NewJWTValidator(cloud.URL, slog.Default())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _ = v.ValidateToken(ctx, cloud.token(t, "cloud-key"))
+	_, err := v.ValidateToken(t.Context(), cloud.token(t, "cloud-key"))
+	require.NoError(t, err, "one caller giving up must not fail the fetch every caller shares")
 }

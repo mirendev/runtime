@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -118,7 +119,13 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		var resolved *core_v1alpha.App
 		var err error
 		if params.Operation == OperationBuild {
-			resolved, _, err = t.store.EnsureApp(ctx, params.AppName)
+			var creator string
+			if params.Subject == "" {
+				creator = appclient.CreationSubject(ctx)
+			} else if params.AuthMethod == string(rpc.AuthMethodJWT) {
+				creator = params.Subject
+			}
+			resolved, _, err = t.store.EnsureApp(ctx, params.AppName, creator)
 		} else {
 			resolved, _, err = t.store.AppByName(ctx, params.AppName)
 		}

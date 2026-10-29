@@ -136,6 +136,19 @@ web: fastapi run
 
 See [Services](../services.md) for running a worker alongside your web process.
 
+## Private dependencies
+
+For a private package index, the credential goes wherever your package manager looks:
+
+- **pip:** store a `pip.conf` with the index URL and credentials, and mount it with
+  `file = "/etc/pip.conf"`.
+- **uv:** name the index in `pyproject.toml` and pass `UV_INDEX_<NAME>_USERNAME` and
+  `UV_INDEX_<NAME>_PASSWORD` as two `env` secrets.
+- **Poetry:** the same, with `POETRY_HTTP_BASIC_<NAME>_USERNAME` and
+  `POETRY_HTTP_BASIC_<NAME>_PASSWORD`.
+
+For private Git repositories, store a netrc with a read token and mount it with `file = "~/.netrc"`. See [Private Dependencies](../private-dependencies.md) for each recipe in full.
+
 ## Environment variables
 
 Set variables with `miren env set`. Use `-e` for plain values and `-s` for secrets
@@ -172,6 +185,7 @@ See [App Configuration — Environment Variables](../app-configuration.md#enviro
 - **Production server:** without gunicorn/uvicorn, Flask and Django fall back to their dev servers
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; pip `file = "/etc/pip.conf"`; uv `UV_INDEX_<NAME>_*`; Poetry `POETRY_HTTP_BASIC_<NAME>_*`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 

@@ -15,52 +15,44 @@ import (
 // prepareServerConfig resolves command-side installation policy before the
 // server runtime freezes its component graph.
 func prepareServerConfig(ctx *Context, config *serverconfig.Config) error {
-	switch config.GetMode() {
-	case "standalone":
-		if config.Server.GetReleasePath() == "" {
-			if releasePath := FindReleasePath(); releasePath != "" {
-				config.Server.SetReleasePath(releasePath)
-				ctx.Log.Info("using release path", "path", releasePath)
-			} else {
-				ctx.Log.Info("no release directory found, downloading release")
-				downloadGlobal, downloadPath, err := releaseDownloadDestination()
-				if err != nil {
-					return err
-				}
-				branch := "latest"
-				if configuredBranch := version.Branch(); configuredBranch != "" {
-					branch = configuredBranch
-				}
-				if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
-					Branch: branch,
-					Global: downloadGlobal,
-					Force:  false,
-					Output: downloadPath,
-				}); err != nil {
-					return fmt.Errorf("failed to download release: %w", err)
-				}
-				config.Server.SetReleasePath(downloadPath)
-				ctx.Log.Info("using downloaded release", "path", downloadPath)
+	if config.Server.GetReleasePath() == "" {
+		if releasePath := FindReleasePath(); releasePath != "" {
+			config.Server.SetReleasePath(releasePath)
+			ctx.Log.Info("using release path", "path", releasePath)
+		} else {
+			ctx.Log.Info("no release directory found, downloading release")
+			downloadGlobal, downloadPath, err := releaseDownloadDestination()
+			if err != nil {
+				return err
 			}
-			ctx.UILog.Info("running in standalone mode - starting all components", "release-path", config.Server.GetReleasePath())
-			return nil
+			branch := "latest"
+			if configuredBranch := version.Branch(); configuredBranch != "" {
+				branch = configuredBranch
+			}
+			if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+				Branch: branch,
+				Global: downloadGlobal,
+				Force:  false,
+				Output: downloadPath,
+			}); err != nil {
+				return fmt.Errorf("failed to download release: %w", err)
+			}
+			config.Server.SetReleasePath(downloadPath)
+			ctx.Log.Info("using downloaded release", "path", downloadPath)
 		}
-
-		path, err := filepath.Abs(config.Server.GetReleasePath())
-		if err != nil {
-			return fmt.Errorf("failed to resolve absolute release path: %w", err)
-		}
-		config.Server.SetReleasePath(path)
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("release path does not exist: %s", path)
-		}
+		ctx.UILog.Info("starting all components", "release-path", config.Server.GetReleasePath())
 		return nil
-	case "distributed":
-		ctx.UILog.Info("running in distributed mode")
-		return nil
-	default:
-		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", config.GetMode())
 	}
+
+	path, err := filepath.Abs(config.Server.GetReleasePath())
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute release path: %w", err)
+	}
+	config.Server.SetReleasePath(path)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("release path does not exist: %s", path)
+	}
+	return nil
 }
 
 func releaseDownloadDestination() (global bool, path string, err error) {

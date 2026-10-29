@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -41,38 +40,13 @@ func AuthProviderAddOIDC(ctx *Context, opts struct {
 	}
 	scopes := strings.Join(scopeList, " ")
 
-	client, err := ctx.RPCClient("entities")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	existing, err := ic.GetOIDCProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing identity provider: %w", err)
-	}
-	if existing != nil && !opts.Update {
-		return fmt.Errorf("identity provider %q already exists. Pass --update to overwrite (rotates client secret)", opts.Name)
-	}
-
-	pwExisting, err := ic.GetPasswordProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing password provider: %w", err)
-	}
-	if pwExisting != nil {
-		return fmt.Errorf("a password provider named %q already exists. Provider names must be unique across types", opts.Name)
-	}
-
-	provider := &ingress_v1alpha.OidcProvider{
-		Name:         opts.Name,
-		ProviderUrl:  opts.ProviderURL,
-		ClientId:     opts.ClientID,
-		ClientSecret: opts.ClientSecret,
-		Scopes:       scopes,
-	}
-
-	_, err = ic.CreateOrUpdateOIDCProvider(ctx, provider)
+	_, err = ingress_v1alpha.NewIdentityProvidersClient(client).AddOIDC(ctx,
+		opts.Name, opts.ProviderURL, opts.ClientID, opts.ClientSecret, scopeList, opts.Update)
 	if err != nil {
 		return fmt.Errorf("failed to create identity provider: %w", err)
 	}

@@ -1598,21 +1598,18 @@ func TestDeployVersionEphemeral(t *testing.T) {
 		}
 	})
 
-	t.Run("ephemeral deploy defaults TTL to 24h", func(t *testing.T) {
-		// Use a separate app to avoid deployment lock conflicts
-		defaultApp := &core_v1alpha.App{}
-		_, err := inmem.Client.Create(ctx, "ephapp-default", defaultApp)
-		if err != nil {
+	// Deploys an ephemeral version with the given TTL (empty for none) on an
+	// app of its own, to stay clear of deployment locks, and returns it.
+	deployWithTTL := func(t *testing.T, app, ttl string) core_v1alpha.AppVersion {
+		t.Helper()
+		if _, err := inmem.Client.Create(ctx, app, &core_v1alpha.App{}); err != nil {
 			t.Fatalf("Failed to create app: %v", err)
 		}
-
-		av3 := &core_v1alpha.AppVersion{Version: "ephapp-default-v1"}
-		_, err = inmem.Client.Create(ctx, "ephapp-default-v1", av3)
-		if err != nil {
+		if _, err := inmem.Client.Create(ctx, app+"-v1", &core_v1alpha.AppVersion{Version: app + "-v1"}); err != nil {
 			t.Fatalf("Failed to create version: %v", err)
 		}
 
-		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "", "")
+		result, err := client.DeployVersion(ctx, app, "cluster1", app+"-v1", false, nil, app+"-ttl", ttl, "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1620,16 +1617,34 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Fatalf("DeployVersion returned error: %s", result.Error())
 		}
 
-		dep := result.Deployment()
-		ephVersionId := dep.AppVersionId()
-
 		var ephVersion core_v1alpha.AppVersion
-		if err := inmem.Client.GetById(ctx, entity.Id(ephVersionId), &ephVersion); err != nil {
+		if err := inmem.Client.GetById(ctx, entity.Id(result.Deployment().AppVersionId()), &ephVersion); err != nil {
 			t.Fatalf("Failed to get ephemeral version: %v", err)
 		}
-		if ephVersion.EphemeralTtl != "24h" {
-			t.Errorf("Expected default TTL '24h', got %q", ephVersion.EphemeralTtl)
+		return ephVersion
+	}
+
+	assertExpiresIn := func(t *testing.T, v core_v1alpha.AppVersion, want time.Duration) {
+		t.Helper()
+		if got := time.Until(v.EphemeralExpiresAt); got > want || got < want-time.Minute {
+			t.Errorf("Expected expiry about %s out, got %s", want, got)
 		}
+	}
+
+	t.Run("ephemeral deploy defaults TTL to a week", func(t *testing.T) {
+		v := deployWithTTL(t, "ephapp-default", "")
+		if v.EphemeralTtl != "7d" {
+			t.Errorf("Expected default TTL '7d', got %q", v.EphemeralTtl)
+		}
+		assertExpiresIn(t, v, 7*24*time.Hour)
+	})
+
+	t.Run("ephemeral deploy accepts day units", func(t *testing.T) {
+		v := deployWithTTL(t, "ephapp-days", "3d")
+		if v.EphemeralTtl != "3d" {
+			t.Errorf("Expected TTL '3d', got %q", v.EphemeralTtl)
+		}
+		assertExpiresIn(t, v, 3*24*time.Hour)
 	})
 }
 

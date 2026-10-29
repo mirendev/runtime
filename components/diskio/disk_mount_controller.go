@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -103,8 +104,8 @@ func (c *DiskMountController) Index() entity.Attr {
 	return entity.Ref(storage_v1alpha.DiskMountNodeIdId, c.nodeId.Id())
 }
 
-// Shutdown releases cloud leases. Mount/detach cleanup is handled by
-// DiskVolumeController.Shutdown which owns all mount lifecycle.
+// Shutdown finishes releases for detached mounts. Live attachments keep their
+// fencing across a server restart; stopping the daemon does not stop app tasks.
 // If keepMounts is set (reload), everything is skipped.
 func (c *DiskMountController) Shutdown() {
 	if c.keepMounts {
@@ -112,18 +113,26 @@ func (c *DiskMountController) Shutdown() {
 		return
 	}
 
-	// Release cloud leases for any active mounts
+	// Release only leases whose device cleanup has already finished.
 	if c.cloudClient != nil {
 		for _, ms := range c.state.ListMounts() {
-			if ms.LeaseNonce == "" {
+			// A server stopping does not imply its app tasks have stopped.
+			// Keep fencing any attachment inherited by the next process.
+			if ms.LeaseNonce == "" || ms.Mounted || ms.DevicePath != "" {
 				continue
 			}
 			cloudID := c.cloudVolumeIdFor(ms)
 			if cloudID == "" {
 				continue
 			}
-			c.log.Info("releasing lease on shutdown", "entity_id", ms.EntityId, "cloud_volume_id", cloudID)
-			if err := c.cloudClient.ReleaseLease(context.Background(), cloudID, ms.LeaseNonce); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			unlock, err := c.state.LockCloudVolume(ctx, cloudID)
+			if err == nil {
+				err = c.cleanupMount(ctx, ms)
+				unlock()
+			}
+			cancel()
+			if err != nil {
 				c.log.Warn("failed to release lease on shutdown", "entity_id", ms.EntityId, "error", err)
 			}
 		}
@@ -174,7 +183,7 @@ func (c *DiskMountController) reconcileMountMounted(ctx context.Context, mount *
 	case storage_v1alpha.DM_PENDING:
 		return c.attachAndMount(ctx, mount)
 	case storage_v1alpha.DM_ATTACHING:
-		return nil
+		return c.attachAndMount(ctx, mount)
 	case storage_v1alpha.DM_ATTACHED:
 		return c.mountVolume(ctx, mount)
 	case storage_v1alpha.DM_MOUNTING:
@@ -244,13 +253,12 @@ func (c *DiskMountController) reconcileMountUnmounted(ctx context.Context, mount
 
 	switch mount.ActualState {
 	case storage_v1alpha.DM_DETACHED:
-		c.state.DeleteMount(entityId)
-		if err := c.state.Save(); err != nil {
-			c.log.Warn("failed to save state after mount cleanup", "error", err)
+		if c.state.GetMount(entityId) != nil {
+			return c.unmountAndDetach(ctx, mount)
 		}
 		return nil
 	case storage_v1alpha.DM_UNMOUNTING, storage_v1alpha.DM_DETACHING:
-		return nil
+		return c.unmountAndDetach(ctx, mount)
 	case storage_v1alpha.DM_PENDING, storage_v1alpha.DM_ATTACHING, storage_v1alpha.DM_ATTACHED, storage_v1alpha.DM_MOUNTING, storage_v1alpha.DM_MOUNTED, storage_v1alpha.DM_ERROR:
 		// Still attached/mounted; tear it down to reach the unmounted state.
 		fallthrough
@@ -278,6 +286,30 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	if volState == nil {
 		c.setMountError(ctx, mount.ID, fmt.Sprintf("volume %s not found in state", volumeId))
 		return fmt.Errorf("volume %s not found in state", volumeId)
+	}
+	unlock, err := c.state.LockCloudVolume(ctx, volState.CloudVolumeId)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current := c.state.GetVolume(volumeId)
+	if current == nil {
+		return fmt.Errorf("volume %s not found in state", volumeId)
+	}
+	if current.CloudVolumeId != volState.CloudVolumeId || current.DiskPath != volState.DiskPath {
+		return fmt.Errorf("volume %s changed while waiting for cloud lock", volumeId)
+	}
+	volState = current
+	if c.state.HasPendingCloudUpload(volState.CloudVolumeId) {
+		return fmt.Errorf("volume %s has a pending cloud upload", volumeId)
+	}
+	// Recovery must finish the old attachment/release before acquiring a new
+	// lease or overwriting its cleanup credentials.
+	if previous := c.state.GetMount(entityId); previous != nil &&
+		(previous.LeaseAcquisitionID == "" || previous.LeaseNonce != "" || previous.DevicePath != "") {
+		if err := c.cleanupMount(ctx, previous); err != nil {
+			return err
+		}
 	}
 
 	// For alwaysMount volumes, the volume controller owns the mount.
@@ -315,16 +347,23 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	// segments. A volume with no cloud id has not been registered yet, so there
 	// is no lease to take and nothing to replay.
 	var leaseNonce string
+	var acquisitionID string
 	if volState.Mode == storage_v1alpha.VM_ACCELERATOR && c.cloudClient != nil && volState.CloudVolumeId != "" {
-		nonce, lerr := c.cloudClient.AcquireLease(ctx, volState.CloudVolumeId)
-		if lerr != nil {
-			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to acquire volume lease: %v", lerr))
-			return fmt.Errorf("failed to acquire volume lease: %w", lerr)
+		intent := c.state.GetMount(entityId)
+		if intent == nil || intent.LeaseAcquisitionID == "" {
+			intent = &MountState{
+				EntityId: entityId, VolumeId: volumeId, CloudVolumeId: volState.CloudVolumeId,
+				Mode: volState.Mode, LeaseAcquisitionID: uuid.NewString(),
+			}
 		}
-		leaseNonce = nonce
+		if err := c.recoverMountLease(ctx, intent); err != nil {
+			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to acquire volume lease: %v", err))
+			return fmt.Errorf("failed to acquire volume lease: %w", err)
+		}
+		leaseNonce, acquisitionID = intent.LeaseNonce, intent.LeaseAcquisitionID
 
 		if rerr := c.replayMissingSegments(ctx, volState); rerr != nil {
-			c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, nonce)
+			_ = c.cleanupMount(ctx, c.state.GetMount(entityId))
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to replay segments: %v", rerr))
 			return fmt.Errorf("failed to replay segments: %w", rerr)
 		}
@@ -343,17 +382,20 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 
 	// Attach device based on volume mode
 	var devicePath string
-	var err error
+	var backingIdentity *BackingIdentity
 	if volState.Mode == storage_v1alpha.VM_ACCELERATOR {
 		logDir := filepath.Join(volState.DiskPath, "logs")
 		if err := c.ops.CreateDir(logDir, 0755); err != nil {
+			if ms := c.state.GetMount(entityId); ms != nil {
+				_ = c.cleanupMount(ctx, ms)
+			}
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to create log directory: %v", err))
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
 		devicePath, err = c.ops.LbdAttach(ctx, imagePath, logDir)
 		if err != nil {
 			if leaseNonce != "" {
-				c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, leaseNonce)
+				_ = c.cleanupMount(ctx, c.state.GetMount(entityId))
 			}
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to attach lbd device: %v", err))
 			return fmt.Errorf("failed to attach lbd device: %w", err)
@@ -382,8 +424,12 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 				"device", existing,
 			)
 			devicePath = existing
+			backingIdentity, err = verifiedLoopIdentity(c.ops, devicePath, imagePath)
+			if err != nil {
+				return fmt.Errorf("verify adopted loop backing: %w", err)
+			}
 		} else {
-			devicePath, err = c.ops.LoopAttach(imagePath)
+			devicePath, backingIdentity, err = c.ops.LoopAttach(imagePath)
 			if err != nil {
 				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to attach loop device: %v", err))
 				return fmt.Errorf("failed to attach loop device: %w", err)
@@ -392,19 +438,23 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	c.state.SetMount(entityId, &MountState{
-		EntityId:      entityId,
-		VolumeId:      volumeId,
-		CloudVolumeId: volState.CloudVolumeId,
-		DevicePath:    devicePath,
-		MountPath:     mount.MountPath,
-		Mounted:       false,
-		ReadOnly:      mount.ReadOnly,
-		Mode:          volState.Mode,
-		LeaseNonce:    leaseNonce,
+		EntityId:           entityId,
+		VolumeId:           volumeId,
+		CloudVolumeId:      volState.CloudVolumeId,
+		DevicePath:         devicePath,
+		BackingPath:        imagePath,
+		BackingIdentity:    backingIdentity,
+		MountPath:          mount.MountPath,
+		Mounted:            false,
+		ReadOnly:           mount.ReadOnly,
+		Mode:               volState.Mode,
+		LeaseNonce:         leaseNonce,
+		LeaseOwned:         leaseNonce != "",
+		LeaseAcquisitionID: acquisitionID,
 	})
 
 	if err := c.state.Save(); err != nil {
-		c.log.Warn("failed to save state after loop attach", "error", err)
+		return err
 	}
 
 	// Update entity with device path and loop device info
@@ -417,29 +467,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	if err := c.mountVolume(ctx, mount); err != nil {
 		// Rollback: detach device, release lease, clean up local state
 		c.log.Warn("mount failed, rolling back attach", "entity_id", entityId, "error", err)
-
-		if volState.Mode == storage_v1alpha.VM_ACCELERATOR {
-			if derr := c.ops.LbdDetach(ctx, devicePath); derr != nil {
-				c.log.Warn("rollback: failed to detach lbd device", "error", derr)
-			}
-		} else {
-			if derr := c.ops.LoopDetach(devicePath); derr != nil {
-				c.log.Warn("rollback: failed to detach loop device", "error", derr)
-			}
-		}
-
-		if leaseNonce != "" && c.cloudClient != nil {
-			if lerr := c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, leaseNonce); lerr != nil {
-				c.log.Warn("rollback: failed to release lease", "error", lerr)
-			}
-		}
-
-		c.state.DeleteMount(entityId)
-		if serr := c.state.Save(); serr != nil {
-			c.log.Warn("rollback: failed to save state", "error", serr)
-		}
-
-		return err
+		return errors.Join(err, c.cleanupMount(ctx, c.state.GetMount(entityId)))
 	}
 
 	return nil
@@ -534,7 +562,7 @@ func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1
 	mountState.Mounted = true
 	c.state.SetMount(entityId, mountState)
 	if err := c.state.Save(); err != nil {
-		c.log.Warn("failed to save state after mount", "error", err)
+		return err
 	}
 
 	c.log.Info("filesystem mounted",
@@ -572,112 +600,265 @@ func (c *DiskMountController) unmountAndDetach(ctx context.Context, mount *stora
 		return nil
 	}
 
-	// For alwaysMount volumes, skip actual unmount/detach — volume controller owns the mount
-	if alwaysMount(mountState.Mode) {
-		c.state.DeleteMount(entityId)
-		if err := c.state.Save(); err != nil {
-			c.log.Warn("failed to save state after alwaysMount cleanup", "error", err)
-		}
+	unlock, err := c.state.LockCloudVolume(ctx, c.cloudVolumeIdFor(mountState))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := c.cleanupMount(ctx, mountState); err != nil {
+		c.setMountError(ctx, mount.ID, err.Error())
+		return err
+	}
+	clearPath, clearErr := "", ""
+	return c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHED, &clearPath, &clearPath, &clearErr)
+}
 
-		clearPath := ""
-		clearErr := ""
-		if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHED, &clearPath, &clearPath, &clearErr); err != nil {
-			c.log.Warn("failed to update mount state to detached", "error", err)
-		}
-
-		c.log.Info("alwaysMount volume lease released, mount preserved",
-			"entity_id", entityId,
-		)
+// cleanupMount persists each successful step independently so retries, orphan
+// cleanup and attach rollback cannot repeat a completed release or detach.
+// The caller holds the cloud-volume lock.
+func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *MountState) error {
+	entityId := mountState.EntityId
+	// The record may have progressed while this caller waited for an upload.
+	mountState = c.state.GetMount(entityId)
+	if mountState == nil {
 		return nil
 	}
-
-	// Unmount if mounted
-	if mountState.Mounted && mountState.MountPath != "" {
-		// Check if another mount is using the same path
-		skipUnmount := false
-		for _, otherMount := range c.state.ListMounts() {
-			if otherMount.EntityId != entityId && otherMount.MountPath == mountState.MountPath && otherMount.Mounted {
-				c.log.Info("skipping unmount, path in use by another mount",
-					"entity_id", entityId,
-					"other_entity_id", otherMount.EntityId,
-					"mount_path", mountState.MountPath,
-				)
-				skipUnmount = true
-				break
-			}
+	cloudID := c.cloudVolumeIdFor(mountState)
+	if c.state.HasPendingCloudUpload(cloudID) {
+		// A failed final drain must be resumable even if the volume entity
+		// vanished and the periodic watcher no longer enumerates it.
+		if mountState.DevicePath != "" || mountState.Mounted || !mountState.LeaseOwned {
+			return fmt.Errorf("volume %s has a pending cloud upload", cloudID)
 		}
-
-		if !skipUnmount {
-			if err := c.ops.Unmount(mountState.MountPath); err != nil {
-				c.log.Warn("failed to unmount", "error", err)
-				return fmt.Errorf("failed to unmount: %w", err)
-			}
+		if err := c.drainMountLogs(ctx, mountState); err != nil {
+			return err
 		}
-		mountState.Mounted = false
-		c.state.SetMount(entityId, mountState)
+		if c.state.HasPendingCloudUpload(cloudID) {
+			return fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+		}
+	}
+	if mountState.LeaseNonce == "" && mountState.LeaseAcquisitionID != "" {
+		if err := c.recoverMountLease(ctx, mountState); err != nil && !errors.Is(err, ErrLeaseAcquisitionEnded) {
+			return err
+		}
+	}
+	// For alwaysMount volumes, skip actual unmount/detach — volume controller owns the mount
+	if alwaysMount(mountState.Mode) {
+		return c.state.DeleteMountAndSave(entityId)
 	}
 
-	if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHING, nil, nil, nil); err != nil {
-		c.log.Warn("failed to update mount state to detaching", "error", err)
+	// Persisted names are claims, not proof of kernel ownership. In particular,
+	// neither an old lease-only record nor map iteration order owns a device.
+	mountedDevice, err := c.ops.MountDevice(mountState.MountPath)
+	if err != nil {
+		return fmt.Errorf("inspect mount before cleanup: %w", err)
+	}
+	if mountState.DevicePath != "" {
+		expected := mountState.BackingPath
+		if expected == "" {
+			if volume := c.state.GetVolume(mountState.VolumeId); volume != nil {
+				expected = filepath.Join(volume.DiskPath, "disk.img")
+			}
+		}
+		owned, absent := false, false
+		if mountState.Mode != storage_v1alpha.VM_ACCELERATOR {
+			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
+			if err != nil {
+				return fmt.Errorf("inspect loop before cleanup: %w", err)
+			}
+			absent = identity == nil
+			if !absent {
+				if mountState.BackingIdentity == nil {
+					// Legacy ownership must be established while the known file
+					// still exists, not from sysfs path text after rename/unlink.
+					identity, err = legacyLoopIdentity(c.ops, c.state, mountState.VolumeId, expected, identity)
+					if err != nil {
+						return fmt.Errorf("establish legacy loop ownership: %w", err)
+					}
+					if identity != nil {
+						mountState.BackingIdentity = identity
+						if err := c.state.SetLegacyMountIdentityAndSave(entityId, mountState.DevicePath, identity); err != nil {
+							return err
+						}
+					}
+				}
+				owned = identity != nil && *identity == *mountState.BackingIdentity
+			}
+		} else {
+			backing, err := c.ops.DeviceBacking(mountState.DevicePath)
+			if err != nil {
+				return fmt.Errorf("inspect device before cleanup: %w", err)
+			}
+			// lbdctl canonicalizes the submitted path; unlike loops, the
+			// kernel stores this path rather than following inode renames.
+			if backing != expected && expected != "" {
+				if canonical, err := filepath.EvalSymlinks(expected); err == nil {
+					if canonical, err := filepath.Abs(canonical); err == nil {
+						expected = canonical
+					}
+				}
+			}
+			if backing != "" && expected == "" {
+				return fmt.Errorf("cannot establish backing ownership for %s", entityId)
+			}
+			absent, owned = backing == "", backing != "" && backing == expected
+		}
+		if owned {
+			for _, other := range c.state.ListMounts() {
+				if other.EntityId == entityId || other.DevicePath != mountState.DevicePath || other.MountPath == "" {
+					continue
+				}
+				otherDevice, err := c.ops.MountDevice(other.MountPath)
+				if err != nil {
+					return err
+				}
+				if otherDevice == mountState.DevicePath {
+					return fmt.Errorf("ambiguous attachment ownership for %s and %s", entityId, other.EntityId)
+				}
+			}
+		}
+		if absent || !owned {
+			if mountedDevice == mountState.DevicePath {
+				return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", mountedDevice)
+			}
+			mountState.DevicePath = ""
+			mountState.Mounted = false
+			mountState.MountPath = ""
+		}
+	}
+	if mountedDevice == "" || mountedDevice != mountState.DevicePath {
+		mountState.Mounted = false
+		mountState.MountPath = ""
+	} else {
+		mountState.Mounted = true
+	}
+	for _, other := range c.state.ListMounts() {
+		if other.EntityId != entityId && mountState.LeaseNonce != "" &&
+			other.LeaseNonce == mountState.LeaseNonce && c.cloudVolumeIdFor(other) == cloudID &&
+			(other.Mounted || other.LeaseOwned) {
+			return fmt.Errorf("ambiguous lease ownership for %s", entityId)
+		}
+	}
+	// Unmount if mounted
+	if mountState.Mounted && mountState.MountPath != "" {
+		if err := c.ops.Unmount(mountState.MountPath); err != nil {
+			return fmt.Errorf("failed to unmount: %w", err)
+		}
+		mountState.Mounted = false
+	}
+	// Unmount does not end the lease, including recovery after a crash between
+	// the syscall and this checkpoint. Keep the original nonce for tail drain.
+	mountState.LeaseOwned = mountState.LeaseNonce != ""
+	if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+		return err
 	}
 
 	// Detach device based on mode (use persisted mode from MountState)
 	var detachErr error
 	if mountState.DevicePath != "" {
-		if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
+		mounted, err := c.ops.IsDeviceMounted(mountState.DevicePath)
+		if err != nil {
+			return fmt.Errorf("check device before detach: %w", err)
+		} else if mounted {
+			return fmt.Errorf("device %s is still mounted", mountState.DevicePath)
+		} else if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
 			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach lbd device", "error", err)
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
 			}
 		} else {
+			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
+			if err != nil || identity == nil || mountState.BackingIdentity == nil || *identity != *mountState.BackingIdentity {
+				return fmt.Errorf("loop ownership changed before detach: %s (%v)", mountState.DevicePath, err)
+			}
 			if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach loop device", "error", err)
 				detachErr = fmt.Errorf("failed to detach loop device: %w", err)
 			}
 		}
+		if detachErr == nil {
+			mountState.DevicePath = ""
+			if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+				return err
+			}
+		}
+	}
+
+	if detachErr != nil {
+		return detachErr
+	}
+	if err := c.drainMountLogs(ctx, mountState); err != nil {
+		return err
 	}
 
 	// Release cloud lease if one was acquired
 	var leaseErr error
 	if mountState.LeaseNonce != "" && c.cloudClient != nil {
-		if cloudID := c.cloudVolumeIdFor(mountState); cloudID != "" {
+		if cloudID != "" {
 			if err := c.cloudClient.ReleaseLease(ctx, cloudID, mountState.LeaseNonce); err != nil {
 				c.log.Warn("failed to release volume lease", "entity_id", entityId, "error", err)
 				leaseErr = fmt.Errorf("failed to release volume lease: %w", err)
+			} else {
+				mountState.LeaseNonce = ""
+				mountState.LeaseOwned = false
+				mountState.LeaseAcquisitionID = ""
+				if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+					return err
+				}
 			}
 		}
 	}
 
-	// If detach or lease release failed, report error and keep state for retry
-	if detachErr != nil || leaseErr != nil {
-		errMsg := ""
-		if detachErr != nil {
-			errMsg = detachErr.Error()
+	if leaseErr != nil {
+		return leaseErr
+	}
+	if mountState.LeaseNonce != "" {
+		return fmt.Errorf("cannot release lease for %s without cloud client and volume id", entityId)
+	}
+	return c.state.DeleteMountAndSave(entityId)
+}
+
+func (c *DiskMountController) drainMountLogs(ctx context.Context, mount *MountState) error {
+	if mount.Mode != storage_v1alpha.VM_ACCELERATOR || mount.LeaseNonce == "" || c.cloudClient == nil {
+		return nil
+	}
+	diskPath := ""
+	if volume := c.state.GetVolume(mount.VolumeId); volume != nil {
+		diskPath = volume.DiskPath
+	}
+	if diskPath == "" && mount.BackingPath != "" {
+		diskPath = filepath.Dir(mount.BackingPath)
+	}
+	if diskPath == "" {
+		return fmt.Errorf("cannot establish log directory for lease release of %s", mount.EntityId)
+	}
+	uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
+	return uploader.drainSegmentsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+}
+
+// recoverMountLease resolves a durable acquisition intent. A terminal response
+// retires only that identity; a later reconcile may explicitly start a new one.
+// The caller holds the cloud-volume lock.
+func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountState) error {
+	if c.cloudClient == nil {
+		return fmt.Errorf("cannot recover lease acquisition without cloud client")
+	}
+	if err := c.state.SetMountAndSave(ms.EntityId, ms); err != nil {
+		return err
+	}
+	nonce, err := c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
+	if errors.Is(err, ErrLeaseAcquisitionEnded) {
+		ms.LeaseAcquisitionID = ""
+		if saveErr := c.state.SetMountAndSave(ms.EntityId, ms); saveErr != nil {
+			return saveErr
 		}
-		if leaseErr != nil {
-			if errMsg != "" {
-				errMsg += "; "
-			}
-			errMsg += leaseErr.Error()
-		}
-		c.setMountError(ctx, mount.ID, errMsg)
-		return fmt.Errorf("detach/release failed: %s", errMsg)
+		return err
 	}
-
-	c.state.DeleteMount(entityId)
-	if err := c.state.Save(); err != nil {
-		c.log.Warn("failed to save state after unmount", "error", err)
+	if err != nil {
+		return err
 	}
-
-	c.log.Info("volume unmounted and detached", "entity_id", entityId)
-
-	clearPath := ""
-	clearErr := ""
-	if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHED, &clearPath, &clearPath, &clearErr); err != nil {
-		c.log.Warn("failed to update mount state to detached", "error", err)
-	}
-
-	return nil
+	ms.LeaseNonce, ms.LeaseOwned = nonce, true
+	return c.state.SetMountAndSave(ms.EntityId, ms)
 }
 
 func diskMountActualStateToId(state storage_v1alpha.DiskMountActualState) entity.Id {
@@ -814,42 +995,18 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 }
 
 // teardownLocalMount unmounts, detaches, and releases the lease for a locally
-// tracked mount, then removes it from local state. It does not touch the entity
-// or persist state (callers batch the Save). alwaysMount volumes are owned by
+// tracked mount, retaining incomplete cleanup for retry. It does not touch the entity.
+// alwaysMount volumes are owned by
 // the volume controller, so their mount/detach is skipped.
 func (c *DiskMountController) teardownLocalMount(ctx context.Context, mountState *MountState) {
-	if alwaysMount(mountState.Mode) {
-		c.state.DeleteMount(mountState.EntityId)
-		return
+	unlock, err := c.state.LockCloudVolume(ctx, c.cloudVolumeIdFor(mountState))
+	if err == nil {
+		err = c.cleanupMount(ctx, mountState)
+		unlock()
 	}
-
-	if mountState.Mounted && mountState.MountPath != "" {
-		if err := c.ops.Unmount(mountState.MountPath); err != nil {
-			c.log.Warn("failed to unmount orphaned mount", "entity_id", mountState.EntityId, "error", err)
-		}
+	if err != nil {
+		c.log.Warn("failed to clean up orphaned mount", "entity_id", mountState.EntityId, "error", err)
 	}
-
-	if mountState.DevicePath != "" {
-		if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
-			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
-				c.log.Warn("failed to detach lbd for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-			}
-		} else {
-			if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
-				c.log.Warn("failed to detach loop for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-			}
-		}
-	}
-
-	if mountState.LeaseNonce != "" && c.cloudClient != nil {
-		if cloudID := c.cloudVolumeIdFor(mountState); cloudID != "" {
-			if err := c.cloudClient.ReleaseLease(ctx, cloudID, mountState.LeaseNonce); err != nil {
-				c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-			}
-		}
-	}
-
-	c.state.DeleteMount(mountState.EntityId)
 }
 
 // ReconcileOrphanMounts deletes disk_mount entities on this node whose backing

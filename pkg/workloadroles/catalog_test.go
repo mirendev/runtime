@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -32,14 +33,17 @@ func realMethods(t *testing.T) map[string]map[string]bool {
 	t.Helper()
 
 	ifaces := []*rpc.Interface{
+		compute_v1alpha.AdaptSandboxPools(nil),
 		usage_v1alpha.AdaptResourceUsage(nil),
 		metric_v1alpha.AdaptSandboxMetrics(nil),
+		compute_v1alpha.AdaptSandboxes(nil),
 		runner_v1alpha.AdaptRunnerRegistration(nil),
 		exec_v1alpha.AdaptSandboxExec(nil),
 		app_v1alpha.AdaptCrud(nil),
 		app_v1alpha.AdaptAppStatus(nil),
 		app_v1alpha.AdaptLogs(nil),
 		app_v1alpha.AdaptAddons(nil),
+		app_v1alpha.AdaptRuns(nil),
 		deployment_v1alpha.AdaptDeployment(nil),
 		build_v1alpha.AdaptBuilder(nil),
 		admin_v1alpha.AdaptAdmin(nil),

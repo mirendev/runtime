@@ -129,7 +129,10 @@ func (a *typedAction) Execute(ctx context.Context, inputs ActionInputs) (any, er
 	errVal := results[1]
 
 	if !errVal.IsNil() {
-		return nil, errVal.Interface().(error)
+		if outVal.IsZero() {
+			return nil, errVal.Interface().(error)
+		}
+		return outVal.Interface(), errVal.Interface().(error)
 	}
 
 	return outVal.Interface(), nil

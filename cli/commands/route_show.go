@@ -1,13 +1,9 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -20,82 +16,25 @@ func RouteShow(ctx *Context, opts struct {
 	if opts.Host == "" && !opts.Default {
 		return fmt.Errorf("either a hostname or --default must be specified")
 	}
-
 	if opts.Host != "" && opts.Default {
 		return fmt.Errorf("--default cannot be used with a hostname")
 	}
-
-	client, err := ctx.RPCClient("entities")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
-
-	ic := ingress.NewClient(ctx.Log, client)
-
-	var route *ingress_v1alpha.HttpRoute
-	var routeLabel string
-
+	res, err := ingress_v1alpha.NewRoutesClient(client).Show(ctx, opts.Host, opts.Default)
+	if err != nil {
+		return err
+	}
+	route := res.Route()
+	routeLabel := opts.Host
 	if opts.Default {
-		route, err = ic.LookupDefault(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to lookup default route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("no default route configured")
-		}
 		routeLabel = "default"
-	} else {
-		route, err = ic.Lookup(ctx, opts.Host)
-		if err != nil {
-			return err
-		}
-		if route == nil {
-			return fmt.Errorf("route not found: %s", opts.Host)
-		}
-		routeLabel = opts.Host
 	}
-
-	wafEnabled := !entity.Empty(route.WafProfile)
-	var wafProfile *ingress_v1alpha.WafProfile
-	if wafEnabled {
-		wafProfile = &ingress_v1alpha.WafProfile{}
-		if err := ic.GetEntityStore().GetById(ctx, route.WafProfile, wafProfile); err != nil {
-			if !errors.Is(err, cond.ErrNotFound{}) {
-				return fmt.Errorf("failed to get WAF profile: %w", err)
-			}
-			wafProfile = nil
-		}
-	}
-
-	protected := !entity.Empty(route.AuthProvider)
-
-	var oidcProvider *ingress_v1alpha.OidcProvider
-	var pwProvider *ingress_v1alpha.PasswordProvider
-	protectionType := "none"
-
-	if protected {
-		providerEnt, err := ic.GetEntityStore().GetByIdWithEntity(ctx, route.AuthProvider, &ingress_v1alpha.OidcProvider{})
-		if err != nil {
-			if !errors.Is(err, cond.ErrNotFound{}) {
-				return fmt.Errorf("failed to get auth provider: %w", err)
-			}
-		} else {
-			raw := providerEnt.Entity()
-			switch {
-			case entity.Is(raw, ingress_v1alpha.KindOidcProvider):
-				oidcProvider = &ingress_v1alpha.OidcProvider{}
-				oidcProvider.Decode(raw)
-				if isConnector(oidcProvider) {
-					protectionType = "connector"
-				} else {
-					protectionType = "oidc"
-				}
-			case entity.Is(raw, ingress_v1alpha.KindPasswordProvider):
-				pwProvider = &ingress_v1alpha.PasswordProvider{}
-				pwProvider.Decode(raw)
-				protectionType = "password"
-			}
-		}
+	protectionType := route.ProviderType()
+	if protectionType == "" {
+		protectionType = "none"
 	}
 
 	if opts.IsJSON() {
@@ -121,144 +60,82 @@ func RouteShow(ctx *Context, opts struct {
 			MaintenanceStartedAt string `json:"maintenance_started_at,omitempty"`
 			MaintenanceStartedBy string `json:"maintenance_started_by,omitempty"`
 		}
-
-		wafLevel := 0
-		if wafProfile != nil {
-			wafLevel = int(wafProfile.ParanoiaLevel)
-		}
-
 		r := RouteJSON{
-			Host:           routeLabel,
-			App:            ui.CleanEntityID(string(route.App)),
-			Service:        routeService(route),
-			Default:        route.Default,
-			Protected:      protected,
-			ProtectionType: protectionType,
-			WafLevel:       wafLevel,
-			RequestTimeout: route.RequestTimeout,
-			TLSCheck:       route.TlsCheck,
-
-			Maintenance:          !route.Maintenance.Empty(),
-			MaintenanceReason:    route.Maintenance.Reason,
-			MaintenanceBackAt:    route.Maintenance.BackAt,
-			MaintenanceStartedAt: route.Maintenance.StartedAt,
-			MaintenanceStartedBy: route.Maintenance.StartedBy,
+			Host: routeLabel, App: route.App(), Service: route.Service(), Default: route.DefaultRoute(),
+			Protected: route.Protected(), ProtectionType: protectionType, WafLevel: int(route.WafLevel()),
+			RequestTimeout: route.RequestTimeout(), TLSCheck: route.TlsCheck(),
+			Maintenance: route.Maintenance(), MaintenanceReason: route.MaintenanceReason(),
+			MaintenanceBackAt: route.MaintenanceBackAt(), MaintenanceStartedAt: route.MaintenanceStartedAt(),
+			MaintenanceStartedBy: route.MaintenanceStartedBy(),
 		}
-
-		if protected {
-			switch {
-			case oidcProvider != nil:
-				r.ProviderName = oidcProvider.Name
-				if isConnector(oidcProvider) {
-					r.ConnectorType = oidcProvider.ConnectorType
-				} else {
-					r.ProviderURL = oidcProvider.ProviderUrl
+		if route.Protected() {
+			r.ProviderName = route.Provider()
+			r.ProviderMissing = route.Provider() == ""
+			switch protectionType {
+			case "oidc":
+				r.ProviderURL = route.ProviderUrl()
+			case "connector":
+				r.ConnectorType = route.ConnectorType()
+			}
+			if protectionType == "oidc" || protectionType == "connector" {
+				for _, m := range route.ClaimMappings() {
+					r.ClaimMappings = append(r.ClaimMappings, map[string]string{"claim": m.Claim(), "header": m.Header()})
 				}
-				for _, m := range route.ClaimMappings {
-					r.ClaimMappings = append(r.ClaimMappings, map[string]string{
-						"claim":  m.Claim,
-						"header": m.Header,
-					})
-				}
-			case pwProvider != nil:
-				r.ProviderName = pwProvider.Name
-			default:
-				r.ProviderMissing = true
 			}
 		}
-
 		return PrintJSON(r)
 	}
 
 	ctx.Printf("Route: %s\n", routeLabel)
-	ctx.Printf("  App:       %s\n", ui.CleanEntityID(string(route.App)))
-	ctx.Printf("  Service:   %s\n", routeService(route))
-	ctx.Printf("  Default:   %v\n", route.Default)
-	ctx.Printf("  Protected: %v\n", protected)
-	if wafProfile != nil {
-		ctx.Printf("  WAF Level: %d\n", wafProfile.ParanoiaLevel)
+	ctx.Printf("  App:       %s\n", route.App())
+	ctx.Printf("  Service:   %s\n", route.Service())
+	ctx.Printf("  Default:   %v\n", route.DefaultRoute())
+	ctx.Printf("  Protected: %v\n", route.Protected())
+	if route.WafLevel() > 0 {
+		ctx.Printf("  WAF Level: %d\n", route.WafLevel())
 	}
-	if route.RequestTimeout != "" {
-		ctx.Printf("  Timeout:   %s\n", route.RequestTimeout)
+	if route.RequestTimeout() != "" {
+		ctx.Printf("  Timeout:   %s\n", route.RequestTimeout())
 	}
-	if route.TlsCheck != "" {
-		ctx.Printf("  TLS Check: %s\n", route.TlsCheck)
+	if route.TlsCheck() != "" {
+		ctx.Printf("  TLS Check: %s\n", route.TlsCheck())
 	}
-
 	switch protectionType {
 	case "oidc":
 		ctx.Printf("  Type:      oidc\n")
-		if oidcProvider != nil {
-			ctx.Printf("  Provider:  %s (%s)\n", oidcProvider.Name, oidcProvider.ProviderUrl)
-		} else {
-			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
-		}
-
-		if len(route.ClaimMappings) > 0 {
-			var rows []ui.Row
-			for _, m := range route.ClaimMappings {
-				rows = append(rows, ui.Row{m.Claim, m.Header})
-			}
-
-			headers := []string{"CLAIM", "HEADER"}
-			columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
-			table := ui.NewTable(
-				ui.WithTableTitle("Claim Mappings"),
-				ui.WithColumns(columns),
-				ui.WithRows(rows),
-			)
-
-			ctx.Printf("\n%s\n", table.Render())
-		}
-	case "password":
-		ctx.Printf("  Type:      password\n")
-		if pwProvider != nil {
-			ctx.Printf("  Provider:  %s\n", pwProvider.Name)
-		} else {
-			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
-		}
+		ctx.Printf("  Provider:  %s (%s)\n", route.Provider(), route.ProviderUrl())
 	case "connector":
 		ctx.Printf("  Type:      connector\n")
-		if oidcProvider != nil {
-			ctx.Printf("  Provider:  %s (%s)\n", oidcProvider.Name, oidcProvider.ConnectorType)
-		} else {
-			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
-		}
-
-		if len(route.ClaimMappings) > 0 {
-			var rows []ui.Row
-			for _, m := range route.ClaimMappings {
-				rows = append(rows, ui.Row{m.Claim, m.Header})
-			}
-
-			headers := []string{"CLAIM", "HEADER"}
-			columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
-			table := ui.NewTable(
-				ui.WithTableTitle("Claim Mappings"),
-				ui.WithColumns(columns),
-				ui.WithRows(rows),
-			)
-
-			ctx.Printf("\n%s\n", table.Render())
-		}
+		ctx.Printf("  Provider:  %s (%s)\n", route.Provider(), route.ConnectorType())
+	case "password":
+		ctx.Printf("  Type:      password\n")
+		ctx.Printf("  Provider:  %s\n", route.Provider())
 	}
-
-	if !route.Maintenance.Empty() {
+	if (protectionType == "oidc" || protectionType == "connector") && len(route.ClaimMappings()) > 0 {
+		var rows []ui.Row
+		for _, m := range route.ClaimMappings() {
+			rows = append(rows, ui.Row{m.Claim(), m.Header()})
+		}
+		headers := []string{"CLAIM", "HEADER"}
+		columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
+		table := ui.NewTable(ui.WithTableTitle("Claim Mappings"), ui.WithColumns(columns), ui.WithRows(rows))
+		ctx.Printf("\n%s\n", table.Render())
+	}
+	if route.Maintenance() {
 		ctx.Printf("\nMaintenance: this route is serving a holding page\n")
-		if route.Maintenance.Reason != "" {
-			ctx.Printf("  Reason:    %s\n", route.Maintenance.Reason)
+		if route.MaintenanceReason() != "" {
+			ctx.Printf("  Reason:    %s\n", route.MaintenanceReason())
 		}
-		if route.Maintenance.BackAt != "" {
-			ctx.Printf("  Back at:   %s\n", route.Maintenance.BackAt)
+		if route.MaintenanceBackAt() != "" {
+			ctx.Printf("  Back at:   %s\n", route.MaintenanceBackAt())
 		}
-		if route.Maintenance.StartedAt != "" {
-			ctx.Printf("  Since:     %s\n", route.Maintenance.StartedAt)
+		if route.MaintenanceStartedAt() != "" {
+			ctx.Printf("  Since:     %s\n", route.MaintenanceStartedAt())
 		}
-		if route.Maintenance.StartedBy != "" {
-			ctx.Printf("  Set by:    %s\n", route.Maintenance.StartedBy)
+		if route.MaintenanceStartedBy() != "" {
+			ctx.Printf("  Set by:    %s\n", route.MaintenanceStartedBy())
 		}
 		ctx.Printf("  Bring it back with: miren route up %s\n", upTarget(opts.Host, opts.Default))
 	}
-
 	return nil
 }

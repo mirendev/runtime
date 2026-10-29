@@ -3,9 +3,16 @@ package rpc
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/quic-go/quic-go/http3"
+	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/cond"
 )
 
 type disclosableTestError struct{ msg string }
@@ -61,4 +68,34 @@ func TestNewResolveStatusError_CarriesServerDetail(t *testing.T) {
 	if resolveErr.StatusCode != 401 {
 		t.Errorf("StatusCode = %d, want 401", resolveErr.StatusCode)
 	}
+}
+
+func TestHTTPCallPreservesTimestampDenialReason(t *testing.T) {
+	ss, err := NewState(t.Context(), WithSkipVerify)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ss.Close() })
+	ss.Server().ExposeValue("test", NewInterface([]Method{{Name: "test", InterfaceName: "test"}}, nil))
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	server := &http3.Server{
+		TLSConfig: testServerTLSConfig(t),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if strings.HasPrefix(req.URL.Path, "/_rpc/call/") {
+				req.Header.Set("rpc-timestamp", time.Now().Add(-time.Hour).Format(time.RFC3339Nano))
+			}
+			ss.Server().ServeHTTP(w, req)
+		}),
+	}
+	go func() { _ = server.Serve(conn) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	cs, err := NewState(t.Context(), WithSkipVerify)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+	client, err := cs.Connect(conn.LocalAddr().String(), "test")
+	require.NoError(t, err, "lookup succeeds without checking the timestamp")
+	err = client.Call(t.Context(), "test", nil, nil)
+	require.Equal(t, cond.ErrRemote{Category: "permission", Code: "forbidden", Message: "timestamp too old"}, err)
 }

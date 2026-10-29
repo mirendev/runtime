@@ -75,6 +75,7 @@ func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadC
 		DataPath:          b.inputs.dataPath,
 		ErrorPageTemplate: pageTemplate,
 		WorkloadIssuer:    identity.issuer,
+		OIDCSigningKey:    workloadControl.OIDCSigningKey(),
 		Instance:          b.inputs.instance,
 		// This gates the network listener only. behind-proxy-http is the one
 		// mode where a front proxy terminates TLS and so owns the scheme.

@@ -150,7 +150,7 @@ func (h *TextHandler) WithGroup(name string) slog.Handler {
 //
 // Each call to Handle results in a single serialized call to
 // io.Writer.Write.
-func (h *TextHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *TextHandler) Handle(ctx context.Context, r slog.Record) error {
 	outboard := h.outboard
 	module := h.module
 
@@ -167,7 +167,7 @@ func (h *TextHandler) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 
-	return h.handle(r, outboard, module)
+	return h.handle(ctx, r, outboard, module)
 }
 
 type commonHandler struct {
@@ -183,6 +183,10 @@ type commonHandler struct {
 	mu          *sync.Mutex
 	w           io.Writer
 
+	// journalLevel, when set, turns on journald priority prefixes and picks
+	// the level each record's priority comes from.
+	journalLevel func(context.Context, slog.Level) slog.Level
+
 	lastTime atomic.Int64
 }
 
@@ -196,6 +200,7 @@ func (h *commonHandler) clone() *commonHandler {
 		nOpenGroups:       h.nOpenGroups,
 		w:                 h.w,
 		mu:                h.mu, // mutex shared among all clones of this handler
+		journalLevel:      h.journalLevel,
 	}
 }
 
@@ -260,7 +265,7 @@ func recordSource(r slog.Record) *slog.Source {
 
 // handle is the internal implementation of Handler.Handle
 // used by TextHandler and JSONHandler.
-func (h *commonHandler) handle(r slog.Record, outboard, module string) error {
+func (h *commonHandler) handle(ctx context.Context, r slog.Record, outboard, module string) error {
 	state := h.newHandleState(NewBuffer(), true, "")
 	defer state.free()
 	// Built-in attributes. They are not in a group.
@@ -338,9 +343,16 @@ func (h *commonHandler) handle(r slog.Record, outboard, module string) error {
 	}
 	state.buf.WriteNewLine()
 
+	out := state.buf
+	if h.journalLevel != nil {
+		out = NewBuffer()
+		defer out.Free()
+		*out = appendJournalLines(*out, *state.buf, syslogPriority(h.journalLevel(ctx, r.Level)))
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, err := h.w.Write(*state.buf)
+	_, err := h.w.Write(*out)
 	return err
 }
 

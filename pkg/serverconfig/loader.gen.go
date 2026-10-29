@@ -55,62 +55,14 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
-	// Resolve the effective mode first (CLI/env > Config > Default)
-	// We need this to apply mode-specific defaults correctly.
-	// CLI and env both flow through flags.Mode (mflags' env tag handling
-	// puts env values into the flags struct during FromStruct).
-	var effectiveMode string
-	if cfg.Mode != nil {
-		effectiveMode = *cfg.Mode
-	}
-	if flags.Mode != nil && *flags.Mode != "" {
-		effectiveMode = *flags.Mode
-	}
-
-	// Apply mode defaults based on the resolved mode
-	// Only set if not already set (nil check)
-
-	if effectiveMode == "standalone" {
-		if cfg.Buildkit.StartEmbedded == nil {
-			cfg.Buildkit.StartEmbedded = new(true)
-		}
-	}
-	if effectiveMode == "standalone" {
-		if cfg.Containerd.StartEmbedded == nil {
-			cfg.Containerd.StartEmbedded = new(true)
-		}
-	}
-	if effectiveMode == "standalone" {
-		if cfg.Etcd.StartEmbedded == nil {
-			cfg.Etcd.StartEmbedded = new(true)
-		}
-	}
-	if effectiveMode == "standalone" {
-		if cfg.Victorialogs.StartEmbedded == nil {
-			cfg.Victorialogs.StartEmbedded = new(true)
-		}
-	}
-	if effectiveMode == "standalone" {
-		if cfg.Victoriametrics.StartEmbedded == nil {
-			cfg.Victoriametrics.StartEmbedded = new(true)
-		}
-	}
-
 	// Apply CLI flags (env values are already in flags via mflags env tags).
 	applyCLIFlags(cfg, flags)
 
-	// Post-process etcd configuration
-	// If embedded etcd is enabled and no endpoints are specified, set default endpoint
-	if cfg.Etcd.StartEmbedded != nil && *cfg.Etcd.StartEmbedded && len(cfg.Etcd.Endpoints) == 0 {
-		port := 12379
-		if cfg.Etcd.ClientPort != nil {
-			port = *cfg.Etcd.ClientPort
-		}
-		cfg.Etcd.Endpoints = []string{fmt.Sprintf("http://127.0.0.1:%d", port)}
-	}
-
 	// Validate
 	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
+	}
+	if err := cfg.ValidateRetiredTopology(); err != nil {
 		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 

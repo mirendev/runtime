@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -63,8 +64,7 @@ type Config struct {
 	Traces TracesExport
 }
 
-// Component manages a persistent BuildKit daemon as a containerd container,
-// or connects to an external BuildKit daemon via Unix socket.
+// Component manages a persistent BuildKit daemon as a containerd container.
 type Component struct {
 	Log       *slog.Logger
 	CC        *containerd.Client
@@ -78,8 +78,14 @@ type Component struct {
 	socketDir     string
 	hostsPath     string             // path to custom /etc/hosts file for the container
 	otelEnv       []string           // OTEL_* env buildkitd runs with
-	external      bool               // true if connecting to external daemon (no container management)
 	monitorCancel context.CancelFunc // cancels the task exit-monitor goroutine on intentional stop
+
+	// starting holds a channel that closes when the Start in progress returns.
+	// The server starts the daemon off its startup path, so a client can be
+	// asked for while that is still under way; Client waits on it rather than
+	// failing a build that arrived a few seconds early. Start holds mu for its
+	// whole run, so this lives outside it.
+	starting atomic.Pointer[chan struct{}]
 }
 
 type buildkitTask interface {
@@ -95,17 +101,6 @@ func NewComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath s
 		CC:        cc,
 		Namespace: namespace,
 		DataPath:  dataPath,
-		external:  false,
-	}
-}
-
-// NewExternalComponent creates a BuildKit component that connects to an external daemon.
-// No container lifecycle management is performed - it only provides client access.
-func NewExternalComponent(log *slog.Logger, socketPath string) *Component {
-	return &Component{
-		Log:        log,
-		socketPath: socketPath,
-		external:   true,
 	}
 }
 
@@ -117,23 +112,16 @@ var buildkitLogOptions = []slogout.LoggerOption{
 }
 
 // Start starts the BuildKit daemon container.
-// For external components, this verifies the socket is accessible.
 func (c *Component) Start(ctx context.Context, config Config) error {
+	done := make(chan struct{})
+	c.starting.Store(&done)
+	defer close(done)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.running {
 		return fmt.Errorf("buildkit component already running")
-	}
-
-	// External mode: just verify the socket is accessible
-	if c.external {
-		c.Log.Info("using external buildkit daemon", "socket", c.socketPath)
-		if err := c.waitForReady(ctx); err != nil {
-			return fmt.Errorf("external buildkit daemon not accessible at %s: %w", c.socketPath, err)
-		}
-		c.running = true
-		return nil
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -193,7 +181,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	// Check if container already exists
 	existingContainer, err := c.CC.LoadContainer(ctx, buildkitContainerName)
 	if err == nil {
-		retired, err := c.retireIfOTelEnvChanged(ctx, existingContainer)
+		retired, err := c.retireIfStale(ctx, existingContainer, image)
 		if err != nil {
 			return err
 		}
@@ -233,19 +221,9 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 }
 
 // Stop stops the BuildKit daemon container.
-// For external components, this is a no-op.
 func (c *Component) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// External mode: no container to manage, just flip the flag idempotently.
-	if c.external {
-		if c.running {
-			c.running = false
-			c.Log.Info("disconnected from external buildkit daemon")
-		}
-		return nil
-	}
 
 	// Nothing to tear down once the container has been released. Note we can't
 	// gate solely on c.running: after an unexpected daemon death the exit
@@ -299,8 +277,17 @@ func (c *Component) IsRunning() bool {
 	return c.running
 }
 
-// Client returns a new BuildKit client connected to the daemon.
+// Client returns a new BuildKit client connected to the daemon, first waiting
+// for a Start in progress to finish.
 func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) {
+	if done := c.starting.Load(); done != nil {
+		select {
+		case <-*done:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for buildkit to start: %w", ctx.Err())
+		}
+	}
+
 	c.mu.Lock()
 	socketPath := c.socketPath
 	running := c.running
@@ -406,9 +393,6 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
   [[worker.oci.gcpolicy]]
     all = true
     maxUsedSpace = %[1]d
-
-[registry."docker.io"]
-  http = true
 
 [registry."%[3]s"]
   insecure = true
@@ -517,16 +501,22 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 	return container, nil
 }
 
-// retireIfOTelEnvChanged deletes an existing container whose OTel env differs
-// from what buildkitd should run with now, reporting whether it did.
+// retireIfStale deletes an existing container that no longer matches what
+// buildkitd should run as now, reporting whether it did.
 //
-// A restart otherwise reuses the container, and its env is part of the spec.
-// Without this, whatever OTEL_EXPORTER_OTLP_HEADERS the server had when the
-// container was first created would ride along indefinitely, which is exactly
-// the static credential an operator removes when moving traces to workload
-// identity. The build cache lives on the bind-mounted data path, so a
-// recreated container keeps it.
-func (c *Component) retireIfOTelEnvChanged(ctx context.Context, container containerd.Container) (bool, error) {
+// A restart otherwise reuses the container, and both its image and its env
+// are fixed when it's created. Without this, bumping imagerefs.BuildKit would
+// only reach fresh installs: an upgraded server would keep running the old
+// daemon from the old image's snapshot indefinitely. The same goes for the
+// OTEL_EXPORTER_OTLP_HEADERS the server had when the container was first
+// created, which is exactly the static credential an operator removes when
+// moving traces to workload identity. The build cache lives on the
+// bind-mounted data path, so a recreated container keeps it.
+func (c *Component) retireIfStale(ctx context.Context, container containerd.Container, image containerd.Image) (bool, error) {
+	info, err := container.Info(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading existing buildkit container info: %w", err)
+	}
 	spec, err := container.Spec(ctx)
 	if err != nil {
 		return false, fmt.Errorf("reading existing buildkit container spec: %w", err)
@@ -535,17 +525,28 @@ func (c *Component) retireIfOTelEnvChanged(ctx context.Context, container contai
 	if spec.Process != nil {
 		current = otelOnly(spec.Process.Env)
 	}
-	if slices.Equal(current, otelOnly(c.otelEnv)) {
+
+	switch {
+	case info.Image != image.Name():
+		c.Log.Info("buildkit image changed, recreating its container",
+			"container_id", container.ID(), "from", info.Image, "to", image.Name())
+	case !slices.Equal(current, otelOnly(c.otelEnv)):
+		c.Log.Info("buildkit trace export settings changed, recreating its container", "container_id", container.ID())
+	default:
 		return false, nil
 	}
 
-	c.Log.Info("buildkit trace export settings changed, recreating its container", "container_id", container.ID())
 	if task, err := container.Task(ctx, nil); err == nil {
 		if err := c.stopTask(ctx, task); err != nil {
 			return false, fmt.Errorf("stopping buildkit task before recreating its container: %w", err)
 		}
 	} else if !errdefs.IsNotFound(err) {
 		return false, fmt.Errorf("loading buildkit task before recreating its container: %w", err)
+	} else if err := base.ReapLeakedTask(ctx, c.CC, container.ID()); err != nil {
+		// NotFound can also be a task record leaked by an interrupted delete,
+		// which would make NewTask on the recreated container (same ID) fail
+		// with AlreadyExists. See base.ReplaceTask.
+		return false, fmt.Errorf("reaping leaked buildkit task before recreating its container: %w", err)
 	}
 	c.container = container
 	c.deleteContainerWithRetry(ctx)

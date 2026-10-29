@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
@@ -34,6 +35,62 @@ func NewAddonsServer(log *slog.Logger, ec *entityserver.Client, registry *addon.
 		registry:     registry,
 		imageChecker: imageChecker,
 	}
+}
+
+func (s *AddonsServer) ListAvailable(ctx context.Context, state *app_v1alpha.AddonsListAvailable) error {
+	defs := s.registry.ListAddons()
+	slices.SortFunc(defs, func(a, b addon.AddonDefinition) int { return strings.Compare(a.Name, b.Name) })
+	entries := make([]*app_v1alpha.AddonCatalogEntry, 0, len(defs))
+	for _, def := range defs {
+		entries = append(entries, catalogEntry(def))
+	}
+	state.Results().SetAddons(entries)
+	return nil
+}
+
+func (s *AddonsServer) GetCatalog(ctx context.Context, state *app_v1alpha.AddonsGetCatalog) error {
+	name := state.Args().Name()
+	if name == "" {
+		return fmt.Errorf("addon name is required")
+	}
+	_, def, ok := s.registry.Get(name)
+	if !ok {
+		return fmt.Errorf("unknown addon %q", name)
+	}
+	state.Results().SetAddon(catalogEntry(def))
+	return nil
+}
+
+// Only copy display metadata: Config and BaseImage belong to provisioning.
+func catalogEntry(def addon.AddonDefinition) *app_v1alpha.AddonCatalogEntry {
+	entry := &app_v1alpha.AddonCatalogEntry{}
+	entry.SetName(def.Name)
+	entry.SetDisplayName(def.DisplayName)
+	entry.SetDescription(def.Description)
+	entry.SetDefaultVariant(def.DefaultVariant)
+	entry.SetDefaultVersion(def.DefaultVersion)
+	variants := make([]*app_v1alpha.AddonCatalogVariant, 0, len(def.Variants))
+	for _, v := range def.Variants {
+		variant := &app_v1alpha.AddonCatalogVariant{}
+		variant.SetName(v.Name)
+		variant.SetDescription(v.Description)
+		keys := make([]string, 0, len(v.Details))
+		for key := range v.Details {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		details := make([]*app_v1alpha.AddonCatalogDetail, 0, len(keys))
+		for _, key := range keys {
+			detail := &app_v1alpha.AddonCatalogDetail{}
+			detail.SetKey(key)
+			detail.SetValue(v.Details[key])
+			details = append(details, detail)
+		}
+		variant.SetDetails(details)
+		variants = append(variants, variant)
+	}
+	entry.SetVariants(variants)
+	return entry
 }
 
 func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.AddonsCreateInstance) error {

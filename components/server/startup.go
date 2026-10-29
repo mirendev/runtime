@@ -92,19 +92,19 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	// the dataflow edges that determine startup and shutdown order. The graph
 	// does not change after startup begins.
 	ipDiscovery := newIPDiscoveryBoot(ipDiscoveryInputs(options))
-	registration := newRegistrationBoot(registrationInputs(options))
-	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
-	tracing := newTracingBoot(tracingInputs(options), registration.output, workloadIdentity.output)
 	containerdConfig := containerdBootConfig(options)
 	containerdConfig.ReportVersion = instance.SetComponent
 	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
-	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), tracing.component, victoriaLogs.output, victoriaMetrics.output)
+	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
 	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	dataRestore := newDataRestoreBoot(dataRestoreInputsFrom(options), containerd.Output, observability.output)
 	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output, dataRestore.component)
+	registration := newRegistrationBoot(registrationInputs(options), etcd.output)
+	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
+	tracing := newTracingBoot(tracingInputs(options), registration.output, workloadIdentity.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
 	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output, tracing.output)
@@ -167,7 +167,6 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.output, sandboxHost.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
-		buildSagaRecoveryInputs(options),
 		applicationManagement.output,
 		workAdmission.component,
 	)
@@ -226,13 +225,8 @@ func containerdBootConfig(options StartOptions) containerdcomp.BootConfig {
 		socketPath = filepath.Join(dataPath, "containerd", "containerd.sock")
 	}
 
-	var bootConfig containerdcomp.BootConfig
-	if config.GetStartEmbedded() {
-		bootConfig = containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
-			config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
-	} else {
-		bootConfig = containerdcomp.ExternalBootConfig(options.Log, dataPath, socketPath)
-	}
+	bootConfig := containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
+		config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
 	bootConfig.StopTimeout = componentStopTimeout
 	return bootConfig
 }

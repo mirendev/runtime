@@ -756,7 +756,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if o.fromRevision != 0 && entity.GetRevision() != o.fromRevision {
-		s.log.Error("entity revision mismatch", "expected", o.fromRevision, "actual", entity.GetRevision())
+		s.log.Debug("revision-checked update lost revision race", "id", entity.Id(), "expected", o.fromRevision, "actual", entity.GetRevision())
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
@@ -847,6 +847,7 @@ func (s *EtcdStore) UpdateEntity(
 		txnResp, err = s.client.Txn(ctx).
 			If(conditions...).
 			Then(txopt...).
+			Else(clientv3.OpGet(key, clientv3.WithKeysOnly())).
 			Commit()
 	} else {
 		txnResp, err = s.client.Txn(ctx).
@@ -859,7 +860,7 @@ func (s *EtcdStore) UpdateEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to update entity in etcd", "error", err, "id", entity.Id(), "rev", rev, "server-rev", txnResp.Header.Revision)
+		s.logTxnConflict("update", entity.Id(), o.fromRevision, txnResp)
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
@@ -891,10 +892,37 @@ func extractEntityId(attributes []Attr) (Id, error) {
 func (s *EtcdStore) checkRevisionConflict(entity *Entity, expectedRevision int64) error {
 	actualRevision := entity.GetRevision()
 	if expectedRevision != 0 && actualRevision != expectedRevision {
-		s.log.Error("entity revision mismatch", "expected", expectedRevision, "actual", actualRevision)
+		s.log.Debug("revision-checked write lost revision race", "id", entity.Id(), "expected", expectedRevision, "actual", actualRevision)
 		return cond.Conflict("entity", entity.Id())
 	}
 	return nil
+}
+
+// logTxnConflict logs a write transaction whose guards failed. The caller gets
+// a conflict back, so this is never a store failure. A lost revision CAS is one
+// the caller asked for with fromRevision and handles, so that's Debug, matching
+// DeleteEntityAtRevision. Otherwise a unique-value claim failed: another entity
+// took the value between read and commit, which the caller may not expect, and
+// which a caller retrying on conflict will hit again every time.
+//
+// etcd doesn't say which compare failed, so the transaction's Else reads the
+// entity key back. If its ModRevision still matches, the revision guard held.
+func (s *EtcdStore) logTxnConflict(op string, id Id, fromRevision int64, txnResp *clientv3.TxnResponse) {
+	if fromRevision != 0 && !entityKeyAtRevision(txnResp, fromRevision) {
+		s.log.Debug("revision-checked "+op+" lost revision race", "id", id, "expected", fromRevision, "server-rev", txnResp.Header.Revision)
+		return
+	}
+	s.log.Warn(op+" lost unique-value race", "id", id, "server-rev", txnResp.Header.Revision)
+}
+
+// entityKeyAtRevision reports whether a failed transaction's Else read found
+// the entity key still at rev.
+func entityKeyAtRevision(txnResp *clientv3.TxnResponse, rev int64) bool {
+	if len(txnResp.Responses) == 0 {
+		return false
+	}
+	rng := txnResp.Responses[0].GetResponseRange()
+	return rng != nil && len(rng.Kvs) > 0 && rng.Kvs[0].ModRevision == rev
 }
 
 // separateSessionAttributes separates attributes into primary and session attributes
@@ -1218,7 +1246,6 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	originalEntity := entity.Clone()
-	rev := entity.GetRevision()
 
 	repl := current.Clone()
 
@@ -1237,12 +1264,9 @@ func (s *EtcdStore) ReplaceEntity(
 		repl.SetCreatedAt(updatedAt)
 	}
 
-	if repl.GetRevision() == 0 {
-		repl.SetRevision(rev)
-	}
-
-	// Check revision if specified
-	if err := s.checkRevisionConflict(repl, o.fromRevision); err != nil {
+	// The payload may carry a stale revision; only the stored snapshot can
+	// establish whether the caller's expected revision is still current.
+	if err := s.checkRevisionConflict(originalEntity, o.fromRevision); err != nil {
 		return nil, err
 	}
 
@@ -1293,7 +1317,7 @@ func (s *EtcdStore) ReplaceEntity(
 	// Build conditions: revision check + unique-value constraints
 	var conditions []clientv3.Cmp
 	if o.fromRevision != 0 {
-		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", o.fromRevision))
 	}
 	conditions = append(conditions, uniqueConditions...)
 
@@ -1301,6 +1325,7 @@ func (s *EtcdStore) ReplaceEntity(
 		txnResp, err = s.client.Txn(ctx).
 			If(conditions...).
 			Then(txopt...).
+			Else(clientv3.OpGet(key, clientv3.WithKeysOnly())).
 			Commit()
 	} else {
 		txnResp, err = s.client.Txn(ctx).
@@ -1313,7 +1338,7 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to replace entity in etcd", "error", err, "id", repl.Id())
+		s.logTxnConflict("replace", repl.Id(), o.fromRevision, txnResp)
 		return nil, cond.Conflict("entity", repl.Id())
 	}
 
@@ -1453,6 +1478,7 @@ func (s *EtcdStore) PatchEntity(
 		txnResp, err = s.client.Txn(ctx).
 			If(conditions...).
 			Then(txopt...).
+			Else(clientv3.OpGet(key, clientv3.WithKeysOnly())).
 			Commit()
 	} else {
 		txnResp, err = s.client.Txn(ctx).
@@ -1465,7 +1491,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	if !txnResp.Succeeded {
-		s.log.Error("failed to patch entity in etcd", "error", err, "id", entity.Id())
+		s.logTxnConflict("patch", entity.Id(), o.fromRevision, txnResp)
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
@@ -1538,14 +1564,26 @@ var deleteEntityRaceHook func()
 // delete wins against a busy reconcile loop instead of spuriously reporting the
 // entity as already gone.
 func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
+	return s.DeleteEntityAtRevision(ctx, id, 0)
+}
+
+// DeleteEntityAtRevision refuses to delete a record changed since authorization.
+// A zero revision retains the unconditional delete's retry behavior.
+func (s *EtcdStore) DeleteEntityAtRevision(ctx context.Context, id Id, revision int64) error {
 	const maxDeleteRetries = 3
 	for attempt := 0; ; attempt++ {
 		entity, err := s.GetEntity(ctx, id)
 		if err != nil {
+			if revision != 0 {
+				return err
+			}
 			if errors.Is(err, cond.ErrNotFound{}) {
 				return nil
 			}
 			return err
+		}
+		if revision != 0 && entity.GetRevision() != revision {
+			return cond.Conflict("entity", id)
 		}
 
 		// Collect all indexed attributes including nested ones within components
@@ -1608,6 +1646,10 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		// The guard failed: either the entity was concurrently deleted, or a
 		// concurrent write bumped its revision. Re-read and retry; GetEntity
 		// returning NotFound on the next pass resolves the former.
+		if revision != 0 {
+			s.log.Debug("revision-checked delete lost revision race", "id", id)
+			return cond.Conflict("entity", id)
+		}
 		if attempt >= maxDeleteRetries {
 			s.log.Error("delete lost revision race after retries", "id", id)
 			return cond.Conflict("entity", id)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 
@@ -13,10 +14,145 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadroles"
 )
+
+func TestAddonCatalog(t *testing.T) {
+	ctx := context.Background()
+	registry := addon.NewRegistry()
+	// No entity client: discovery must not depend on attached instances or
+	// provision anything, even for an addon without its own container.
+	client := app_v1alpha.NewAddonsClient(rpc.LocalClient(app_v1alpha.AdaptAddons(
+		NewAddonsServer(slog.Default(), nil, registry, nil),
+	)))
+	list, err := client.ListAvailable(ctx)
+	require.NoError(t, err)
+	require.Empty(t, list.Addons())
+
+	registry.Register("z-storage", &mockProvider{}, addon.AddonDefinition{Name: "z-storage"})
+	registry.Register("database", &mockProvider{}, addon.AddonDefinition{
+		Name: "database", DisplayName: "Database", Description: "Managed database",
+		DefaultVariant: "large", DefaultVersion: "17",
+		BaseImage: "private.example/internal-image",
+		Variants: []addon.VariantDefinition{
+			{Name: "small", Description: "Shared", Details: map[string]string{"storage": "10 GB", "cpu": "1"},
+				Config: map[string]string{"password": "secret-password", "command": "internal-execution"}},
+			{Name: "large", Description: "Dedicated"},
+		},
+	})
+	list, err = client.ListAvailable(ctx)
+	require.NoError(t, err)
+	require.Len(t, list.Addons(), 2)
+	assert.Equal(t, "database", list.Addons()[0].Name())
+	assert.Equal(t, "z-storage", list.Addons()[1].Name())
+
+	result, err := client.GetCatalog(ctx, "database")
+	require.NoError(t, err)
+	entry := result.Addon()
+	assert.Equal(t, "Database", entry.DisplayName())
+	assert.Equal(t, "Managed database", entry.Description())
+	assert.Equal(t, "large", entry.DefaultVariant())
+	assert.Equal(t, "17", entry.DefaultVersion())
+	require.Len(t, entry.Variants(), 2)
+	assert.Equal(t, "small", entry.Variants()[0].Name())
+	assert.Equal(t, "Shared", entry.Variants()[0].Description())
+	assert.Equal(t, "large", entry.Variants()[1].Name())
+	require.Len(t, entry.Variants()[0].Details(), 2)
+	assert.Equal(t, "cpu", entry.Variants()[0].Details()[0].Key())
+	assert.Equal(t, "1", entry.Variants()[0].Details()[0].Value())
+	assert.Equal(t, "storage", entry.Variants()[0].Details()[1].Key())
+	assert.Equal(t, "10 GB", entry.Variants()[0].Details()[1].Value())
+	assert.Empty(t, entry.Variants()[1].Details())
+	assert.Equal(t, list.Addons()[0], entry)
+	for _, response := range []any{list.Addons(), result.Addon()} {
+		encoded, err := json.Marshal(response)
+		require.NoError(t, err)
+		assert.Contains(t, string(encoded), "Managed database")
+		for _, internal := range []string{"secret-password", "internal-execution", "private.example", "password", "base_image", "config"} {
+			assert.NotContains(t, string(encoded), internal)
+		}
+	}
+	storage, err := client.GetCatalog(ctx, "z-storage")
+	require.NoError(t, err)
+	assert.Empty(t, storage.Addon().Variants())
+	assert.Empty(t, storage.Addon().DefaultVersion())
+	for _, name := range []string{"", "missing", "addon/database", "database:small"} {
+		_, err := client.GetCatalog(ctx, name)
+		require.Error(t, err, "name %q", name)
+	}
+}
+
+type catalogAuthenticator struct{ identity *rpc.Identity }
+
+func (a catalogAuthenticator) Authenticate(context.Context, *rpc.Credentials) (*rpc.Identity, error) {
+	return a.identity, nil
+}
+
+func TestAddonCatalogAccess(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  rpc.AuthMethod
+		role    string
+		allowed bool
+	}{
+		{"operator certificate", rpc.AuthMethodCert, "", true},
+		{"OIDC deploy", rpc.AuthMethodOIDC, "", false},
+		{"system", rpc.AuthMethodSystem, "", false},
+		{"signed", rpc.AuthMethodSigned, "", false},
+	}
+	for name, role := range workloadroles.Roles {
+		cases = append(cases, struct {
+			name    string
+			method  rpc.AuthMethod
+			role    string
+			allowed bool
+		}{name, rpc.AuthMethodWorkload, name, role.ClusterScoped})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			authz := oidcauth.NewCompositeAuthorizer(nil)
+			identity := &rpc.Identity{Subject: "test", Method: tc.method, Metadata: map[string]any{"role": tc.role}}
+			if tc.method == rpc.AuthMethodWorkload && !tc.allowed {
+				identity.Metadata["app"] = "other-app"
+			}
+			ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+				rpc.WithAuthenticator(catalogAuthenticator{identity}), rpc.WithAuthorizer(authz))
+			require.NoError(t, err)
+			registry := addon.NewRegistry()
+			registry.Register("database", &mockProvider{}, addon.AddonDefinition{Name: "database"})
+			ss.Server().ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(NewAddonsServer(slog.Default(), nil, registry, nil)))
+			cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+			require.NoError(t, err)
+			conn, err := cs.Connect(ss.ListenAddr(), "dev.miren.runtime/addons")
+			require.NoError(t, err)
+			defer conn.Close()
+			client := app_v1alpha.NewAddonsClient(conn)
+			_, listErr := client.ListAvailable(ctx)
+			_, getErr := client.GetCatalog(ctx, "database")
+			for _, err := range []error{listErr, getErr} {
+				if tc.allowed {
+					require.NoError(t, err)
+				} else {
+					var denial cond.ErrRemote
+					require.ErrorAs(t, err, &denial)
+					assert.Equal(t, "permission", denial.Category)
+					assert.Equal(t, "forbidden", denial.Code)
+				}
+			}
+			if tc.method == rpc.AuthMethodWorkload && tc.allowed {
+				require.Error(t, authz.Authorize(ctx, identity, "entityaccess", "get"))
+				require.Error(t, authz.Authorize(ctx, identity, "entityaccess", "list"))
+			}
+		})
+	}
+}
 
 type mockProvider struct{}
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"github.com/moby/buildkit/solver/pb"
 	"github.com/stretchr/testify/require"
 
@@ -307,7 +308,7 @@ func TestDepAuthRewritesForgeSSHURLs(t *testing.T) {
 	t.Parallel()
 
 	h := &highlevelBuilder{BuildOptions{Secrets: []Secret{{ID: "netrc", File: "~/.netrc"}}}}
-	state := llb.Image(imagerefs.GetGolangImage("1.23")).Run(
+	state := pinnedImage(imagerefs.GetGolangImage("1.23"), imagemetaresolver.New()).Run(
 		llb.Args([]string{"sh", "-c",
 			"rm -f /usr/bin/ssh && git ls-remote git@github.com:sindresorhus/is-plain-obj.git v4.1.0" + runNonce("#")}),
 		h.rootDepAuth(),

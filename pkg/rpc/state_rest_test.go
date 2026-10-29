@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/example"
 )
@@ -276,11 +277,13 @@ func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		deny     error
+		noAuth   bool
 		wantREST int
 		wantRPC  bool // expect the RPC call to fail
 	}{
 		{name: "allowed", deny: nil, wantREST: http.StatusOK, wantRPC: false},
 		{name: "denied", deny: errors.New("role forbids this"), wantREST: http.StatusForbidden, wantRPC: true},
+		{name: "unauthenticated", noAuth: true, wantREST: http.StatusUnauthorized, wantRPC: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -288,10 +291,14 @@ func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
 
 			r := require.New(t)
 
+			var auth rpc.Authenticator = &rpc.LocalOnlyAuthenticator{}
+			if !tc.noAuth {
+				auth = &rpc.NoOpAuthenticator{}
+			}
 			ss, err := rpc.NewState(ctx,
 				rpc.WithSkipVerify,
 				rpc.WithRESTBindAddr("localhost:0"),
-				rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}),
+				rpc.WithAuthenticator(auth),
 				rpc.WithAuthorizer(&recordingAuthorizer{deny: tc.deny}),
 			)
 			r.NoError(err)
@@ -312,9 +319,75 @@ func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
 			_, rpcErr := meter.ReadTemperature(ctx, "room1")
 
 			if tc.wantRPC {
-				r.Error(rpcErr, "RPC should refuse what REST refused")
+				code := "forbidden"
+				wantMessage := "authentication required"
+				if tc.noAuth {
+					code = "unauthorized"
+				} else {
+					wantMessage = tc.deny.Error()
+				}
+				want := cond.ErrRemote{Category: "permission", Code: code, Message: wantMessage}
+				r.Equal(want, rpcErr, "RPC should preserve the HTTP denial as a typed permission error")
+				streamErr, ok := errors.AsType[cond.ErrRemote](client.CallWithCaps(ctx, "readTemperature", nil, nil, nil))
+				r.True(ok, "streaming calls should preserve a typed permission error even when upgrade trailers are unavailable")
+				r.Equal("permission", streamErr.Category)
+				r.Equal(code, streamErr.Code)
 			} else {
 				r.NoError(rpcErr, "RPC should allow what REST allowed")
+			}
+		})
+	}
+}
+
+type resourceMeter struct{ restMeter }
+
+func (m *resourceMeter) ReadTemperature(ctx context.Context, call *example.MeterReadTemperature) error {
+	if err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "read", Instance: call.Args().Name()}); err != nil {
+		return err
+	}
+	return m.restMeter.ReadTemperature(ctx, call)
+}
+
+type roomAuthorizer struct{}
+
+func (*roomAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error { return nil }
+
+func (*roomAuthorizer) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {
+	resource, action := rpc.RPCPermissionFromContext(ctx)
+	if identity != nil && resource == "meter" && action == "readtemperature" && request.Instance == "room1" {
+		return nil
+	}
+	return rpc.ErrUnauthorized
+}
+
+func TestResolvedAuthorizationAcrossTransports(t *testing.T) {
+	ctx := t.Context()
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"), rpc.WithWSBindAddr("localhost:0"), rpc.WithTCPBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(&roomAuthorizer{}))
+	require.NoError(t, err)
+	ss.Server().ExposeValue("meter", example.AdaptMeter(&resourceMeter{}))
+	for _, name := range []string{"room1", "other"} {
+		t.Run(name, func(t *testing.T) {
+			resp := restGet(t, "https://"+ss.RESTListenAddr()+"/api/v1/meters/"+name+"/temperature")
+			defer resp.Body.Close()
+			if name == "room1" {
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+			} else {
+				require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			}
+			for _, remote := range []string{ss.ListenAddr(), "wss://" + ss.WSListenAddr(), "tcp://" + ss.TCPListenAddr()} {
+				cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+				require.NoError(t, err)
+				client, err := cs.Connect(remote, "meter")
+				require.NoError(t, err)
+				result, err := example.NewMeterClient(client).ReadTemperature(ctx, name)
+				if name == "room1" {
+					require.NoError(t, err)
+					require.Equal(t, float32(21.5), result.Reading().Temperature())
+				} else {
+					require.ErrorContains(t, err, "unauthorized")
+				}
 			}
 		})
 	}

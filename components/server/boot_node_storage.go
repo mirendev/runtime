@@ -41,6 +41,7 @@ func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOut
 		IsCoordinator: true,
 		MetricsWriter: observability.operationalMetrics,
 		CC:            containerd.Client,
+		Namespace:     containerd.Namespace,
 		Resolver:      b.resolver,
 	}, config)
 	if err != nil {

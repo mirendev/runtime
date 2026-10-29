@@ -132,6 +132,9 @@ type sandboxListing struct {
 // HttpListSandboxes (REST). Neither surface holds logic of its own beyond
 // translating its arguments.
 func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord ordering) (*sandboxListing, error) {
+	if err := preflightList(ctx); err != nil {
+		return nil, err
+	}
 	dir, err := s.loadDirectory(ctx, f)
 	if err != nil {
 		return nil, err
@@ -146,6 +149,13 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 
 	for _, sb := range dir.sandboxes {
 		if !f.matches(sb.ref) {
+			continue
+		}
+		allowed, err := authorizeOwner(ctx, dir.apps[sb.ref.AppId()], "list", true)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
 			continue
 		}
 

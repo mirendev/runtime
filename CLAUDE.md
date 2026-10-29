@@ -151,7 +151,7 @@ m app list
 
 ### ISO Environment
 The project uses **iso** for containerized development with all dependencies provided:
-- `.iso/Dockerfile` - Defines the build environment (Go 1.26.x, minimum 1.26.5, plus containerd, buildkit, etc.)
+- `.iso/Dockerfile` - Defines the build environment (Go 1.26.10, plus containerd, buildkit, etc.)
 - `.iso/services.yml` - Defines external service containers (MinIO for object storage)
 - All default `make` targets and `hack/` scripts run inside the isolated container
 - Services are automatically started and ready before commands run
@@ -210,6 +210,7 @@ To get started with iso:
 - Tests must run without any parallelism (`-p 1`) due to shared containerd/buildkit instances
 - Blackbox CLI tests in `blackbox/` directory (run via `make test-blackbox`)
 - Test data in various `testdata/` directories
+- A Go test that reads a file under `docs/` goes in its package's `docs_test.go` and is named `TestDocs*`. PRs that only touch `docs/` skip the Go test runners, so the `lint` job runs these on every PR instead.
 
 ### Distributed Runner Development
 

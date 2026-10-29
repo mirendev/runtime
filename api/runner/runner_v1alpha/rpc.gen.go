@@ -10,6 +10,61 @@ import (
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
+type sandboxStatusCountData struct {
+	Status *string `cbor:"0,keyasint,omitempty" json:"status,omitempty"`
+	Count  *int64  `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
+}
+
+type SandboxStatusCount struct {
+	data sandboxStatusCountData
+}
+
+func (v *SandboxStatusCount) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *SandboxStatusCount) Status() string {
+	if v.data.Status == nil {
+		return ""
+	}
+	return *v.data.Status
+}
+
+func (v *SandboxStatusCount) SetStatus(status string) {
+	v.data.Status = &status
+}
+
+func (v *SandboxStatusCount) HasCount() bool {
+	return v.data.Count != nil
+}
+
+func (v *SandboxStatusCount) Count() int64 {
+	if v.data.Count == nil {
+		return 0
+	}
+	return *v.data.Count
+}
+
+func (v *SandboxStatusCount) SetCount(count int64) {
+	v.data.Count = &count
+}
+
+func (v *SandboxStatusCount) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SandboxStatusCount) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SandboxStatusCount) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SandboxStatusCount) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type inviteInfoData struct {
 	Id              *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 	Status          *string             `cbor:"1,keyasint,omitempty" json:"status,omitempty"`
@@ -1904,6 +1959,69 @@ func (v *RunnerRegistrationValidateQueryResults) UnmarshalJSON(data []byte) erro
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationSandboxCountsArgsData struct{}
+
+type RunnerRegistrationSandboxCountsArgs struct {
+	call rpc.Call
+	data runnerRegistrationSandboxCountsArgsData
+}
+
+func (v *RunnerRegistrationSandboxCountsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationSandboxCountsResultsData struct {
+	Live    *int64                 `cbor:"0,keyasint,omitempty" json:"live,omitempty"`
+	Running *int64                 `cbor:"1,keyasint,omitempty" json:"running,omitempty"`
+	Others  *[]*SandboxStatusCount `cbor:"2,keyasint,omitempty" json:"others,omitempty"`
+}
+
+type RunnerRegistrationSandboxCountsResults struct {
+	call rpc.Call
+	data runnerRegistrationSandboxCountsResultsData
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) SetLive(live int64) {
+	v.data.Live = &live
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) SetRunning(running int64) {
+	v.data.Running = &running
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) SetOthers(others []*SandboxStatusCount) {
+	x := slices.Clone(others)
+	v.data.Others = &x
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationSandboxCountsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -2346,6 +2464,32 @@ func (t *RunnerRegistrationValidateQuery) Results() *RunnerRegistrationValidateQ
 	return results
 }
 
+type RunnerRegistrationSandboxCounts struct {
+	rpc.Call
+	args    RunnerRegistrationSandboxCountsArgs
+	results RunnerRegistrationSandboxCountsResults
+}
+
+func (t *RunnerRegistrationSandboxCounts) Args() *RunnerRegistrationSandboxCountsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationSandboxCounts) Results() *RunnerRegistrationSandboxCountsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -2364,6 +2508,7 @@ type RunnerRegistration interface {
 	Query(ctx context.Context, state *RunnerRegistrationQuery) error
 	QueryInfo(ctx context.Context, state *RunnerRegistrationQueryInfo) error
 	ValidateQuery(ctx context.Context, state *RunnerRegistrationValidateQuery) error
+	SandboxCounts(ctx context.Context, state *RunnerRegistrationSandboxCounts) error
 }
 
 type reexportRunnerRegistration struct {
@@ -2435,6 +2580,10 @@ func (reexportRunnerRegistration) QueryInfo(ctx context.Context, state *RunnerRe
 }
 
 func (reexportRunnerRegistration) ValidateQuery(ctx context.Context, state *RunnerRegistrationValidateQuery) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) SandboxCounts(ctx context.Context, state *RunnerRegistrationSandboxCounts) error {
 	panic("not implemented")
 }
 
@@ -2612,6 +2761,16 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"runner", "expression"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ValidateQuery(ctx, &RunnerRegistrationValidateQuery{Call: call})
+			},
+		},
+		{
+			Name:          "SandboxCounts",
+			InterfaceName: "RunnerRegistration",
+			Index:         17,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.SandboxCounts(ctx, &RunnerRegistrationSandboxCounts{Call: call})
 			},
 		},
 	}
@@ -3620,4 +3779,55 @@ func (v RunnerRegistrationClient) ValidateQuery(ctx context.Context, runner stri
 	}
 
 	return &RunnerRegistrationClientValidateQueryResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientSandboxCountsResults struct {
+	client rpc.Client
+	data   runnerRegistrationSandboxCountsResultsData
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) HasLive() bool {
+	return v.data.Live != nil
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) Live() int64 {
+	if v.data.Live == nil {
+		return 0
+	}
+	return *v.data.Live
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) HasRunning() bool {
+	return v.data.Running != nil
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) Running() int64 {
+	if v.data.Running == nil {
+		return 0
+	}
+	return *v.data.Running
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) HasOthers() bool {
+	return v.data.Others != nil
+}
+
+func (v *RunnerRegistrationClientSandboxCountsResults) Others() []*SandboxStatusCount {
+	if v.data.Others == nil {
+		return nil
+	}
+	return *v.data.Others
+}
+
+func (v RunnerRegistrationClient) SandboxCounts(ctx context.Context) (*RunnerRegistrationClientSandboxCountsResults, error) {
+	args := RunnerRegistrationSandboxCountsArgs{}
+
+	var ret runnerRegistrationSandboxCountsResultsData
+
+	err := v.Call(ctx, "SandboxCounts", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientSandboxCountsResults{client: v.Client, data: ret}, nil
 }

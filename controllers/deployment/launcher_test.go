@@ -22,6 +22,7 @@ import (
 	apiserver "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -4913,4 +4914,121 @@ func TestDisabledAppStaysAtZero(t *testing.T) {
 	pools = listAllPools(t, ctx, server)
 	require.Len(t, pools, 1)
 	assert.Equal(t, int64(0), pools[0].DesiredInstances, "a deploy to a disabled app must not boot for verification")
+}
+
+// A deploy that needs a new pool for an autoscaled service starts it at the
+// size the current pool reached, not at one.
+func TestNewAutoPoolSeededFromCurrentPoolSize(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	deploy := func(name, image string) *core_v1alpha.AppVersion {
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: image,
+			Config: core_v1alpha.Config{
+				Port: 3000,
+				Services: []core_v1alpha.Services{{
+					Name:               "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 10},
+				}},
+			},
+		}
+		verID, err := server.Client.Create(ctx, "test-"+name, ver)
+		require.NoError(t, err)
+		ver.ID = verID
+		app.ActiveVersion = ver.ID
+		require.NoError(t, server.Client.Update(ctx, app))
+		return ver
+	}
+
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+
+	deploy("v1", "oci.miren.cloud/web:1")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	oldPoolID := pools[0].ID
+	assert.Equal(t, int64(1), pools[0].DesiredInstances, "a first deploy still starts at one")
+
+	// Traffic grew the pool.
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, oldPoolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 7),
+	}, 0)
+	require.NoError(t, err)
+
+	v2 := deploy("v2", "oci.miren.cloud/web:2")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	var newPool *compute_v1alpha.SandboxPool
+	for _, p := range listAllPools(t, ctx, server) {
+		if p.ID != oldPoolID {
+			newPool = &p
+		}
+	}
+	require.NotNil(t, newPool)
+	assert.Contains(t, newPool.ReferencedByVersions, v2.ID)
+	assert.Equal(t, int64(7), newPool.DesiredInstances, "the new pool should start at the current pool's size")
+}
+
+// The old pool is only retired once the new one is fully up, so readiness
+// means every desired sandbox is running, not just the first.
+func TestWaitForPoolReadyWaitsForDesiredCount(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+
+	pool := &compute_v1alpha.SandboxPool{Service: "web", DesiredInstances: 3, ReadyInstances: 1}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+
+	err = launcher.waitForPoolReady(ctx, poolID, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "one of three ready is not ready")
+
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 3),
+	}, 0)
+	require.NoError(t, err)
+
+	require.NoError(t, launcher.waitForPoolReady(ctx, poolID, time.Second))
+}
+
+// Fixed mode can persist a desired count above MaxPoolSize, which the pool
+// manager never provisions, so readiness stops at the cap.
+func TestWaitForPoolReadyCapsAtMaxPoolSize(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: concurrency.MaxPoolSize + 1,
+		ReadyInstances:   concurrency.MaxPoolSize - 1,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+
+	err = launcher.waitForPoolReady(ctx, poolID, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "one short of the cap is not ready")
+
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, concurrency.MaxPoolSize),
+	}, 0)
+	require.NoError(t, err)
+
+	require.NoError(t, launcher.waitForPoolReady(ctx, poolID, time.Second))
 }

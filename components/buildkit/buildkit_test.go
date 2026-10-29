@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/pkg/containerdx"
+	"miren.dev/runtime/pkg/imagerefs"
 )
 
 const testNamespace = "miren-test"
@@ -345,6 +346,51 @@ func TestBuildkitRestart(t *testing.T) {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer stopCancel()
 		r.NoError(relayed.Stop(stopCtx))
+	})
+
+	// The upgrade every existing server takes when imagerefs.BuildKit moves: a
+	// container built from the previous image must be replaced, and the new
+	// daemon has to come up on the state the old one left in the data dir.
+	t.Run("restart recreates the container when the image changes", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		cc := newClient(t)
+		dataDir := t.TempDir()
+		config := buildkit.Config{SocketDir: t.TempDir(), RegistryHost: "cluster.local:5000"}
+
+		// The fork digest releases shipped before the move to upstream BuildKit.
+		restore := buildkit.SetImageForTest("oci.miren.cloud/buildkit@sha256:1263587b78162302359fec3485c153d44872114b8e944ef94be053cc2218679f")
+		t.Cleanup(restore)
+		old := buildkit.NewComponent(logger, cc, testNamespace, dataDir)
+		r.NoError(old.Start(ctx, config))
+		createdOld, _ := buildkitContainerInfo(ctx, t, cc)
+		restore()
+
+		upgraded := buildkit.NewComponent(logger, cc, testNamespace, dataDir)
+		r.NoError(upgraded.Start(ctx, config))
+		createdNew, _ := buildkitContainerInfo(ctx, t, cc)
+		r.NotEqual(createdOld, createdNew, "a changed image must recreate the container")
+
+		nsctx := namespaces.WithNamespace(ctx, testNamespace)
+		container, err := cc.LoadContainer(nsctx, "miren-buildkit")
+		r.NoError(err)
+		info, err := container.Info(nsctx)
+		r.NoError(err)
+		r.Equal(imagerefs.BuildKit, info.Image)
+
+		client, err := upgraded.Client(ctx)
+		r.NoError(err)
+		bk, err := client.Info(ctx)
+		r.NoError(err)
+		r.Equal("v0.34.1", bk.BuildkitVersion.Version)
+		client.Close()
+
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stopCancel()
+		r.NoError(upgraded.Stop(stopCtx))
 	})
 
 	t.Run("Stop removes the task and container", func(t *testing.T) {

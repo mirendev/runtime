@@ -307,6 +307,37 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 Your server must have the mkfs tools to format the disk types.
 :::
 
+### Accelerator Restart Recovery
+
+:::warning[Cloud outages can block accelerator restarts]
+For cloud-connected accelerator disks, even a replacement on the same node
+waits for the old app's shutdown, final log upload, and lease release before
+attaching. A failed final upload retains the lease and blocks both replacement
+and disk deletion until recovery. If this outlasts `lease_timeout` (five minutes
+by default), the replacement fails to boot. It does not inherit the old lease or
+pending upload batch. Preserve the image, logs, and local state; do not force a
+lease release or delete retained data to unblock the restart.
+:::
+
+### Legacy Loop Attachment Recovery
+
+Loop-backed attachment cleanup records the backing file's filesystem device and
+inode, so renaming or unlinking that file does not lose its identity. Legacy
+records can acquire this identity only while an independently known backing
+file still matches the kernel's loop status. The runtime preserves that proof
+before its volume deletion paths rename or remove the file.
+
+If a legacy backing file was already renamed or unlinked without that proof,
+cleanup remains blocked rather than guessing from a reused device name or a
+`deleted-volumes` pathname. Preserve local state and escalate for ownership
+reconciliation; deleting state or force-releasing the lease is not safe recovery.
+An intact legacy file can also remain blocked if its old loop number was reused
+by an owner Miren does not track, such as another host service: without independent
+proof of the current owner's backing file, the runtime cannot safely disown the
+stale device claim.
+Device/inode identity is not an ownership epoch across filesystem recreation or
+device reuse, and does not authorize forced cleanup of an unknown owner's lease.
+
 ### Roadmap: Cloud Backup & Sync
 
 We're building toward cloud-connected storage for Miren Disks. Here's what's planned:

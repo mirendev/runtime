@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -26,20 +27,18 @@ func RouteTLSCheck(ctx *Context, opts struct {
 		}
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
+	ic := ingress_v1alpha.NewRoutesClient(client)
 
-	route, err := ic.Lookup(ctx, opts.Host)
+	res, err := ic.Show(ctx, opts.Host, false)
 	if err != nil {
 		return fmt.Errorf("failed to lookup route: %w", err)
 	}
-	if route == nil {
-		return fmt.Errorf("route not found for host: %s", opts.Host)
-	}
+	route := res.Route()
 
 	type RouteTLSCheckJSON struct {
 		Route    string `json:"route"`
@@ -48,7 +47,7 @@ func RouteTLSCheck(ctx *Context, opts struct {
 
 	switch {
 	case opts.Clear:
-		if route.TlsCheck == "" {
+		if route.TlsCheck() == "" {
 			if opts.IsJSON() {
 				return PrintJSON(RouteTLSCheckJSON{Route: opts.Host})
 			}
@@ -56,7 +55,7 @@ func RouteTLSCheck(ctx *Context, opts struct {
 			return nil
 		}
 
-		if _, err := ic.ClearRouteTLSCheck(ctx, route); err != nil {
+		if _, err := ic.TlsCheck(ctx, opts.Host, ""); err != nil {
 			return err
 		}
 
@@ -67,14 +66,14 @@ func RouteTLSCheck(ctx *Context, opts struct {
 		return nil
 
 	case opts.Path != "":
-		updated, err := ic.SetRouteTLSCheck(ctx, route, opts.Path)
+		updated, err := ic.TlsCheck(ctx, opts.Host, opts.Path)
 		if err != nil {
 			return err
 		}
-		route = updated
+		route = updated.Route()
 
 	default:
-		if route.TlsCheck == "" {
+		if route.TlsCheck() == "" {
 			if opts.IsJSON() {
 				return PrintJSON(RouteTLSCheckJSON{Route: opts.Host})
 			}
@@ -84,12 +83,12 @@ func RouteTLSCheck(ctx *Context, opts struct {
 	}
 
 	if opts.IsJSON() {
-		return PrintJSON(RouteTLSCheckJSON{Route: opts.Host, TLSCheck: route.TlsCheck})
+		return PrintJSON(RouteTLSCheckJSON{Route: opts.Host, TLSCheck: route.TlsCheck()})
 	}
 
 	items := []ui.NamedValue{
 		ui.NewNamedValue("Route", opts.Host),
-		ui.NewNamedValue("TLS Check", route.TlsCheck),
+		ui.NewNamedValue("TLS Check", route.TlsCheck()),
 	}
 
 	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())

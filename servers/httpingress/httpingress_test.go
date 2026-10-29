@@ -636,6 +636,87 @@ func TestProxyToLeaseNoRetryOnTimeout(t *testing.T) {
 	}
 }
 
+// logLevels returns the level of each JSON log record in buf, keyed by message.
+func logLevels(t *testing.T, buf *bytes.Buffer) map[string]string {
+	t.Helper()
+	levels := map[string]string{}
+	dec := json.NewDecoder(buf)
+	for dec.More() {
+		var rec struct {
+			Level string `json:"level"`
+			Msg   string `json:"msg"`
+		}
+		require.NoError(t, dec.Decode(&rec))
+		levels[rec.Msg] = rec.Level
+	}
+	return levels
+}
+
+func TestLogSandboxDiedEarly(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantMsg   string
+		wantLevel string
+	}{
+		{
+			name: "crash cooldown",
+			// Mirrors how requestPoolCapacity's error reaches httpingress.
+			err: fmt.Errorf("failed to request pool capacity: %w",
+				fmt.Errorf("%w until 2026-10-16T20:00:00Z (consecutive crashes: 4)", activator.ErrCrashCooldown)),
+			wantMsg:   "app in crash cooldown, refusing lease",
+			wantLevel: "DEBUG",
+		},
+		{
+			name:      "sandbox died during boot",
+			err:       fmt.Errorf("%w: all sandboxes died during boot", activator.ErrSandboxDiedEarly),
+			wantMsg:   "sandbox died early while acquiring lease",
+			wantLevel: "WARN",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := &Server{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+
+			h.logSandboxDiedEarly(tt.err, "app/test")
+
+			assert.Equal(t, map[string]string{tt.wantMsg: tt.wantLevel}, logLevels(t, &logs))
+		})
+	}
+}
+
+func TestProxyToLeaseClientDisconnectLogsDebug(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	received := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(received)
+		<-r.Context().Done()
+	}))
+	defer backend.Close()
+
+	var logs bytes.Buffer
+	h := &Server{
+		Log:       slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		transport: http.DefaultTransport.(*http.Transport).Clone(),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", nil).WithContext(ctx)
+	go func() {
+		<-received
+		cancel()
+	}()
+
+	err := h.proxyToLease(rec, req, backend.URL, "app/test", "test-app", true, 0)
+
+	require.NoError(t, err, "a client hangup is not a connection error and must not invalidate the lease")
+	levels := logLevels(t, &logs)
+	assert.Equal(t, "DEBUG", levels["client disconnected before proxy response completed"])
+	assert.NotContains(t, levels, "proxy error")
+}
+
 func TestResolveVersionStrategy(t *testing.T) {
 	tests := []struct {
 		name           string

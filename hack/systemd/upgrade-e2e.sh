@@ -54,22 +54,28 @@ for v in v9.0.0 v9.0.1; do
 done
 
 # The base bundle main ships: containerd, runc and the shim the container
-# needs beside miren, and the same files the v9.0.1 fixture carries so the
-# upgrade has a bundle to install.
+# needs beside miren. The fixtures carry NEXT_BASE_URL's bundle, the same
+# one unless set, so pointing the two at bundles with different runc and
+# containerd versions moves running containers across that boundary. Either
+# may be a file:// URL to a local release-data tarball.
 BASE_URL="${BASE_URL:-https://api.miren.cloud/assets/release/miren/main/miren-base-linux-amd64.tar.gz}"
+NEXT_BASE_URL="${NEXT_BASE_URL:-$BASE_URL}"
+mkdir -p "$WORK/bundle" "$WORK/next-bundle"
 log "fetching the base bundle from $BASE_URL"
-mkdir -p "$WORK/bundle"
 curl -fsSL -o "$WORK/base.tgz" "$BASE_URL"
 tar -xzf "$WORK/base.tgz" --exclude=./miren -C "$WORK/bundle"
+log "fetching the fixtures' bundle from $NEXT_BASE_URL"
+curl -fsSL -o "$WORK/next-base.tgz" "$NEXT_BASE_URL"
+tar -xzf "$WORK/next-base.tgz" --exclude=./miren -C "$WORK/next-bundle"
 
 log "packaging fixture releases"
 # v9.0.1 is a whole base package. Its runc is the real one behind a wrapper
 # that answers --version with a string nothing else would report, so the
 # server's component report after the upgrade can only be satisfied by the
 # runc this bundle carried.
-# bundle_with_runc <dir> <version>: the base bundle into dir, its runc wrapped.
+# bundle_with_runc <dir> <version>: the fixtures' bundle into dir, its runc wrapped.
 bundle_with_runc() {
-  cp "$WORK/bundle/"* "$1/"
+  cp "$WORK/next-bundle/"* "$1/"
   mv "$1/runc" "$1/runc.real"
   cat >"$1/runc" <<WRAPPED
 #!/bin/sh
@@ -116,7 +122,10 @@ tar -C "$T" -czf "$WORK/assets/v9.0.2/miren-base-linux-amd64.tar.gz" .; rm -rf "
 for v in v9.0.1 v9.0.2; do
   n=${v##*.}
   (cd "$WORK/assets/$v" && sha256sum miren-base-linux-amd64.tar.gz >miren-base-linux-amd64.tar.gz.sha256)
-  echo "{\"version\":\"$v\",\"commit\":\"$(printf '%040d' $n)\",\"branch\":\"$v\",\"build_date\":\"2026-01-01T0$n:00:00Z\",\"artifacts\":[]}" \
+  # Upgrades check against the manifest's checksum; the .sha256 is for
+  # binaries from before that.
+  sum=$(cut -d' ' -f1 "$WORK/assets/$v/miren-base-linux-amd64.tar.gz.sha256")
+  echo "{\"version\":\"$v\",\"commit\":\"$(printf '%040d' $n)\",\"branch\":\"$v\",\"build_date\":\"2026-01-01T0$n:00:00Z\",\"artifacts\":[{\"name\":\"miren-base-linux-amd64.tar.gz\",\"sha256\":\"$sum\"}]}" \
     >"$WORK/assets/$v/version.json"
 done
 
@@ -181,6 +190,9 @@ BUSYBOX=$(sed -n 's/.*BusyboxDefault = "\(.*\)"/\1/p' "$ROOT_DIR/pkg/imagerefs/i
 log "starting a container to carry across every restart"
 in_container "$CTR image pull $BUSYBOX >/dev/null && $CTR run -d $BUSYBOX survivor sleep 86400"
 task_pid() { in_container "$CTR task ls" | awk -v t="$1" '$1 == t && $3 == "RUNNING" {print $2}'; }
+# A live pid only proves the shim kept it; exec goes through whichever runc
+# the bundle now carries, against state an older one may have written.
+survivor_execs() { in_container "$CTR task exec --exec-id e2e-$1 survivor true"; }
 SURVIVOR_PID=$(task_pid survivor)
 [ -n "$SURVIVOR_PID" ]
 # procps is not in the image; /proc is enough to find the one daemon.
@@ -207,6 +219,7 @@ in_container 'test -f /var/lib/miren/release/.previous/containerd && test -f /va
 [ "$(health .server.components.containerd)" != null ]
 in_container 'miren server operations list --format json' | jq -e '.[-1].components.runc == "e2e-wrapped"' >/dev/null
 [ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
+survivor_execs upgraded
 # New containers run through the new shim and the wrapped runc.
 in_container "$CTR run -d $BUSYBOX newcomer sleep 86400"
 [ -n "$(task_pid newcomer)" ]
@@ -228,6 +241,7 @@ fi
 [ "$(in_container '/var/lib/miren/release/runc --version')" = "runc version e2e-wrapped" ]
 in_container 'test ! -e /var/lib/miren/release/.previous'
 [ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
+survivor_execs rolled-back
 OP=$(in_container 'miren server operations list --format json' | jq -c '.[-1]')
 echo "$OP" | jq -e '.phase == "rolled_back"' >/dev/null
 echo "$OP" | jq -e '.data_restore.restored_at != null and .data_restore.backup_ref == .backup_ref' >/dev/null
@@ -251,6 +265,12 @@ done
 in_container 'miren server operations list --format json' | jq -e '.[-1].phase == "succeeded"' >/dev/null
 [ "$(health .server.runtime_instance_id)" != "$BEFORE" ]
 [ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
+
+# Tearing the survivor down is the last runc operation on state written
+# before the first upgrade.
+in_container "$CTR task kill -s KILL survivor"
+for _ in $(seq 1 20); do [ -z "$(task_pid survivor)" ] && break; sleep 0.5; done
+in_container "$CTR task rm survivor && $CTR container rm survivor"
 
 log "all upgrade scenarios passed"
 in_container 'miren server operations list'

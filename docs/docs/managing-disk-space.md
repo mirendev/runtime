@@ -41,7 +41,7 @@ Each consumer has its own janitor running on its own schedule. Nothing here need
 | Logs | VictoriaLogs | Keep `retention_period` (30d) | [`[victorialogs]`](./server-config.md#victorialogs) |
 | Metrics | VictoriaMetrics | Keep `retention_period` (1 month) | [`[victoriametrics]`](./server-config.md#victoriametrics) |
 | Deployment history | Deployment retention GC (hourly) | Keep the active and in-progress deployments, the most-recent `retention_count` (25), and anything younger than `retention_period` (30d); on a cloud-registered cluster, prune only what cloud has already stored | [`[deployment]`](./server-config.md#deployment) |
-| Preview versions | Ephemeral GC (every 5 min) | Delete past their TTL (default 24h), cap 10 per app | `--ttl` at deploy |
+| Preview versions | Ephemeral GC (every 5 min) | Delete past their TTL (default 7d), cap 10 per app | `--ttl` at deploy |
 | Deleted persistent disks | Deleted-volume GC (hourly) | Purge 7 days after deletion | see [Persistent Storage](./disks.md) |
 
 The rest of this section walks through the two that matter most on a busy cluster; the others are covered by their config reference.
@@ -61,7 +61,7 @@ So reclaiming an image is eventually-consistent: after a version ages out, its d
 
 ### Preview versions
 
-Preview (ephemeral) deploys are handled separately. Each gets a TTL at deploy time (default 24h, set with `--ttl`), and a sweep every five minutes deletes the ones that have expired, tearing down their sandbox pools and letting their images flow through the same cascade above. Miren also caps previews at 10 per app, retiring the oldest as new ones arrive. See [Pull Request Environments](./pr-environments.md) for the full preview workflow.
+Preview (ephemeral) deploys are handled separately. Each gets a TTL at deploy time (default 7d, set with `--ttl`), and a sweep every five minutes deletes the ones that have expired, tearing down their sandbox pools and letting their images flow through the same cascade above. Miren also caps previews at 10 per app, retiring the oldest as new ones arrive. See [Pull Request Environments](./pr-environments.md) for the full preview workflow.
 
 ## Under disk pressure
 

@@ -84,15 +84,13 @@ func ServerOperationsRun(ctx *Context, opts struct {
 	switch {
 	case cfgErr != nil:
 		ex.WithDataBackup(unavailableBackup{fmt.Errorf("load server config: %w", cfgErr)})
-	case cfg.Etcd.GetStartEmbedded():
+	default:
 		ex.WithDataBackup(etcd.Backup{
 			Dir:      filepath.Join(store.Dir(), "backups"),
 			Endpoint: fmt.Sprintf("https://localhost:%d", cfg.Etcd.GetClientPort()),
 			TLS:      &etcd.TLSConfig{CertsDir: coordinate.EtcdCertsDir(cfg.Server.GetDataPath())},
 			Log:      ctx.Log,
 		})
-	default:
-		ctx.Log.Info("etcd is not embedded; upgrades will not snapshot it and rollback restores only the binary")
 	}
 
 	op, err := ex.Run(ctx, opts.Operation)

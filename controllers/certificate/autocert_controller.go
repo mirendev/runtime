@@ -3,10 +3,12 @@ package certificate
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -22,6 +24,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -53,6 +56,19 @@ const (
 	hostDecisionCacheSize = 4096
 	hostAllowTTL          = 5 * time.Minute
 	hostDenyTTL           = 30 * time.Second
+
+	// How long to remember whether a refused name still has a certificate in
+	// the ACME cache. Each lookup is a read against the cluster store, and the
+	// names are client-supplied, so misses are remembered as well as hits.
+	retainedCertTTL = 5 * time.Minute
+
+	// Max time a handshake waits on reading a retained certificate.
+	retainedCertTimeout = 2 * time.Second
+
+	// Max retained-certificate reads in flight at once. A scan of random names
+	// under a route would otherwise turn every handshake into store reads.
+	// Names over the cap get the fallback and are not remembered.
+	maxConcurrentRetainedLookups = 16
 
 	// Max HostChecker calls in flight at once. Each one can make a route's app
 	// do work (and wake it from zero), so a scan of random names must not be
@@ -92,6 +108,9 @@ type AutocertController struct {
 	hostChecker      atomic.Pointer[HostChecker]
 	hostAllowed      *expirable.LRU[string, struct{}]
 	hostDenied       *expirable.LRU[string, struct{}]
+	retainedCerts    *expirable.LRU[string, *tls.Certificate] // nil value = no cert
+	retainedLookups  singleflight.Group
+	retainedSlots    chan struct{}
 	hostChecks       singleflight.Group
 	hostCheckSlots   chan struct{}
 	hostCheckTimeout time.Duration
@@ -105,6 +124,30 @@ type AutocertController struct {
 	// computed against a route's old tls_check can't outlive the purge.
 	hostGenMu sync.Mutex
 	hostGen   uint64
+	shared    *clusterstate.Store
+}
+
+// SetSharedStore enables durable ACME cache storage. Call before Init.
+func (c *AutocertController) SetSharedStore(store *clusterstate.Store) { c.shared = store }
+
+type sharedAutocertCache struct {
+	store *clusterstate.Store
+}
+
+func (c sharedAutocertCache) Get(ctx context.Context, key string) ([]byte, error) {
+	v, err := c.store.Get(ctx, "autocert/"+key)
+	if errors.Is(err, clusterstate.ErrNotFound) {
+		return nil, autocert.ErrCacheMiss
+	}
+	return v, err
+}
+
+func (c sharedAutocertCache) Put(ctx context.Context, key string, data []byte) error {
+	return c.store.Put(ctx, "autocert/"+key, data)
+}
+
+func (c sharedAutocertCache) Delete(ctx context.Context, key string) error {
+	return c.store.Delete(ctx, "autocert/"+key)
 }
 
 // acmeFailure records when an ACME attempt failed and how long to wait before
@@ -148,6 +191,8 @@ func NewAutocertController(opts AutocertControllerOpts) *AutocertController {
 		clusterHostnames: pinned,
 		hostAllowed:      expirable.NewLRU[string, struct{}](hostDecisionCacheSize, nil, hostAllowTTL),
 		hostDenied:       expirable.NewLRU[string, struct{}](hostDecisionCacheSize, nil, hostDenyTTL),
+		retainedCerts:    expirable.NewLRU[string, *tls.Certificate](hostDecisionCacheSize, nil, retainedCertTTL),
+		retainedSlots:    make(chan struct{}, maxConcurrentRetainedLookups),
 		hostCheckSlots:   make(chan struct{}, maxConcurrentHostChecks),
 		hostCheckTimeout: defaultHostCheckTimeout,
 	}
@@ -187,9 +232,16 @@ func (c *AutocertController) Init(ctx context.Context) error {
 	c.fallbackCert = fallbackCert
 	c.log.Info("loaded fallback self-signed certificate for unconfigured hosts")
 
+	cache := autocert.Cache(autocert.DirCache(certsDir))
+	if c.shared != nil {
+		if err := c.importAutocertCache(ctx, certsDir); err != nil {
+			return fmt.Errorf("importing local autocert cache: %w", err)
+		}
+		cache = sharedAutocertCache{store: c.shared}
+	}
 	c.mgr = &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
-		Cache:  autocert.DirCache(certsDir),
+		Cache:  cache,
 		Email:  c.email,
 		HostPolicy: func(ctx context.Context, host string) error {
 			if c.isAllowedHost(ctx, strings.ToLower(host)) {
@@ -218,6 +270,26 @@ func (c *AutocertController) Init(ctx context.Context) error {
 	}
 
 	c.log.Info("autocert controller initialized")
+	return nil
+}
+
+func (c *AutocertController) importAutocertCache(ctx context.Context, certsDir string) error {
+	entries, err := os.ReadDir(certsDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(certsDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if _, err := c.shared.Ensure(ctx, "autocert/"+entry.Name(), data); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -438,6 +510,9 @@ func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Ce
 	host := strings.ToLower(hello.ServerName)
 
 	if !c.isAllowedHost(hello.Context(), host) {
+		if cert := c.retainedCert(hello, host); cert != nil {
+			return cert, nil
+		}
 		return &c.fallbackCert, nil
 	}
 
@@ -531,6 +606,117 @@ func (c *AutocertController) isAllowedHost(ctx context.Context, host string) boo
 		return false
 	}
 	return c.checkHost(ctx, host)
+}
+
+// retainedCert returns a still-valid certificate already in the ACME cache for
+// a name under a route that the HostChecker no longer vouches for. That is
+// what an expired preview looks like: its label stopped resolving, but the
+// certificate it was issued is still good. Serving it lets the visitor reach
+// the ingress's "expired or missing" page instead of a certificate warning.
+//
+// The certificate is read straight from the cache and never handed to the
+// Manager, so nothing renews it; it stops being served when it runs out. A
+// scanner gains nothing either, since a name that was never vouched for has
+// no certificate to find.
+func (c *AutocertController) retainedCert(hello *tls.ClientHelloInfo, host string) *tls.Certificate {
+	if c.mgr == nil || c.mgr.Cache == nil || !c.retainsUnder(host) {
+		return nil
+	}
+	if cert, ok := c.retainedCerts.Get(host); ok {
+		if cert != nil && time.Now().After(cert.Leaf.NotAfter) {
+			return nil
+		}
+		return cert
+	}
+
+	ch := c.retainedLookups.DoChan(host, func() (any, error) {
+		select {
+		case c.retainedSlots <- struct{}{}:
+			defer func() { <-c.retainedSlots }()
+		default:
+			c.log.Debug("too many retained certificate reads in flight; serving fallback", "host", host)
+			return (*tls.Certificate)(nil), nil
+		}
+
+		// Detached from any one handshake's context: other handshakes may be
+		// waiting on this same read.
+		ctx, cancel := context.WithTimeout(context.Background(), retainedCertTimeout)
+		defer cancel()
+		return c.readRetainedCert(ctx, host), nil
+	})
+
+	// A hello built outside a real handshake carries no context.
+	ctx := hello.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(retainedCertTimeout)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res.Val.(*tls.Certificate)
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// retainsUnder reports whether a refused name may keep its certificate, which
+// only routes without a tls_check allow. Under those, a name stops being
+// vouched for only when its preview goes away. A tls_check refusal is
+// documented to mean the fallback certificate, so it has to stay that way. A
+// parent with no reconciled route yet doesn't retain either.
+func (c *AutocertController) retainsUnder(host string) bool {
+	idx := strings.IndexByte(host, '.')
+	if idx <= 0 {
+		return false
+	}
+	parent := host[idx+1:]
+	matched, checked := false, false
+	c.routeChecks.Range(func(_, v any) bool {
+		rc := v.(routeCheck)
+		if rc.host == parent || rc.host == "*."+parent {
+			matched = true
+			checked = checked || rc.tlsCheck != ""
+		}
+		return !checked
+	})
+	return matched && !checked
+}
+
+// readRetainedCert reads host's certificate from the ACME cache and remembers
+// what it found, including that there was nothing. A read that fails outright
+// is not remembered.
+func (c *AutocertController) readRetainedCert(ctx context.Context, host string) *tls.Certificate {
+	var found *tls.Certificate
+	// autocert keys an ECDSA certificate by the bare name and an RSA one with a
+	// "+rsa" suffix. Nearly every client takes ECDSA, so it is tried first.
+	for _, key := range []string{host, host + "+rsa"} {
+		data, err := c.mgr.Cache.Get(ctx, key)
+		if err != nil {
+			if !errors.Is(err, autocert.ErrCacheMiss) {
+				c.log.Debug("reading retained certificate", "host", host, "error", err)
+				return nil
+			}
+			continue
+		}
+		cert, err := tls.X509KeyPair(data, data)
+		if err != nil || cert.Leaf == nil {
+			continue
+		}
+		if time.Now().After(cert.Leaf.NotAfter) || cert.Leaf.VerifyHostname(host) != nil {
+			continue
+		}
+		found = &cert
+		break
+	}
+
+	c.retainedCerts.Add(host, found)
+	if found != nil {
+		c.log.Debug("serving retained certificate for a name no longer vouched for", "host", host)
+	}
+	return found
 }
 
 // checkHost asks the HostChecker about host, remembering the answer for a

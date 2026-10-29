@@ -46,9 +46,9 @@ func TestHubFansOutToEverySubscriber(t *testing.T) {
 	defer h.Close()
 
 	var a, b syncBuffer
-	stopA := h.Subscribe(&a)
+	stopA := h.Subscribe(&a).Stop
 	defer stopA()
-	stopB := h.Subscribe(&b)
+	stopB := h.Subscribe(&b).Stop
 	defer stopB()
 
 	_, err := h.Write([]byte("hello "))
@@ -67,9 +67,9 @@ func TestHubUnsubscribeLeavesOthersRunning(t *testing.T) {
 	defer h.Close()
 
 	var stays, leaves syncBuffer
-	stopStays := h.Subscribe(&stays)
+	stopStays := h.Subscribe(&stays).Stop
 	defer stopStays()
-	stopLeaves := h.Subscribe(&leaves)
+	stopLeaves := h.Subscribe(&leaves).Stop
 
 	_, err := h.Write([]byte("before"))
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestHubUnsubscribeIsIdempotent(t *testing.T) {
 	h := NewHub()
 	defer h.Close()
 
-	stop := h.Subscribe(&syncBuffer{})
+	stop := h.Subscribe(&syncBuffer{}).Stop
 	stop()
 	assert.NotPanics(t, stop, "double unsubscribe must not close a closed channel")
 }
@@ -112,7 +112,7 @@ func TestHubCopiesTheCallersBuffer(t *testing.T) {
 	defer h.Close()
 
 	var got syncBuffer
-	stop := h.Subscribe(&got)
+	stop := h.Subscribe(&got).Stop
 	defer stop()
 
 	shared := []byte("first ")
@@ -138,7 +138,7 @@ func TestHubDropsRatherThanBlockingOnASlowSubscriber(t *testing.T) {
 	stop := h.Subscribe(writerFunc(func(p []byte) (int, error) {
 		<-blocked
 		return len(p), nil
-	}))
+	})).Stop
 	defer stop()
 	defer close(blocked)
 
@@ -169,11 +169,11 @@ func TestHubToleratesAFailingSubscriber(t *testing.T) {
 
 	stopBad := h.Subscribe(writerFunc(func(_ []byte) (int, error) {
 		return 0, errors.New("client is gone")
-	}))
+	})).Stop
 	defer stopBad()
 
 	var good syncBuffer
-	stopGood := h.Subscribe(&good)
+	stopGood := h.Subscribe(&good).Stop
 	defer stopGood()
 
 	// Stay under the queue depth so nothing is dropped for capacity reasons and
@@ -213,7 +213,7 @@ func TestHubStdinSurvivesEveryClientLeaving(t *testing.T) {
 		}
 	}()
 
-	stop := h.Subscribe(&syncBuffer{})
+	stop := h.Subscribe(&syncBuffer{}).Stop
 	_, err := h.WriteStdin([]byte("one"))
 	require.NoError(t, err)
 	assert.Equal(t, "one", <-read)
@@ -259,7 +259,7 @@ func TestHubSubscribeAfterCloseIsInert(t *testing.T) {
 	h.Close()
 
 	var got syncBuffer
-	stop := h.Subscribe(&got)
+	stop := h.Subscribe(&got).Stop
 	defer stop()
 
 	_, err := h.Write([]byte("ignored"))
@@ -395,7 +395,7 @@ func TestHubRegistryDoesNotReviveARetiredHub(t *testing.T) {
 	assert.NotSame(t, first, second, "a new container gets a new hub")
 
 	var got syncBuffer
-	unsubscribe := second.Subscribe(&got)
+	unsubscribe := second.Subscribe(&got).Stop
 	defer unsubscribe()
 	assert.Empty(t, got.String(), "the retired hub's output must not replay into the new one")
 }
@@ -437,7 +437,7 @@ var _ io.Writer = writerFunc(nil)
 func TestHubCloseThenUnsubscribeDoesNotPanic(t *testing.T) {
 	h := NewHub()
 
-	stop := h.Subscribe(&syncBuffer{})
+	stop := h.Subscribe(&syncBuffer{}).Stop
 
 	// The sandbox goes away first...
 	h.Close()
@@ -452,7 +452,7 @@ func TestHubCloseThenUnsubscribeDoesNotPanic(t *testing.T) {
 func TestHubUnsubscribeThenCloseDoesNotPanic(t *testing.T) {
 	h := NewHub()
 
-	stop := h.Subscribe(&syncBuffer{})
+	stop := h.Subscribe(&syncBuffer{}).Stop
 	stop()
 
 	assert.NotPanics(t, h.Close)
@@ -464,7 +464,7 @@ func TestHubCloseWithManySubscribersThenUnsubscribeAll(t *testing.T) {
 
 	var stops []func()
 	for range 5 {
-		stops = append(stops, h.Subscribe(&syncBuffer{}))
+		stops = append(stops, h.Subscribe(&syncBuffer{}).Stop)
 	}
 
 	h.Close()
@@ -539,7 +539,7 @@ func TestHubReplaysOutputWrittenBeforeAnyoneAttached(t *testing.T) {
 	_, _ = h.Write([]byte("printed before the client arrived\n"))
 
 	var got syncBuffer
-	unsubscribe := h.Subscribe(&got)
+	unsubscribe := h.Subscribe(&got).Stop
 	defer unsubscribe()
 
 	assert.Eventually(t, func() bool {
@@ -557,7 +557,7 @@ func TestHubReplayThenLiveOutputArrivesOnceInOrder(t *testing.T) {
 	_, _ = h.Write([]byte("first\n"))
 
 	var got syncBuffer
-	unsubscribe := h.Subscribe(&got)
+	unsubscribe := h.Subscribe(&got).Stop
 	defer unsubscribe()
 
 	_, _ = h.Write([]byte("second\n"))
@@ -580,7 +580,7 @@ func TestHubReplayIsBounded(t *testing.T) {
 	_, _ = h.Write([]byte("TAIL"))
 
 	var got syncBuffer
-	unsubscribe := h.Subscribe(&got)
+	unsubscribe := h.Subscribe(&got).Stop
 	defer unsubscribe()
 
 	assert.Eventually(t, func() bool {
@@ -598,7 +598,7 @@ func TestHubReplayHandlesAnOversizedWrite(t *testing.T) {
 	_, _ = h.Write(append(bytes.Repeat([]byte("y"), replayBuffer+1024), []byte("END")...))
 
 	var got syncBuffer
-	unsubscribe := h.Subscribe(&got)
+	unsubscribe := h.Subscribe(&got).Stop
 	defer unsubscribe()
 
 	assert.Eventually(t, func() bool {
@@ -615,8 +615,151 @@ func TestHubClosedStillReplays(t *testing.T) {
 	h.Close()
 
 	var got syncBuffer
-	unsubscribe := h.Subscribe(&got)
+	unsubscribe := h.Subscribe(&got).Stop
 	defer unsubscribe()
 
 	assert.Contains(t, got.String(), "ran and exited")
+}
+
+// The container exiting must not cut off output already queued for a client.
+// Each chunk crosses the network one round trip at a time, so a container that
+// writes a few chunks and exits closes its Hub while most of them are still
+// queued -- and abandoning that queue is how `miren app run` printed the first
+// result of a multi-statement psql call and then exited 0 (MIR-2012).
+func TestHubCloseDeliversEverythingAlreadyQueued(t *testing.T) {
+	h := NewHub()
+
+	release := make(chan struct{})
+	var got syncBuffer
+	sub := h.Subscribe(writerFunc(func(p []byte) (int, error) {
+		<-release
+		return got.Write(p)
+	}))
+	defer sub.Stop()
+
+	var want strings.Builder
+	for i := range subscriberQueue / 2 {
+		chunk := fmt.Sprintf("chunk %d\n", i)
+		want.WriteString(chunk)
+		_, _ = h.Write([]byte(chunk))
+	}
+
+	// The container exits with nearly everything still waiting on a slow client.
+	h.Close()
+	close(release)
+
+	select {
+	case <-sub.Drained():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a subscriber with queued output never finished draining after Close")
+	}
+
+	assert.Equal(t, want.String(), got.String(), "every chunk queued before Close must reach the client")
+	assert.Zero(t, sub.Dropped())
+}
+
+// Stopping is the client leaving, which is different from the container
+// ending: there is nobody left to deliver to, so the queue is abandoned and
+// Drained must still close rather than strand whoever waits on it.
+func TestHubStopReleasesDrained(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+
+	blocked := make(chan struct{})
+	sub := h.Subscribe(writerFunc(func(p []byte) (int, error) {
+		<-blocked
+		return len(p), nil
+	}))
+
+	_, _ = h.Write([]byte("in flight"))
+	_, _ = h.Write([]byte("queued"))
+	sub.Stop()
+	close(blocked)
+
+	select {
+	case <-sub.Drained():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drained must close once a subscription is stopped")
+	}
+}
+
+// A client that falls behind loses data. That is the right trade for the
+// workload, but the client has to be able to find out, or a truncated stream
+// passes for a complete one.
+func TestHubSubscriptionCountsDroppedBytes(t *testing.T) {
+	h := NewHub()
+
+	blocked := make(chan struct{})
+	sub := h.Subscribe(writerFunc(func(p []byte) (int, error) {
+		<-blocked
+		return len(p), nil
+	}))
+	defer sub.Stop()
+
+	const chunk = "0123456789"
+	const writes = subscriberQueue * 2
+	for range writes {
+		_, _ = h.Write([]byte(chunk))
+	}
+	h.Close()
+	close(blocked)
+	<-sub.Drained()
+
+	// The first chunk may already be in the writer rather than the queue, so the
+	// exact count depends on scheduling. What matters is that it is in bytes and
+	// covers everything past the queue.
+	assert.GreaterOrEqual(t, sub.Dropped(), uint64(len(chunk)*(writes-subscriberQueue-1)))
+	assert.Zero(t, sub.Dropped()%uint64(len(chunk)), "dropped is counted in bytes of whole chunks")
+}
+
+// A client that arrives after the container is gone gets the replay
+// synchronously, so there is nothing left for it to wait on.
+func TestHubSubscribeAfterCloseIsAlreadyDrained(t *testing.T) {
+	h := NewHub()
+	_, _ = h.Write([]byte("done\n"))
+	h.Close()
+
+	sub := h.Subscribe(&syncBuffer{})
+	select {
+	case <-sub.Drained():
+	default:
+		t.Fatal("a subscription to a closed Hub has nothing to drain")
+	}
+}
+
+// A client that subscribes after the replay buffer has wrapped gets only the
+// tail. It must be told the head is missing, or a run that finished before the
+// terminal attached hands back the end of a dump as if it were all of it.
+func TestHubLateSubscriberCountsTrimmedOutputAsDropped(t *testing.T) {
+	const over = 1000
+
+	t.Run("live hub", func(t *testing.T) {
+		h := NewHub()
+		defer h.Close()
+
+		_, _ = h.Write(bytes.Repeat([]byte("a"), replayBuffer))
+		_, _ = h.Write(bytes.Repeat([]byte("b"), over))
+
+		sub := h.Subscribe(&syncBuffer{})
+		defer sub.Stop()
+		assert.Equal(t, uint64(over), sub.Dropped())
+	})
+
+	t.Run("closed hub", func(t *testing.T) {
+		h := NewHub()
+		_, _ = h.Write(bytes.Repeat([]byte("a"), replayBuffer+over))
+		h.Close()
+
+		sub := h.Subscribe(&syncBuffer{})
+		assert.Equal(t, uint64(over), sub.Dropped(), "an oversized write counts what it pushed out too")
+	})
+
+	t.Run("everything still buffered", func(t *testing.T) {
+		h := NewHub()
+		_, _ = h.Write(bytes.Repeat([]byte("a"), replayBuffer))
+		h.Close()
+
+		sub := h.Subscribe(&syncBuffer{})
+		assert.Zero(t, sub.Dropped(), "a replay that holds all the output is complete")
+	})
 }

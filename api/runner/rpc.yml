@@ -432,7 +432,37 @@ interfaces:
             type: string
             doc: Lookup, forwarding, authorization, or validation error; older runners may not support this RPC
 
+      - name: SandboxCounts
+        index: 17
+        doc: |
+          Count live sandboxes scheduled to the authenticated runner's registered
+          node. Requires a runner mTLS identity; there is no caller-selected node.
+          Stopped and dead sandboxes are excluded. No sandbox records are exposed.
+        results:
+          - name: live
+            type: int64
+            doc: Total sandboxes excluding stopped and dead, including unknown statuses
+          - name: running
+            type: int64
+            doc: Sandboxes whose status is running
+          - name: others
+            type: list
+            element: SandboxStatusCount
+            doc: Non-running live counts sorted by status, empty when all live sandboxes are running
+
 types:
+  - type: SandboxStatusCount
+    doc: A non-running live sandbox status count, without sandbox identity or configuration
+    fields:
+      - name: status
+        type: string
+        index: 0
+        doc: Status without the status. prefix; an unset or empty name is unknown
+      - name: count
+        type: int64
+        index: 1
+        doc: Number of sandboxes with this status
+
   - type: InviteInfo
     doc: Information about a runner invite
     fields:

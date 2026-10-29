@@ -146,6 +146,34 @@ func TestDecodeSagaRecordRejectsNonSaga(t *testing.T) {
 	assert.Contains(t, err.Error(), "is not a saga")
 }
 
+func TestPrintSagaShowStartupTimings(t *testing.T) {
+	for _, raw := range []string{
+		`{"wait_port_ids":["web"]}`,
+		`{"startup_timings":[{"name":"web","image":"app:v1","image_cache":"hit","durations_ns":{"image_lookup":1000000,"container_create":22000000,"task_create":3000000,"task_start":4000000}},{"name":"proxy","image":"proxy:v2","image_cache":"miss","durations_ns":{"image_lookup":2000000,"image_pull_unpack":1500000000}}]}`,
+	} {
+		exec := &saga.Execution{
+			ID: "saga/startup", DefinitionName: "create-sandbox", Status: saga.StatusFailed,
+			ExecutionOrder: []string{"boot-containers"},
+			ExecutedActions: map[string]*saga.ActionResult{
+				"boot-containers": {Output: []byte(raw), Error: "pull failed"},
+			},
+		}
+		record, err := decodeSagaRecord(sagaEntityFor(t, exec, time.Now(), time.Now()))
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		printSagaShow(&Context{Stdout: &buf}, record, nil, false)
+		if strings.Contains(raw, "startup_timings") {
+			assert.Contains(t, buf.String(), "startup web (cache hit): image_lookup=1ms container_create=22ms task_create=3ms task_start=4ms")
+			assert.Contains(t, buf.String(), "startup proxy (cache miss): image_lookup=2ms image_pull_unpack=1.5s\n")
+		} else {
+			assert.NotContains(t, buf.String(), "startup ")
+		}
+		shown := newSagaShowJSON(record, nil)
+		require.Len(t, shown.Actions, 1)
+		assert.JSONEq(t, raw, string(shown.Actions[0].Output))
+	}
+}
+
 func TestPrintSagaShow(t *testing.T) {
 	record, err := decodeSagaRecord(sagaEntityFor(t, wedgedSaga(),
 		time.Now().Add(-3*time.Hour), time.Now().Add(-2*time.Hour)))

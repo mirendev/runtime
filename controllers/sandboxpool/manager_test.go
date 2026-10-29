@@ -1,8 +1,10 @@
 package sandboxpool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -647,7 +649,9 @@ func TestManagerZeroValuePersistence(t *testing.T) {
 	}
 
 	pool.DesiredInstances = 5
-	err = manager.checkPoolForScaleDown(ctx, pool, 1*time.Second, 0)
+	poolRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	err = manager.checkPoolForScaleDown(ctx, pool, poolRes.Entity().Revision(), 1*time.Second, 0)
 	require.NoError(t, err)
 
 	updatedPool = getPool(t, ctx, server, poolID)
@@ -1859,4 +1863,121 @@ func TestManagerHealthySandboxResetPersists(t *testing.T) {
 	updated := getPool(t, ctx, server, id)
 	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
 	assert.True(t, updated.CooldownUntil.IsZero())
+}
+
+// TestScaleDownMissingVersionStaysQuiet covers a pool scaled to zero whose
+// AppVersion was deleted while a reference lingers, so it waits for
+// cleanupEmptyPools. The scale-down monitor revisits it every 30s meanwhile,
+// so the miss must not land in the ERROR or WARN tiers.
+func TestScaleDownMissingVersionStaysQuiet(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, err := server.Client.Create(ctx, "orphan-pool", &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     0,
+		ReferencedByVersions: []entity.Id{"app_version/gone"},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version:   "app_version/gone",
+			Container: []compute_v1alpha.SandboxSpecContainer{{Image: "test:latest"}},
+		},
+	})
+	require.NoError(t, err)
+
+	manager := NewManager(log, server.EAC)
+	require.NoError(t, manager.checkAllPoolsForScaleDown(ctx))
+
+	out := buf.String()
+	assert.Contains(t, out, "app version is gone")
+	assert.NotContains(t, out, "level=ERROR")
+	assert.NotContains(t, out, "level=WARN")
+}
+
+// TestScaleDownMonitorPassesStopOnCancel checks that a pass interrupted by
+// shutdown bails out instead of logging an ERROR for every remaining pool.
+func TestScaleDownMonitorPassesStopOnCancel(t *testing.T) {
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	for i := range 3 {
+		_, err := server.Client.Create(context.Background(), fmt.Sprintf("pool-%d", i), &compute_v1alpha.SandboxPool{
+			Service:              "web",
+			DesiredInstances:     1,
+			ReferencedByVersions: []entity.Id{"app_version/v1"},
+			SandboxSpec: compute_v1alpha.SandboxSpec{
+				Version:   "app_version/v1",
+				Container: []compute_v1alpha.SandboxSpecContainer{{Image: "test:latest"}},
+			},
+		})
+		require.NoError(t, err)
+	}
+	_, err := server.Client.Create(context.Background(), "sb-pending", &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+	})
+	require.NoError(t, err)
+
+	manager := NewManager(log, server.EAC)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.Error(t, manager.checkAllPoolsForScaleDown(ctx))
+	assert.Error(t, manager.cleanupEmptyPools(ctx))
+	assert.Error(t, manager.checkForStalePendingSandboxes(ctx))
+	assert.NotContains(t, buf.String(), "level=ERROR")
+	assert.NotContains(t, buf.String(), "level=WARN")
+}
+
+// A scale-down computed from a stale read must not overwrite a scale-up that
+// landed in between.
+func TestScaleDownDoesNotOverwriteConcurrentScaleUp(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 3,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version:   entity.Id("ver-1"),
+			Container: []compute_v1alpha.SandboxSpecContainer{{Image: "test:latest"}},
+		},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	for i := range 3 {
+		_, err = server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), &compute_v1alpha.Sandbox{
+			Status:       compute_v1alpha.RUNNING,
+			LastActivity: time.Now().Add(-10 * time.Minute),
+			Spec:         pool.SandboxSpec,
+		}, entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
+		require.NoError(t, err)
+	}
+
+	staleRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	staleRevision := staleRes.Entity().Revision()
+
+	// The activator scales up after the monitor read the pool.
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 6),
+	}, staleRevision)
+	require.NoError(t, err)
+
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	require.NoError(t, manager.checkPoolForScaleDown(ctx, pool, staleRevision, time.Second, 0))
+
+	assert.Equal(t, int64(6), getPool(t, ctx, server, poolID).DesiredInstances,
+		"the scale-up must survive a scale-down computed from the earlier read")
 }

@@ -26,6 +26,17 @@ func checkServer(env *doctorEnv) checkResult {
 	addr := env.cluster.Hostname
 
 	if env.connErr == nil {
+		if env.serverVersion != nil && !env.serverVersion.Ready {
+			return checkResult{
+				Status:  checkWarn,
+				Summary: "up, but not ready",
+				Problem: &ui.Diagnostic{
+					Summary: fmt.Sprintf("%s is running but isn't serving requests yet", addr),
+					Detail:  "The server answered its version probe but reports that it is still starting up.",
+					Actions: serverLogActions(env),
+				},
+			}
+		}
 		return checkResult{
 			Status:  checkOK,
 			Summary: fmt.Sprintf("connected to %s", addr),

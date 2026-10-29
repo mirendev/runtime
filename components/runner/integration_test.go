@@ -11,13 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/controllers/sandbox"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
+	entitytestutils "miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/version"
 )
@@ -300,4 +303,47 @@ done:
 
 	// Cleanup
 	cancel()
+}
+
+func TestNodeStorageOrphanLeaseRecovery(t *testing.T) {
+	deps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+	es, cleanupEntities := entitytestutils.NewInMemEntityServer(t)
+	defer cleanupEntities()
+	cc, err := containerd.New(containerdx.DefaultSocket, containerd.WithDefaultNamespace(deps.Namespace))
+	require.NoError(t, err)
+	defer cc.Close()
+	ctx := namespaces.WithNamespace(t.Context(), deps.Namespace)
+	const sandboxID entity.Id = "sandbox/recovery"
+	cont, err := cc.NewContainer(ctx, "sandbox.recovery-app")
+	require.NoError(t, err)
+	_, err = sandbox.SubContainersGone(namespaces.WithNamespace(t.Context(), ""), cc, sandboxID)
+	require.ErrorContains(t, err, "namespace is required", "an explicit empty namespace suppresses the client's default")
+	const leaseID entity.Id = "disk-lease/recovery"
+	_, err = es.EAC.Create(t.Context(), entity.New(entity.DBId, leaseID, (&storage.DiskLease{
+		ID: leaseID, DiskId: "disk/recovery", SandboxId: sandboxID,
+		NodeId: compute.NewNodeId("node").Id(), Status: storage.BOUND, AcquiredAt: time.Now(),
+	}).Encode).Attrs())
+	require.NoError(t, err)
+	leaseStatus := func() storage.DiskLeaseStatus {
+		resp, err := es.EAC.Get(t.Context(), leaseID.String())
+		require.NoError(t, err)
+		var lease storage.DiskLease
+		lease.Decode(resp.Entity().Entity())
+		return lease.Status
+	}
+	boot := func() {
+		ctx, cancel := context.WithCancel(t.Context())
+		node, err := NewNodeStorage(&ClusterAccess{Log: deps.Log, eac: es.EAC}, RunnerDeps{
+			CC: cc, Namespace: deps.Namespace,
+		}, RunnerConfig{Id: "node", DataPath: t.TempDir(), DiskMode: "universal"})
+		require.NoError(t, err)
+		defer func() { cancel(); require.NoError(t, node.Close()) }()
+		require.NoError(t, node.Start(ctx))
+	}
+	boot()
+	require.Equal(t, storage.BOUND, leaseStatus(), "missing sandbox entity does not authorize release while a container remains")
+	require.NoError(t, cont.Delete(ctx))
+	boot()
+	require.Equal(t, storage.RELEASED, leaseStatus(), "the owning runner's real startup callback releases after container teardown")
 }

@@ -10,6 +10,7 @@ import (
 
 	"miren.dev/runtime/pkg/cloudapi"
 	"miren.dev/runtime/pkg/cloudapi/cloudapitest"
+	"miren.dev/runtime/version"
 )
 
 func staticToken(token string) cloudapi.TokenFunc {
@@ -87,10 +88,15 @@ func TestRefusalIsAnError(t *testing.T) {
 }
 
 func TestSendsTheBearerToken(t *testing.T) {
+	originalVersion := version.Version
+	version.Version = "v0.15.7"
+	t.Cleanup(func() { version.Version = originalVersion })
 	var seen string
+	var userAgent string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = r.Header.Get("Authorization")
+		userAgent = r.Header.Get("User-Agent")
 		_, _ = w.Write([]byte(`{"clusters":[]}`))
 	}))
 	defer srv.Close()
@@ -101,6 +107,7 @@ func TestSendsTheBearerToken(t *testing.T) {
 	_, err = client.ListClusters(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "Bearer secret-token", seen)
+	require.Equal(t, "miren/v0.15.7", userAgent)
 }
 
 // The token is fetched per request rather than held, so a refreshed one is

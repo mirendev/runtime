@@ -1,6 +1,6 @@
 ---
 title: Run an OpenHands agent server
-description: A worked example — run OpenHands' agent server as a self-contained Miren app that executes the coding agent in its own container (no Docker socket) behind an API-key-authenticated HTTP/WebSocket API.
+description: Run OpenHands' agent server on Miren as a self-contained app, with the coding agent in its own container behind an API-key-protected API.
 keywords: [openhands, agent server, ai agent, coding agent, agent canvas, backend, api, example, deploy]
 ---
 
@@ -48,8 +48,8 @@ the browser) and connect it to this server.
 
 <CliCommand context="client">
 ```bash
-# Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
-miren cluster add -i cloud
+# Add a cluster your cloud identity can see, stored locally as `openhands` (pins the TLS fingerprint)
+miren cluster add -c <your-cluster> --as openhands
 
 miren whoami -C openhands
 ```

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -270,8 +271,6 @@ func TestWAFProfile(t *testing.T) {
 		eac: inmem.EAC,
 	}
 
-	testAppID := entity.Id("test-app-waf")
-
 	t.Run("CreateAndGet", func(t *testing.T) {
 		profile, err := client.CreateWAFProfile(ctx, 2)
 		require.NoError(t, err)
@@ -291,56 +290,12 @@ func TestWAFProfile(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("SetRouteWAFLevel", func(t *testing.T) {
-		_, err := client.SetRoute(ctx, "waf.example.com", testAppID)
-		require.NoError(t, err)
-
-		route, err := client.SetRouteWAFLevel(ctx, "waf.example.com", 2)
-		require.NoError(t, err)
-		require.False(t, entity.Empty(route.WafProfile))
-
-		profile, err := client.GetWAFProfileByID(ctx, route.WafProfile)
-		require.NoError(t, err)
-		require.Equal(t, int64(2), profile.ParanoiaLevel)
-	})
-
-	t.Run("DetachWAFProfile", func(t *testing.T) {
-		route, err := client.DetachWAFProfile(ctx, "waf.example.com")
-		require.NoError(t, err)
-		require.True(t, entity.Empty(route.WafProfile))
-
-		looked, err := client.Lookup(ctx, "waf.example.com")
-		require.NoError(t, err)
-		require.True(t, entity.Empty(looked.WafProfile))
-	})
-
-	t.Run("NonExistentRoute", func(t *testing.T) {
-		_, err := client.SetRouteWAFLevel(ctx, "nonexistent.example.com", 1)
-		require.Error(t, err)
-	})
-
-	t.Run("SetOnRoute", func(t *testing.T) {
-		_, err := client.SetRoute(ctx, "waf2.example.com", testAppID)
-		require.NoError(t, err)
-
-		route, err := client.Lookup(ctx, "waf2.example.com")
-		require.NoError(t, err)
-
-		updated, err := client.SetRouteWAFLevelOnRoute(ctx, route, 3)
-		require.NoError(t, err)
-		require.False(t, entity.Empty(updated.WafProfile))
-
-		profile, err := client.GetWAFProfileByID(ctx, updated.WafProfile)
-		require.NoError(t, err)
-		require.Equal(t, int64(3), profile.ParanoiaLevel)
-	})
-
 	t.Run("AllParanoiaLevels", func(t *testing.T) {
 		for _, level := range []int{1, 2, 3, 4} {
-			route, err := client.SetRouteWAFLevel(ctx, "waf.example.com", level)
+			profile, err := client.CreateWAFProfile(ctx, level)
 			require.NoError(t, err)
 
-			profile, err := client.GetWAFProfileByID(ctx, route.WafProfile)
+			profile, err = client.GetWAFProfileByID(ctx, profile.ID)
 			require.NoError(t, err)
 			require.Equal(t, int64(level), profile.ParanoiaLevel)
 		}
@@ -371,86 +326,6 @@ func TestValidateWildcardHost(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRouteRequestTimeout(t *testing.T) {
-	ctx := context.Background()
-
-	inmem, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
-	client := &Client{
-		log: slog.Default(),
-		ec:  ec,
-		eac: inmem.EAC,
-	}
-
-	testAppID := entity.Id("test-app-timeout")
-	const host = "timeout.example.com"
-
-	_, err := client.SetRoute(ctx, host, testAppID)
-	require.NoError(t, err)
-
-	// SetRoute returns the struct it wrote, which has no entity ID; the helpers
-	// patch by ID, so work from a looked-up route.
-	route, err := client.Lookup(ctx, host)
-	require.NoError(t, err)
-	require.Empty(t, route.RequestTimeout, "a fresh route carries no override")
-
-	t.Run("SetAndOverwrite", func(t *testing.T) {
-		_, err := client.SetRouteRequestTimeout(ctx, route, "10m")
-		require.NoError(t, err)
-
-		got, err := client.Lookup(ctx, host)
-		require.NoError(t, err)
-		require.Equal(t, "10m", got.RequestTimeout)
-
-		_, err = client.SetRouteRequestTimeout(ctx, got, "300s")
-		require.NoError(t, err)
-
-		got, err = client.Lookup(ctx, host)
-		require.NoError(t, err)
-		require.Equal(t, "300s", got.RequestTimeout)
-	})
-
-	t.Run("RejectsInvalidDurations", func(t *testing.T) {
-		// Establish a known value rather than inheriting whatever an earlier
-		// subtest happened to leave behind.
-		_, err := client.SetRouteRequestTimeout(ctx, route, "45s")
-		require.NoError(t, err)
-
-		for _, bad := range []string{"10", "forever", "0s", "-5m"} {
-			_, err := client.SetRouteRequestTimeout(ctx, route, bad)
-			require.Error(t, err, "expected %q to be rejected", bad)
-		}
-
-		// The rejected writes must not have disturbed the stored value.
-		got, err := client.Lookup(ctx, host)
-		require.NoError(t, err)
-		require.Equal(t, "45s", got.RequestTimeout)
-	})
-
-	t.Run("ClearLeavesOtherFieldsIntact", func(t *testing.T) {
-		// Clearing an already-empty override would pass vacuously, so set one.
-		_, err := client.SetRouteRequestTimeout(ctx, route, "90s")
-		require.NoError(t, err)
-
-		withWAF, err := client.SetRouteWAFLevel(ctx, host, 2)
-		require.NoError(t, err)
-		require.NotEmpty(t, withWAF.WafProfile)
-		require.Equal(t, "90s", withWAF.RequestTimeout, "precondition: an override is in place")
-
-		_, err = client.ClearRouteRequestTimeout(ctx, withWAF)
-		require.NoError(t, err)
-
-		got, err := client.Lookup(ctx, host)
-		require.NoError(t, err)
-		require.Empty(t, got.RequestTimeout, "override should be gone")
-		require.Equal(t, withWAF.WafProfile, got.WafProfile, "clearing must not disturb the WAF profile")
-		require.Equal(t, testAppID, got.App)
-		require.Equal(t, host, got.Host)
-	})
 }
 
 func TestHTTPService(t *testing.T) {
@@ -626,6 +501,38 @@ func TestClientSetRouteStoresService(t *testing.T) {
 	route, err := client.Lookup(ctx, "api.example.com")
 	require.NoError(t, err)
 	require.Equal(t, "api", route.Service)
+}
+
+func TestSetRouteWAFLevelPreservesChangesSinceLookup(t *testing.T) {
+	ctx := t.Context()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	client := NewClient(slog.Default(), inmem.EAC.Client)
+	_, err := inmem.Client.Create(ctx, "shop-route", &ingress_v1alpha.HttpRoute{
+		Host: "shop.example", App: "app/shop", AuthProvider: "oidc_provider/login",
+		RequestTimeout: "1m", Maintenance: ingress_v1alpha.Maintenance{Reason: "upgrade"},
+	})
+	require.NoError(t, err)
+	stale, err := client.Lookup(ctx, "shop.example")
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	current, err := client.ClearRouteMaintenance(ctx, stale)
+	require.NoError(t, err)
+	current, err = client.DetachAuthProviderFromRoute(ctx, current)
+	require.NoError(t, err)
+	_, err = client.SetRouteRequestTimeout(ctx, current, "2m")
+	require.NoError(t, err)
+
+	_, err = client.SetRouteWAFLevelOnRoute(ctx, stale, 3)
+	require.NoError(t, err)
+	current, err = client.Lookup(ctx, "shop.example")
+	require.NoError(t, err)
+	require.True(t, current.Maintenance.Empty())
+	require.Empty(t, current.AuthProvider)
+	require.Equal(t, "2m", current.RequestTimeout)
+	profile, err := client.GetWAFProfileByID(ctx, current.WafProfile)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, profile.ParanoiaLevel)
 }
 
 func TestValidateTLSCheckPath(t *testing.T) {

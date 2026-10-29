@@ -186,6 +186,7 @@
       "command/deploy-target-set-default"
     ]
   },
+  "command/detective",
   {
     "type": "category",
     "label": "disk",

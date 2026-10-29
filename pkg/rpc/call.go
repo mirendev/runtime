@@ -106,7 +106,7 @@ func (c *NetworkCall) NewClient(capa *Capability) Client {
 	}
 
 	if capa.Inline && c.wsSession != nil {
-		client := c.s.state.newClientFrom(capa, c.peer)
+		client := c.s.state.newClientFrom(capa)
 		client.inlineClient = &inlineClient{
 			log:     c.s.state.log,
 			oid:     capa.OID,
@@ -123,5 +123,5 @@ func (c *NetworkCall) NewClient(capa *Capability) Client {
 		return unreachableClient{oid: capa.OID}
 	}
 
-	return c.s.state.newClientFrom(capa, c.peer)
+	return c.s.state.newClientFrom(capa)
 }

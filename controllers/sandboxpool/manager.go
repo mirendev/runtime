@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	// MaxPoolSize is the maximum number of sandboxes allowed in a pool
-	// This prevents runaway growth even if there are bugs in scaling logic
-	MaxPoolSize = 20
-
 	// PendingSandboxTimeout is the maximum time a sandbox can stay in PENDING
 	// state before being marked STOPPED for cleanup. PENDING sandboxes count
 	// toward pool capacity, so stuck ones block new sandbox creation.
@@ -158,12 +154,12 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	desired := pool.DesiredInstances
 
 	// Cap desired at MaxPoolSize as a defensive measure
-	if desired > MaxPoolSize {
+	if desired > concurrency.MaxPoolSize {
 		m.log.Warn("pool desired instances exceeds maximum, capping",
 			"pool", pool.ID,
 			"desired", desired,
-			"max_size", MaxPoolSize)
-		desired = MaxPoolSize
+			"max_size", concurrency.MaxPoolSize)
+		desired = concurrency.MaxPoolSize
 	}
 
 	// Scale up if needed
@@ -553,7 +549,7 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 			"pool", pool.ID,
 			"current", current,
 			"ready", ready,
-			"desired", min(pool.DesiredInstances, MaxPoolSize))
+			"desired", min(pool.DesiredInstances, concurrency.MaxPoolSize))
 	}
 
 	// Propagate all pool changes back to the entity for the framework to diff and persist.
@@ -596,13 +592,15 @@ func (m *Manager) runScaleDownMonitor(ctx context.Context) {
 			m.log.Info("scale-down monitor stopped")
 			return
 		case <-ticker.C:
-			if err := m.checkAllPoolsForScaleDown(ctx); err != nil {
+			// A pass interrupted by shutdown fails with context canceled; that
+			// is not a failure worth an ERROR line.
+			if err := m.checkAllPoolsForScaleDown(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("scale-down check failed", "error", err)
 			}
-			if err := m.cleanupEmptyPools(ctx); err != nil {
+			if err := m.cleanupEmptyPools(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("pool cleanup failed", "error", err)
 			}
-			if err := m.checkForStalePendingSandboxes(ctx); err != nil {
+			if err := m.checkForStalePendingSandboxes(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("stale pending sandbox check failed", "error", err)
 			}
 		}
@@ -619,6 +617,10 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 	}
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
@@ -638,6 +640,20 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		// Get AppVersion to derive concurrency config
 		verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// The version can be deleted before the pool is reaped. A pool at
+			// zero desired with a lingering reference is reaped later by
+			// cleanupEmptyPools. Reaching here with DesiredInstances > 0 would
+			// take a launcher failure mid-deploy, and nothing frees that pool;
+			// we accept that rather than track per-pool state. Either way this
+			// runs every 30s, so a miss must not flood the log.
+			if errors.Is(err, cond.ErrNotFound{}) {
+				m.log.Debug("skipping scale-down for pool whose app version is gone",
+					"pool", pool.ID, "version", pool.SandboxSpec.Version)
+				continue
+			}
 			m.log.Error("failed to get version for pool", "pool", pool.ID, "error", err)
 			continue
 		}
@@ -672,7 +688,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		minInstances := int64(strategy.MinInstances())
 
 		// Check if this pool has idle sandboxes that should be retired
-		if err := m.checkPoolForScaleDown(ctx, &pool, scaleDownDelay, minInstances); err != nil {
+		if err := m.checkPoolForScaleDown(ctx, &pool, ent.Revision(), scaleDownDelay, minInstances); err != nil {
 			m.log.Error("failed to check pool for scale-down",
 				"pool", pool.ID,
 				"error", err)
@@ -684,7 +700,13 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 
 // checkPoolForScaleDown examines a single pool and decrements DesiredInstances
 // if there are idle sandboxes that exceed the ScaleDownDelay threshold.
-func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, scaleDownDelay time.Duration, minInstances int64) error {
+//
+// The write is conditional on revision, the pool revision the caller read.
+// newDesired is computed from that read, so writing it unconditionally could
+// undo a scale-up the activator made in between, and the activator's own
+// cache would then disagree with the store. On a conflict the pool
+// is simply re-examined on the next tick.
+func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, revision int64, scaleDownDelay time.Duration, minInstances int64) error {
 	// Get all sandboxes for this pool
 	sandboxes, err := m.listSandboxes(ctx, pool)
 	if err != nil {
@@ -732,7 +754,11 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 				entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, newDesired),
 			}
 
-			if _, err := m.eac.Patch(ctx, attrs, 0); err != nil {
+			if _, err := m.eac.Patch(ctx, attrs, revision); err != nil {
+				if errors.Is(err, cond.ErrConflict{}) {
+					m.log.Debug("pool changed since scale-down check, retrying next tick", "pool", pool.ID)
+					return nil
+				}
 				return fmt.Errorf("failed to update pool desired instances: %w", err)
 			}
 		}
@@ -754,6 +780,10 @@ func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
 	oneHourAgo := now.Add(-1 * time.Hour)
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
@@ -819,6 +849,10 @@ func (m *Manager) checkForStalePendingSandboxes(ctx context.Context) error {
 	threshold := now.Add(-PendingSandboxTimeout)
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 

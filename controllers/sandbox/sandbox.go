@@ -53,7 +53,6 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
-	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/ocireg"
 )
@@ -904,6 +903,24 @@ func containerPrefix(id entity.Id) string {
 	return "sandbox." + cid
 }
 
+// SubContainersGone proves local teardown from containerd, not entity status.
+// Even exited containers are retained until cleanup has destroyed them.
+func SubContainersGone(ctx context.Context, cc *containerd.Client, id entity.Id) (bool, error) {
+	if cc == nil {
+		return false, fmt.Errorf("containerd is unavailable")
+	}
+	containers, err := cc.Containers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, container := range containers {
+		if strings.HasPrefix(container.ID(), containerPrefix(id)+"-") {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // sandboxHostname returns a valid hostname for a sandbox container.
 // This is used both for the UTS hostname and the /etc/hosts entry so that
 // processes like EPMD that resolve their own hostname can find themselves.
@@ -1314,14 +1331,15 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	switch co.Status {
 	case compute.DEAD:
-		// A sandbox retired while draining (unhealthy or no-restart cleanup)
-		// whose drain was handed off at shutdown still has a task running.
-		// Nothing else will finish that teardown until the entity is deleted.
-		if c.drainInterrupted(ctx, co.ID) {
-			c.Log.Info("resuming interrupted teardown of dead sandbox", "id", co.ID)
-			return c.StopSandbox(ctx, co.ID, co)
+		// DEAD can precede teardown, including failures before the drain stamp.
+		gone, err := SubContainersGone(namespaces.WithNamespace(ctx, c.Namespace), c.CC, co.ID)
+		if err != nil {
+			return err
 		}
-		return nil
+		if gone {
+			return c.ReleaseDiskLeases(ctx, co.ID)
+		}
+		return c.StopSandbox(ctx, co.ID, co)
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
 		return c.StopSandbox(ctx, co.ID, co)
@@ -1846,7 +1864,7 @@ func (c *SandboxController) BuildSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.ensureImage(ctx, sb, meta.ShortId(), sandboxImage)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), sandboxImage, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2204,12 +2222,13 @@ func (c *SandboxController) BootContainers(
 	cgroups map[string]string,
 	meta *entity.Meta,
 	volumeMounts map[string]string,
-) ([]WaitPort, error) {
+) ([]WaitPort, []ContainerStartupTiming, error) {
 	c.Log.Info("booting containers", "count", len(sb.Spec.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	var ret []WaitPort
+	var timings []ContainerStartupTiming
 	var createdContainers []containerd.Container
 
 	// Clean up any created containers on failure
@@ -2224,10 +2243,15 @@ func (c *SandboxController) BootContainers(
 	c.registerSandboxDNS(ctx, sb, ep, meta)
 
 	for _, container := range sb.Spec.Container {
-		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts)
+		timings = append(timings, ContainerStartupTiming{
+			Name: container.Name, Image: container.Image,
+			DurationsNS: make(map[string]time.Duration),
+		})
+		timing := &timings[len(timings)-1]
+		opts, err := c.buildSubContainerSpec(ctx, sb, &container, ep, sbPid, meta, volumeMounts, timing)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, fmt.Errorf("failed to build container spec: %w", err)
+			return nil, timings, fmt.Errorf("failed to build container spec: %w", err)
 		}
 
 		id := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
@@ -2237,17 +2261,19 @@ func (c *SandboxController) BootContainers(
 
 		c.Log.Info("creating container", "id", id)
 
+		start := time.Now()
 		cc, err := c.CC.NewContainer(ctx, id, opts...)
+		timing.DurationsNS["container_create"] = time.Since(start)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, errors.Wrapf(err, "failed to create container %s", sb.ID)
+			return nil, timings, errors.Wrapf(err, "failed to create container %s", sb.ID)
 		}
 		createdContainers = append(createdContainers, cc)
 
 		spec, err := cc.Spec(ctx)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, fmt.Errorf("failed to get container spec: %w", err)
+			return nil, timings, fmt.Errorf("failed to get container spec: %w", err)
 		}
 
 		cgroups[container.Name] = spec.Linux.CgroupsPath
@@ -2278,18 +2304,22 @@ func (c *SandboxController) BootContainers(
 			cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
 		}
 
+		start = time.Now()
 		task, err := cc.NewTask(ctx, cio.NewCreator(cioOpts...))
+		timing.DurationsNS["task_create"] = time.Since(start)
 		if err != nil {
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, err
+			return nil, timings, err
 		}
 
+		start = time.Now()
 		err = task.Start(ctx)
+		timing.DurationsNS["task_start"] = time.Since(start)
 		if err != nil {
 			// Try to delete the task first if it was created but not started
 			task.Delete(ctx, containerd.WithProcessKill)
 			c.cleanupContainers(ctx, createdContainers)
-			return nil, err
+			return nil, timings, err
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
@@ -2317,262 +2347,7 @@ func (c *SandboxController) BootContainers(
 		}
 	}
 
-	return ret, nil
-}
-
-func (c *SandboxController) monitorTaskExit(
-	sb *compute.Sandbox,
-	containerID string,
-	containerName string,
-	task containerd.Task,
-	exitCh <-chan containerd.ExitStatus,
-) {
-	c.Log.Debug("monitoring task for exit", "sandbox", sb.ID, "container", containerID)
-
-	for {
-		select {
-		case exitStatus := <-exitCh:
-			// Check if the exit status contains an error. Per containerd docs:
-			// "ExitCode() is only valid if Error() returns nil" and
-			// "If an error is returned, the process may still be running."
-			// This can happen when re-establishing task monitoring after server restart,
-			// where containerd returns an ExitStatus with UnknownExitStatus (255) and
-			// zero exit time because the task state is uncertain.
-			if err := exitStatus.Error(); err != nil {
-				c.Log.Warn("received exit status with error, attempting to re-establish monitoring",
-					"sandbox", sb.ID,
-					"container", containerID,
-					"error", err,
-				)
-				// Try to re-establish monitoring since the process may still be running
-				newExitCh, waitErr := task.Wait(c.topCtx)
-				if waitErr != nil {
-					c.Log.Warn("failed to re-establish task monitoring after error status",
-						"sandbox", sb.ID,
-						"container", containerID,
-						"error", waitErr,
-					)
-					return
-				}
-				exitCh = newExitCh
-				continue
-			}
-
-			c.Log.Info("container process exited",
-				"sandbox", sb.ID,
-				"container", containerID,
-				"exit_code", exitStatus.ExitCode(),
-				"exit_time", exitStatus.ExitTime(),
-			)
-			c.setProcessExited(containerID)
-
-			// We don't delete the task here so that our destroySubContainers function
-			// has a consistent view of the state of containers and tasks.
-
-			// Record the exit in the same patch as the STOPPED transition, so
-			// anything woken by the stop already has the code. Splitting them
-			// would leave a window where a run's sandbox reads stopped with no
-			// result to report.
-			//
-			// ExitTime can be zero even on a clean exit, and an Exit carrying a
-			// zero code and a zero time is Empty() -- it would encode to nothing
-			// and the code would silently vanish. Fall back to now.
-			exitAt := exitStatus.ExitTime()
-			if exitAt.IsZero() {
-				exitAt = time.Now()
-			}
-
-			// Update sandbox status to STOPPED using Patch (only updating the
-			// fields set here). STOPPED triggers cleanup in reconciliation
-			// (stopSandbox), which:
-			// - Releases IPs immediately
-			// - Cleans up containers
-			// - Marks as DEAD afterward
-			//
-			// The DEAD patch that follows leaves Exit intact: it is a struct
-			// literal with an empty Exit, which the generated encoder skips.
-			ctx := context.Background()
-			result, err := c.recordExit(c.topCtx, sb.ID, compute.Exit{
-				Code:      int64(exitStatus.ExitCode()),
-				At:        exitAt,
-				Container: containerName,
-			})
-			if err != nil {
-				if !errors.Is(err, cond.ErrNotFound{}) {
-					c.Log.Error("failed to update sandbox status to STOPPED",
-						"sandbox", sb.ID,
-						"error", err,
-					)
-				}
-				return
-			}
-			if c.writeTracker != nil && result != nil && result.HasRevision() {
-				c.writeTracker.RecordWrite(result.Revision())
-			}
-
-			// If this sandbox belongs to a task run, report the exit to the run
-			// as well. That is not redundancy: the sandbox entity has several
-			// writers, so the exit recorded there can lose a write to a
-			// concurrent stale patch, while the run has exactly one writer plus
-			// this input and nothing to contend with.
-			c.reportRunExit(ctx, sb, exitStatus.ExitCode(), exitAt)
-
-			// Release this container's stdio now that its process is gone.
-			//
-			// StopSandbox does this too, but it runs from reconciliation, and
-			// nothing schedules a reconcile at this moment -- so it lands on
-			// the controller's next resync, anywhere from zero to a full period
-			// away. An attached client blocks on the Hub closing, so waiting
-			// for that pass put a uniform 0-60s tail on every `miren app run`:
-			// the command's output arrived at once and the terminal then sat
-			// there, long after the container had exited (MIR-1769).
-			//
-			// Closing a Hub also closes the container's stdin, which is why
-			// only teardown may normally do it. It is safe here for the same
-			// reason it is safe there: the process this stdin belonged to has
-			// already exited. The Hub lingers after closing, so a client that
-			// arrives late still gets the replayed output.
-			c.hubs.Remove(sb.ID, containerName)
-
-			c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
-			return
-
-		case <-c.topCtx.Done():
-			c.Log.Debug("task monitoring cancelled", "sandbox", sb.ID, "container", containerID)
-			return
-		}
-	}
-}
-
-// recordExit writes a container's exit alongside the STOPPED transition, under
-// optimistic concurrency.
-//
-// The revision guard is the whole point. PatchEntity is read-modify-write, and
-// the rest of the controller patches with revision 0, so two writers computed
-// from the same snapshot do not merge -- the second simply overwrites the first
-// wholesale. The boot path is exactly such a writer: it decides to mark a
-// sandbox RUNNING from a snapshot taken before the task started, and for a
-// command that exits in milliseconds that write can land after the exit. The
-// result is not a clobbered field but a lost update, taking the exit code with
-// it and restoring RUNNING on a sandbox whose process is already gone.
-//
-// Retrying against the current revision makes the exit the last write instead.
-// The cap is high rather than small: losing a task's exit code is not something
-// to give up on after a couple of attempts, and contention here is bounded by
-// the handful of writers a single sandbox has.
-func (c *SandboxController) recordExit(
-	ctx context.Context,
-	id entity.Id,
-	exit compute.Exit,
-) (*entityserver_v1alpha.EntityAccessClientPatchResults, error) {
-	const maxAttempts = 100
-
-	var lastErr error
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			// Back off rather than hammering the store. Without this a
-			// contended sandbox issues up to 200 immediate round trips, and a
-			// shutdown could not interrupt them.
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(min(time.Duration(attempt)*10*time.Millisecond, 500*time.Millisecond)):
-			}
-		}
-
-		resp, err := c.EAC.Get(ctx, id.String())
-		if err != nil {
-			return nil, err
-		}
-
-		var current compute.Sandbox
-		current.Decode(resp.Entity().Entity())
-		if current.Status == compute.DEAD {
-			// Do not advance UpdatedAt on an already-counted failure.
-			return nil, nil
-		}
-		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
-		if current.StopRequestedAt.IsZero() && current.Status == compute.STOPPED && current.Exit.Empty() && current.StartupOutcome != compute.STARTUP_FAILED {
-			stopped.StopRequestedAt = time.Now()
-		}
-		if current.StartupOutcome == "" {
-			switch current.Status {
-			case compute.RUNNING:
-				stopped.StartupOutcome = compute.STARTUP_RUNNING
-			case compute.PENDING:
-				stopped.StartupOutcome = compute.STARTUP_FAILED
-			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
-				// No lifecycle conclusion from these states alone.
-			}
-		}
-		patchAttrs := entity.New(
-			entity.Ref(entity.DBId, id),
-			stopped.Encode,
-		)
-
-		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), resp.Entity().Revision())
-		if err == nil {
-			return result, nil
-		}
-		if !errors.Is(err, cond.ErrConflict{}) {
-			return nil, err
-		}
-
-		lastErr = err
-		c.Log.Debug("retrying exit record after a concurrent sandbox write",
-			"sandbox", id, "attempt", attempt+1)
-	}
-
-	return nil, fmt.Errorf("recording exit for %s: %w", id, lastErr)
-}
-
-// reportRunExit records a container's exit against the task run that owns it.
-//
-// RFD-97 models the reported exit as an *input* to the run controller rather
-// than a state the reporter owns, with a source saying where it came from. This
-// is that input for the ordinary case where the command is the container's own
-// process; the exec path supplies the same field when a client is attached.
-//
-// Reporting here rather than leaving the run to read it off the sandbox is what
-// makes the exit code reliable. The sandbox entity is written by the boot path,
-// the exit monitor, and teardown, all with revision 0 -- so a read-modify-write
-// computed from a pre-exit snapshot can land afterwards and take the exit with
-// it. The run entity has one writer and this input, so there is no race to lose.
-func (c *SandboxController) reportRunExit(
-	ctx context.Context,
-	sb *compute.Sandbox,
-	code uint32,
-	at time.Time,
-) {
-	var runID entity.Id
-	for _, l := range sb.Spec.LogAttribute {
-		if l.Key == "miren.run" {
-			runID = entity.Id(l.Value)
-			break
-		}
-	}
-	if runID == "" {
-		return
-	}
-
-	_, err := c.EAC.Patch(ctx, entity.New(
-		entity.Ref(entity.DBId, runID),
-		(&run_v1alpha.Run{
-			Result: run_v1alpha.Result{
-				Code:   int64(code),
-				At:     at,
-				Source: run_v1alpha.TASK,
-			},
-		}).Encode,
-	).Attrs(), 0)
-	if err != nil {
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			c.Log.Warn("failed to report exit to run", "run", runID, "sandbox", sb.ID, "error", err)
-		}
-		return
-	}
-
-	c.Log.Debug("reported exit to run", "run", runID, "sandbox", sb.ID, "exit_code", code)
+	return ret, timings, nil
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {
@@ -2592,11 +2367,12 @@ func (c *SandboxController) buildSubContainerSpec(
 	sbPid int,
 	meta *entity.Meta,
 	volumeMounts map[string]string,
+	timing *ContainerStartupTiming,
 ) (
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.ensureImage(ctx, sb, meta.ShortId(), co.Image)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), co.Image, timing)
 	if err != nil {
 		return nil, err
 	}
@@ -3234,17 +3010,20 @@ cleanup:
 	// graceful-shutdown loop above.
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), forceKillTimeout)
 	defer cleanupCancel()
+	var cleanupErr error
 	for _, info := range containers {
 		if info.task != nil {
 			if _, err := info.task.Delete(cleanupCtx, containerd.WithProcessKill); err != nil {
 				if !errdefs.IsNotFound(err) {
 					c.Log.Debug("failed to delete task during cleanup", "id", info.id, "err", err)
+					cleanupErr = stderrors.Join(cleanupErr, err)
 				}
 			}
 		}
 		if err := info.container.Delete(cleanupCtx, containerd.WithSnapshotCleanup); err != nil {
 			if !errdefs.IsNotFound(err) {
 				c.Log.Debug("failed to delete container", "id", info.id, "err", err)
+				cleanupErr = stderrors.Join(cleanupErr, err)
 			}
 		} else {
 			c.Log.Debug("deleted container", "id", info.id)
@@ -3252,25 +3031,7 @@ cleanup:
 	}
 
 	c.Log.Info("subcontainer destruction complete", "sandbox_id", id, "elapsed", time.Since(startTime))
-	return killed, nil
-}
-
-// drainInterrupted reports whether any of a sandbox's subcontainers was sent
-// SIGTERM and is still around, meaning a previous teardown stopped partway.
-func (c *SandboxController) drainInterrupted(ctx context.Context, id entity.Id) bool {
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
-	containerList, err := c.CC.Containers(ctx, fmt.Sprintf("labels.%q", stopRequestedLabel))
-	if err != nil {
-		c.Log.Warn("failed to check for interrupted drains", "id", id, "err", err)
-		return false
-	}
-	prefix := containerPrefix(id) + "-"
-	for _, cont := range containerList {
-		if strings.HasPrefix(cont.ID(), prefix) {
-			return true
-		}
-	}
-	return false
+	return killed, cleanupErr
 }
 
 // shutdownAttach picks how to attach to a task being shut down. A task that
@@ -3492,13 +3253,6 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.Log.Error("failed to remove monitoring metrics", "id", id, "error", err)
 	}
 
-	// Release disk leases early so replacement sandboxes can acquire them
-	// while we wait for container shutdown
-	if err := c.ReleaseDiskLeases(ctx, id); err != nil {
-		c.Log.Error("failed to release disk leases", "id", id, "error", err)
-		// Continue with cleanup even if this fails
-	}
-
 	// Destroy subcontainers - this will discover them from containerd
 	c.Log.Debug("destroying subcontainers", "id", id)
 	killed, err := c.destroySubContainers(ctx, id, sb)
@@ -3511,14 +3265,19 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	}
 	if err != nil {
 		c.Log.Error("failed to destroy subcontainers", "id", id, "err", err)
-		// Continue with cleanup even if this fails
+		return err
 	}
 	if len(killed) > 0 && sb != nil {
 		c.reportForcedKills(ctx, sb, killed)
 	}
 
+	// Disk fencing must outlive the last app write and open device handle.
+	if err := c.ReleaseDiskLeases(ctx, id); err != nil {
+		return fmt.Errorf("release disk leases after container shutdown: %w", err)
+	}
+
 	// Stop replicating sqlite disks only once the containers are gone. Doing it
-	// alongside the lease release above would end replication while the app is
+	// before container shutdown would end replication while the app is
 	// still shutting down gracefully, so anything it wrote in that window —
 	// which is as long as the shutdown timeout — would never reach the
 	// coordinator. Registrations are refcounted by sandbox, so a replacement
@@ -3699,6 +3458,13 @@ func (c *SandboxController) releaseSqliteDisks(ctx context.Context, id entity.Id
 // This transitions leases to RELEASED status, which triggers the disk lease
 // controller to unmount the volumes and release the underlying resources.
 func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
+	gone, err := SubContainersGone(namespaces.WithNamespace(ctx, c.Namespace), c.CC, sandboxID)
+	if err != nil {
+		return fmt.Errorf("verify sandbox teardown before lease release: %w", err)
+	}
+	if !gone {
+		return fmt.Errorf("sandbox %s still has app containers", sandboxID)
+	}
 	// Find all disk leases owned by this sandbox
 	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
 	if err != nil {
@@ -3710,6 +3476,9 @@ func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID ent
 		lease.Decode(e.Entity())
 
 		if lease.SandboxId != sandboxID {
+			continue
+		}
+		if lease.NodeId != "" && !c.NodeId.Matches(lease.NodeId) {
 			continue
 		}
 

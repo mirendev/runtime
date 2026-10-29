@@ -96,6 +96,10 @@ type Lease struct {
 
 	Size int
 	URL  string
+
+	// Overflow marks a lease admitted over target. It should carry only the
+	// request that acquired it, so over-target load doesn't outlive it.
+	Overflow bool
 }
 
 func (l *Lease) Version() *core_v1alpha.AppVersion {
@@ -189,6 +193,15 @@ type localActivator struct {
 	// Map key is verKey (version + service), value is list of channels to notify
 	newSandboxChans map[verKey][]chan struct{}
 
+	// scalingUp marks pools with a background scaleUpForDemand in flight
+	scalingUp map[entity.Id]bool
+
+	// poolRecheckedAt throttles scaleUpForDemand's store re-reads per pool
+	poolRecheckedAt map[entity.Id]time.Time
+
+	// scaleRetryAt holds off scaleUpForDemand for a pool after a failed attempt
+	scaleRetryAt map[entity.Id]time.Time
+
 	// invalidationCh signals httpingress when a sandbox becomes non-RUNNING
 	invalidationCh chan SandboxInvalidation
 
@@ -240,67 +253,43 @@ func (a *localActivator) SetPoolCreator(pc PoolCreator) {
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
 
-	// Try to find an available sandbox with capacity (read lock for scanning)
-	a.mu.RLock()
+	a.mu.Lock()
 	versionRef, ok := a.versions[key]
-	var candidateSandbox *sandbox
 	hasPending := false
 	if ok {
-		// Look up the pool's sandboxes
-		ps, poolOk := a.poolSandboxes[versionRef.poolID]
-		if poolOk && len(ps.sandboxes) > 0 {
-			a.log.Debug("checking existing sandboxes in pool", "app", ver.App, "version", ver.Version, "pool", versionRef.poolID, "sandboxes", len(ps.sandboxes))
+		if ps, poolOk := a.poolSandboxes[versionRef.poolID]; poolOk {
+			if ver.EphemeralLabel != "" {
+				for _, s := range ps.sandboxes {
+					if len(s.sandbox.Spec.Volume) > 0 {
+						a.mu.Unlock()
+						return nil, ephemeralx.ErrDisksUnsupported
+					}
+				}
+			}
 
-			// Scan for a sandbox with capacity
-			start := rand.Int() % len(ps.sandboxes)
-			for i := 0; i < len(ps.sandboxes); i++ {
-				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
-				if ver.EphemeralLabel != "" && len(s.sandbox.Spec.Volume) > 0 {
-					a.mu.RUnlock()
-					return nil, ephemeralx.ErrDisksUnsupported
+			if lease, overTarget := a.acquireFromPoolLocked(ps, ver, service); lease != nil {
+				a.mu.Unlock()
+				if overTarget {
+					// Every running sandbox is at its requests_per_instance target.
+					// Serve the request anyway and grow the pool in the background:
+					// the target is a scaling signal, not an admission cap.
+					a.log.Debug("all sandboxes at target, admitting over target", "app", ver.App, "version", ver.Version, "sandbox", lease.sandbox.ID)
+					a.scaleUpForDemand(ver, service)
 				}
-				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
-					candidateSandbox = s
-					break
-				}
-				// Track if we have PENDING sandboxes (being created/booting)
+				return lease, nil
+			}
+
+			for _, s := range ps.sandboxes {
 				if s.sandbox.Status == compute_v1alpha.PENDING {
 					hasPending = true
+					break
 				}
 			}
 		}
 	}
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
-	// If we found a candidate, acquire write lock and double-check status and capacity
-	if candidateSandbox != nil {
-		a.mu.Lock()
-		// Double-check status and capacity (may have changed between locks)
-		if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
-			candidateSandbox.tracker.HasCapacity() &&
-			candidateSandbox.url != "" {
-			leaseSize := candidateSandbox.tracker.AcquireLease()
-			candidateSandbox.lastRenewal = time.Now()
-
-			lease := &Lease{
-				ver:     ver,
-				sandbox: candidateSandbox.sandbox,
-				ent:     candidateSandbox.ent,
-				pool:    service, // Pool identifier is now the service name
-				service: service,
-				Size:    leaseSize,
-				URL:     candidateSandbox.url,
-			}
-			used := candidateSandbox.tracker.Used()
-			a.mu.Unlock()
-			a.log.Debug("reusing sandbox", "app", ver.App, "version", ver.Version, "sandbox", candidateSandbox.sandbox.ID, "used", used)
-			return lease, nil
-		}
-		a.mu.Unlock()
-		// Status changed or capacity was taken between RLock and Lock, fall through to pool request
-	}
-
-	// No available sandboxes with capacity
+	// Nothing is routable yet
 	if hasPending {
 		// We have PENDING sandboxes booting - wait for them instead of creating more
 		a.log.Info("no running sandboxes available, but pending sandboxes exist - waiting",
@@ -310,7 +299,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		return a.waitForSandbox(ctx, ver, service, false)
 	}
 
-	// No RUNNING or PENDING sandboxes - need to scale up via pool.
+	// No routable or PENDING sandboxes - need to scale up via pool.
 	// Ephemeral preview deploys are capped at one instance by EphemeralStrategy
 	// (MaxInstances=1), so requestPoolCapacity won't scale them past their single
 	// sandbox — it returns the at-cap pool and the caller waits for it.
@@ -323,6 +312,13 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
+
+// ErrCrashCooldown means the pool is backing off after repeated crashes and
+// the activator refused to start another sandbox. It wraps ErrSandboxDiedEarly
+// so existing checks still match. The sandboxpool manager reports the cooldown
+// once when it begins; callers seeing this per request should stay quiet.
+var ErrCrashCooldown = fmt.Errorf("%w: application in crash cooldown", ErrSandboxDiedEarly)
+
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
 // ErrAppDisabled means the app was disabled with `miren app disable`. No
@@ -361,11 +357,30 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		a.mu.RUnlock()
 	}
 
-	var pool *compute_v1alpha.SandboxPool
+	// Register before requesting capacity so this waiter counts toward the
+	// demand that sizes the request.
+	notifyChan := make(chan struct{}, 1)
+	a.mu.Lock()
+	if a.newSandboxChans == nil {
+		a.newSandboxChans = make(map[verKey][]chan struct{})
+	}
+	a.newSandboxChans[key] = append(a.newSandboxChans[key], notifyChan)
+	a.mu.Unlock()
+
+	// Clean up the channel on exit
+	defer func() {
+		a.mu.Lock()
+		a.removeWaiterLocked(key, notifyChan)
+		a.mu.Unlock()
+		close(notifyChan)
+	}()
+
 	if incrementPool {
-		// Request additional capacity from pool
-		var err error
-		pool, err = a.requestPoolCapacity(ctx, ver, service)
+		a.mu.RLock()
+		target := a.demandTargetLocked(key)
+		a.mu.RUnlock()
+
+		pool, err := a.requestPoolCapacityTo(ctx, ver, service, target)
 		if err != nil {
 			return nil, fmt.Errorf("failed to request pool capacity: %w", err)
 		}
@@ -381,29 +396,6 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 			"service", service)
 	}
 
-	// Register notification channel for this wait
-	notifyChan := make(chan struct{}, 1)
-	a.mu.Lock()
-	a.newSandboxChans[key] = append(a.newSandboxChans[key], notifyChan)
-	a.mu.Unlock()
-
-	// Clean up the channel on exit
-	defer func() {
-		a.mu.Lock()
-		chans := a.newSandboxChans[key]
-		for i, ch := range chans {
-			if ch == notifyChan {
-				a.newSandboxChans[key] = append(chans[:i], chans[i+1:]...)
-				break
-			}
-		}
-		if len(a.newSandboxChans[key]) == 0 {
-			delete(a.newSandboxChans, key)
-		}
-		a.mu.Unlock()
-		close(notifyChan)
-	}()
-
 	// Cap the per-request wait at 120s. The default PortWaitTimeout is 15s and
 	// a first-time image pull on a node that hasn't seen the image can run
 	// 30-90s, plus container setup. The previous 50s cap was too aggressive
@@ -418,60 +410,43 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	defer ticker.Stop()
 
 	// Helper to check for available sandbox
+	// Once anything in the pool is routable, every waiter takes it: a
+	// sandbox that just booted serves the whole queue rather than the few
+	// leases its requests_per_instance target would allow, and the pool keeps
+	// growing in the background from the demand those waiters represent.
 	checkForSandbox := func() (*Lease, bool) {
-		a.mu.RLock()
+		a.mu.Lock()
 		versionRef, ok := a.versions[key]
-		var candidateSandbox *sandbox
-		if ok {
-			// Look up the pool's sandboxes
-			ps, poolOk := a.poolSandboxes[versionRef.poolID]
-			if poolOk && len(ps.sandboxes) > 0 {
-				// Try to find a sandbox with capacity.
-				// Require url != "" — a sandbox can briefly be tracked as RUNNING
-				// before the watcher has populated its URL, and returning a Lease
-				// with an empty URL would cause the proxy to fail downstream.
-				// Mirrors the predicate in AcquireLease.
-				start := rand.Int() % len(ps.sandboxes)
-				for i := 0; i < len(ps.sandboxes); i++ {
-					s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
-					if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
-						candidateSandbox = s
-						break
-					}
-				}
-			}
-		}
-		a.mu.RUnlock()
-
-		if candidateSandbox != nil {
-			a.mu.Lock()
-			// Double-check status, capacity, and URL (may have changed between locks)
-			if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
-				candidateSandbox.tracker.HasCapacity() &&
-				candidateSandbox.url != "" {
-				leaseSize := candidateSandbox.tracker.AcquireLease()
-				candidateSandbox.lastRenewal = time.Now()
-				a.mu.Unlock()
-
-				a.log.Info("acquired lease from pool sandbox",
-					"app", ver.App,
-					"version", ver.Version,
-					"sandbox", candidateSandbox.sandbox.ID,
-					"service", service)
-
-				return &Lease{
-					ver:     ver,
-					sandbox: candidateSandbox.sandbox,
-					ent:     candidateSandbox.ent,
-					pool:    service,
-					service: service,
-					Size:    leaseSize,
-					URL:     candidateSandbox.url,
-				}, true
-			}
+		if !ok {
 			a.mu.Unlock()
+			return nil, false
 		}
-		return nil, false
+		ps, poolOk := a.poolSandboxes[versionRef.poolID]
+		if !poolOk {
+			a.mu.Unlock()
+			return nil, false
+		}
+		lease, overTarget := a.acquireFromPoolLocked(ps, ver, service)
+		if lease != nil {
+			// Its lease now counts toward demand, so it must stop counting
+			// as a waiter under the same lock.
+			a.removeWaiterLocked(key, notifyChan)
+		}
+		a.mu.Unlock()
+		if lease == nil {
+			return nil, false
+		}
+
+		a.log.Info("acquired lease from pool sandbox",
+			"app", ver.App,
+			"version", ver.Version,
+			"sandbox", lease.sandbox.ID,
+			"service", service,
+			"over_target", overTarget)
+		if overTarget {
+			a.scaleUpForDemand(ver, service)
+		}
+		return lease, true
 	}
 
 	for {
@@ -479,6 +454,9 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		if lease, found := checkForSandbox(); found {
 			return lease, nil
 		}
+
+		// The queue may have grown since capacity was last requested.
+		a.scaleUpForDemand(ver, service)
 
 		// Check if all sandboxes have failed (no RUNNING, no PENDING)
 		// If so, fail fast instead of waiting for timeout.
@@ -541,7 +519,9 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		if shouldFailFast {
 			// We have sandboxes tracked but none are RUNNING or PENDING
 			// AND either we weren't scaling up, or a new sandbox was created and died
-			a.log.Error("all sandboxes failed while waiting",
+			// The app crashed on boot and the pool manager will record it; the
+			// platform did its job, so this is not an Error.
+			a.log.Warn("all sandboxes failed while waiting",
 				"app", ver.App,
 				"version", ver.Version,
 				"service", service,
@@ -561,6 +541,278 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 				"app", ver.App,
 				"service", service)
 		}
+	}
+}
+
+// removeWaiterLocked drops a parked waiter's channel. It is a no-op if the
+// channel is already gone. The caller must hold a.mu for writing.
+func (a *localActivator) removeWaiterLocked(key verKey, notifyChan chan struct{}) {
+	chans := a.newSandboxChans[key]
+	for i, ch := range chans {
+		if ch == notifyChan {
+			a.newSandboxChans[key] = append(chans[:i], chans[i+1:]...)
+			break
+		}
+	}
+	if len(a.newSandboxChans[key]) == 0 {
+		delete(a.newSandboxChans, key)
+	}
+}
+
+// acquireFromPoolLocked leases a routable sandbox from the pool, preferring one
+// under its requests_per_instance target and otherwise falling back to the
+// least-loaded routable sandbox. overTarget reports the fallback, which callers
+// treat as a signal to grow the pool. It returns nil when nothing in the pool
+// is routable. The caller must hold a.mu for writing.
+//
+// Routable requires url != "": a sandbox can briefly be tracked as RUNNING
+// before the watcher has populated its URL, and a Lease with an empty URL
+// would fail in the proxy.
+func (a *localActivator) acquireFromPoolLocked(ps *poolSandboxes, ver *core_v1alpha.AppVersion, service string) (lease *Lease, overTarget bool) {
+	if len(ps.sandboxes) == 0 {
+		return nil, false
+	}
+
+	var chosen, leastLoaded *sandbox
+	start := rand.Int() % len(ps.sandboxes)
+	for i := range len(ps.sandboxes) {
+		s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
+		if s.sandbox.Status != compute_v1alpha.RUNNING || s.url == "" {
+			continue
+		}
+		if s.tracker.HasCapacity() {
+			chosen = s
+			break
+		}
+		if leastLoaded == nil || s.tracker.Used() < leastLoaded.tracker.Used() {
+			leastLoaded = s
+		}
+	}
+	if chosen == nil {
+		if leastLoaded == nil {
+			return nil, false
+		}
+		chosen, overTarget = leastLoaded, true
+	}
+
+	var leaseSize int
+	if overTarget {
+		leaseSize = chosen.tracker.AcquireOverflow()
+	} else {
+		leaseSize = chosen.tracker.AcquireLease()
+	}
+	chosen.lastRenewal = time.Now()
+
+	return &Lease{
+		ver:      ver,
+		sandbox:  chosen.sandbox,
+		ent:      chosen.ent,
+		pool:     service,
+		service:  service,
+		Size:     leaseSize,
+		URL:      chosen.url,
+		Overflow: overTarget,
+	}, overTarget
+}
+
+// demandTargetLocked sizes the pool for its current demand: the capacity
+// leased out on running sandboxes plus a slot for every parked waiter (each is
+// one request), and one lease of headroom so a pool that is exactly full still
+// asks for one more sandbox. It returns 0 when the version isn't mapped to a pool yet. The
+// caller must hold a.mu.
+func (a *localActivator) demandTargetLocked(key verKey) int64 {
+	versionRef, ok := a.versions[key]
+	if !ok || versionRef.strategy == nil {
+		return 0
+	}
+	ps, ok := a.poolSandboxes[versionRef.poolID]
+	if !ok {
+		return 0
+	}
+
+	perSandbox := versionRef.strategy.InitializeTracker().Max()
+	leaseSize := versionRef.strategy.LeaseSize()
+	if perSandbox < 1 || leaseSize < 1 {
+		return 0
+	}
+
+	demand := leaseSize
+	for _, s := range ps.sandboxes {
+		if s.sandbox.Status == compute_v1alpha.RUNNING {
+			demand += s.tracker.Used()
+		}
+	}
+	for k, chans := range a.newSandboxChans {
+		if ref, ok := a.versions[k]; ok && ref.poolID == versionRef.poolID {
+			demand += len(chans)
+		}
+	}
+
+	target := int64((demand + perSandbox - 1) / perSandbox)
+	return min(target, int64(versionRef.strategy.MaxInstances()))
+}
+
+// maxDemandScaleAttempts bounds one scaleUpForDemand worker, in case the
+// cached pool never catches up with its own patches.
+const maxDemandScaleAttempts = 10
+
+// poolRecheckInterval throttles the store re-read scaleUpForDemand does when
+// the cached pool size is larger than what is actually running.
+const poolRecheckInterval = 30 * time.Second
+
+// scaleRetryBackoff holds off scaleUpForDemand after a failed attempt, so a
+// pool that can't grow (crash cooldown, say) doesn't retry on every request.
+const scaleRetryBackoff = 10 * time.Second
+
+// scaleUpForDemand grows the pool toward demandTargetLocked without blocking
+// the caller. It is cheap when the pool is already big enough, so the hot path
+// can call it on every over-target admission, and at most one scale-up per pool
+// runs at a time.
+//
+// It trusts the cached DesiredInstances, which a missed pool update can leave
+// too high. When demand looks covered but fewer sandboxes are live than the
+// cache claims, it re-reads the pool from the store before deciding.
+func (a *localActivator) scaleUpForDemand(ver *core_v1alpha.AppVersion, service string) {
+	key := verKey{ver.ID.String(), service}
+
+	// check reports the demand target, whether it exceeds the cached size,
+	// and whether the cached size should be re-read first.
+	check := func() (poolID entity.Id, target int64, scale, recheck bool) {
+		versionRef, ok := a.versions[key]
+		if !ok {
+			return "", 0, false, false
+		}
+		ps := a.poolSandboxes[versionRef.poolID]
+		// A pool created after startup isn't in a.pools until
+		// requestPoolCapacityTo resolves it.
+		var desired int64
+		if state, ok := a.pools[key]; ok {
+			if state.inProgress || state.pool == nil {
+				return "", 0, false, false
+			}
+			desired = state.pool.DesiredInstances
+		} else if ps != nil && ps.pool != nil {
+			desired = ps.pool.DesiredInstances
+		} else {
+			return "", 0, false, false
+		}
+		var live int64
+		if ps != nil {
+			for _, s := range ps.sandboxes {
+				if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
+					live++
+				}
+			}
+		}
+		recheck = live < desired && time.Since(a.poolRecheckedAt[versionRef.poolID]) >= poolRecheckInterval
+		// A saturated pool at its cap calls this on every request, so skip
+		// the demand math when there is nothing it could change.
+		if !recheck && versionRef.strategy != nil && desired >= int64(versionRef.strategy.MaxInstances()) {
+			return versionRef.poolID, 0, false, false
+		}
+		target = a.demandTargetLocked(key)
+		if target > desired {
+			return versionRef.poolID, target, true, false
+		}
+		return versionRef.poolID, target, false, recheck
+	}
+
+	a.mu.Lock()
+	if ref, ok := a.versions[key]; ok && (a.scalingUp[ref.poolID] || time.Now().Before(a.scaleRetryAt[ref.poolID])) {
+		a.mu.Unlock()
+		return
+	}
+	poolID, _, scale, recheck := check()
+	if !scale && !recheck {
+		a.mu.Unlock()
+		return
+	}
+	if a.scalingUp == nil {
+		a.scalingUp = make(map[entity.Id]bool)
+	}
+	a.scalingUp[poolID] = true
+	a.mu.Unlock()
+
+	go func() {
+		// The demand check and clearing scalingUp share a lock, so demand that
+		// arrives while a request is in flight is picked up by this loop
+		// rather than dropped by callers that saw scalingUp set.
+		for attempt := 0; ; attempt++ {
+			a.mu.Lock()
+			_, target, scale, recheck := check()
+			if recheck && attempt < maxDemandScaleAttempts {
+				if a.poolRecheckedAt == nil {
+					a.poolRecheckedAt = make(map[entity.Id]time.Time)
+				}
+				a.poolRecheckedAt[poolID] = time.Now()
+				a.mu.Unlock()
+				a.refreshPoolFromStore(poolID)
+				continue
+			}
+			if !scale || attempt >= maxDemandScaleAttempts {
+				delete(a.scalingUp, poolID)
+				a.mu.Unlock()
+				if scale {
+					a.log.Warn("pool still below demand after scaling", "app", ver.App, "service", service, "pool", poolID, "target", target)
+				}
+				return
+			}
+			a.mu.Unlock()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_, err := a.requestPoolCapacityTo(ctx, ver, service, target)
+			cancel()
+			if err != nil {
+				a.mu.Lock()
+				delete(a.scalingUp, poolID)
+				if a.scaleRetryAt == nil {
+					a.scaleRetryAt = make(map[entity.Id]time.Time)
+				}
+				a.scaleRetryAt[poolID] = time.Now().Add(scaleRetryBackoff)
+				a.mu.Unlock()
+				a.log.Warn("failed to scale pool for demand", "app", ver.App, "service", service, "pool", poolID, "target", target, "error", err)
+				return
+			}
+		}
+	}()
+}
+
+// refreshPoolFromStore re-reads a pool and updates the cached copies the store
+// has moved past. Revisions guard the update, so a read that races a newer
+// patch or watch event never moves the cache backward.
+func (a *localActivator) refreshPoolFromStore(poolID entity.Id) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := a.eac.Get(ctx, poolID.String())
+	if err != nil {
+		a.log.Warn("failed to re-read pool", "pool", poolID, "error", err)
+		return
+	}
+	var pool compute_v1alpha.SandboxPool
+	pool.Decode(res.Entity().Entity())
+	rev := res.Entity().Revision()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	newest := true
+	for _, state := range a.pools {
+		if state.inProgress || state.pool == nil || state.pool.ID != poolID {
+			continue
+		}
+		if state.revision < rev {
+			if state.pool.DesiredInstances != pool.DesiredInstances {
+				a.log.Info("re-read pool corrected cached DesiredInstances", "pool", poolID, "cached", state.pool.DesiredInstances, "stored", pool.DesiredInstances)
+			}
+			state.pool = &pool
+			state.revision = rev
+		} else {
+			newest = false
+		}
+	}
+	if ps, ok := a.poolSandboxes[poolID]; ok && newest {
+		ps.pool = &pool
 	}
 }
 
@@ -624,6 +876,15 @@ func (a *localActivator) appDisabled(ctx context.Context, appID entity.Id) bool 
 // a request before DeploymentLauncher has finished creating the pool.
 // Uses a sentinel pattern to prevent duplicate capacity requests from concurrent callers.
 func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
+	return a.requestPoolCapacityTo(ctx, ver, service, 0)
+}
+
+// requestPoolCapacityTo is requestPoolCapacity with a demand floor: it raises
+// DesiredInstances by at least one, and up to minDesired when that is higher,
+// capped at the strategy's maximum. Sizing the request from demand is what lets
+// a burst of waiters ask for several sandboxes at once instead of collapsing
+// into a single +1 through the revision checks below.
+func (a *localActivator) requestPoolCapacityTo(ctx context.Context, ver *core_v1alpha.AppVersion, service string, minDesired int64) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
 
 	// Resolve config and build the strategy once at entry: the cap comes from
@@ -692,8 +953,8 @@ poolLoop:
 
 			// Check if pool is in crash cooldown before attempting to increment
 			if !state.pool.CooldownUntil.IsZero() && time.Now().Before(state.pool.CooldownUntil) {
-				return state.pool, fmt.Errorf("%w: application in crash cooldown until %s (consecutive crashes: %d)",
-					ErrSandboxDiedEarly,
+				return state.pool, fmt.Errorf("%w until %s (consecutive crashes: %d)",
+					ErrCrashCooldown,
 					state.pool.CooldownUntil.Format(time.RFC3339),
 					state.pool.ConsecutiveCrashCount)
 			}
@@ -703,7 +964,7 @@ poolLoop:
 			// This ensures concurrent goroutines that all saw the same initial value
 			// will calculate the same target
 			a.mu.Lock()
-			newDesired := state.pool.DesiredInstances + 1
+			newDesired := min(max(state.pool.DesiredInstances+1, minDesired), maxInstances)
 			a.mu.Unlock()
 
 			const maxRetries = 3
@@ -759,7 +1020,7 @@ poolLoop:
 					state.pool = &freshPool
 					state.revision = freshPoolEnt.Entity().Revision()
 					a.pools[key] = state
-					newDesired = freshPool.DesiredInstances + 1
+					newDesired = min(max(freshPool.DesiredInstances+1, minDesired), maxInstances)
 					a.mu.Unlock()
 
 					continue
@@ -976,7 +1237,7 @@ poolLoop:
 				return foundPool, nil
 			}
 
-			newDesired := foundPool.DesiredInstances + 1
+			newDesired := min(max(foundPool.DesiredInstances+1, minDesired), maxInstances)
 
 			a.mu.Unlock()
 
@@ -1752,6 +2013,12 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		// Fetch the version to get concurrency config
 		verResp, err := a.eac.Get(ctx, versionID.String())
 		if err != nil {
+			// A pool can outlive its AppVersion until the pool manager's sweep
+			// reaps it; there is nothing for the activator to recover.
+			if errors.Is(err, cond.ErrNotFound{}) {
+				a.log.Warn("skipping pool whose app version is gone", "pool", pool.ID, "version", versionID)
+				continue
+			}
 			a.log.Error("failed to get version for pool", "pool", pool.ID, "version", versionID, "error", err)
 			continue
 		}
@@ -1778,25 +2045,24 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		a.mu.Lock()
 
 		// Cache pool state (for sentinel pattern in requestPoolCapacity).
-		// Create-only: at startup the map is empty so this seeds every pool, but
-		// when recoverPools runs again as a live re-sync (watch reconnect) we must
-		// not clobber an in-progress creation sentinel or a freshly-patched
-		// revision held by a concurrent requestPoolCapacity. watchPools keeps
-		// existing entries' DesiredInstances fresh; here we only fill gaps.
-		//
-		// Deliberately we do NOT refresh an already-cached entry here, even though
-		// the missed-event window is exactly when its DesiredInstances/revision
-		// could have gone stale. A refresh is unsafe: this re-sync's store read can
-		// itself be older than an in-memory revision a concurrent requestPoolCapacity
-		// just patched, so overwriting could move the cache backward. The stale case
-		// self-heals instead — the next increment hits a revision conflict on Patch,
-		// clears the entry, and re-reads (see the ErrConflict path above).
+		// At startup the map is empty so this seeds every pool. On a live
+		// re-sync (watch reconnect) it also refreshes entries that went stale
+		// while the watch was down, which matters because scaleUpForDemand
+		// trusts the cached DesiredInstances. Only a newer revision replaces an
+		// entry, so this read can't move the cache behind a patch a concurrent
+		// requestPoolCapacity just made, and creation sentinels are left alone.
 		key := verKey{versionID.String(), pool.Service}
 		if _, ok := a.pools[key]; !ok {
 			a.pools[key] = &poolState{
 				pool:       &pool,
 				revision:   ent.Revision(),
 				inProgress: false,
+			}
+		}
+		for _, state := range a.pools {
+			if !state.inProgress && state.pool != nil && state.pool.ID == pool.ID && state.revision < ent.Revision() {
+				state.pool = &pool
+				state.revision = ent.Revision()
 			}
 		}
 
@@ -2037,6 +2303,9 @@ func (a *localActivator) removeSandboxFromTracking(sandboxID entity.Id) {
 func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	delete(a.poolRecheckedAt, poolID)
+	delete(a.scaleRetryAt, poolID)
 
 	// Remove poolSandboxes entry
 	if _, ok := a.poolSandboxes[poolID]; ok {

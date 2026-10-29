@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
-	"miren.dev/runtime/api/storage/storage_v1alpha"
-	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/api/disk/disk_v1alpha"
 )
 
 func TestRenderServiceHealth(t *testing.T) {
@@ -34,9 +33,16 @@ func TestRenderServiceHealth(t *testing.T) {
 
 func TestDoctorResourceChecks(t *testing.T) {
 	env := verdictEnv(remoteHost, nil, probeOpen, probeOpen)
+	disk := new(disk_v1alpha.ResourceHealth)
+	disk.SetId("disk-1")
+	disk.SetState("status.error")
+	volume := new(disk_v1alpha.ResourceHealth)
+	volume.SetId("volume-1")
+	volume.SetState("actual_state.dv_error")
+	volume.SetDiagnostic("volume lifecycle failed; inspect server logs")
 	env.resources = &doctorResources{
-		disks:   []storage_v1alpha.Disk{{ID: entity.Id("disk-1"), Status: storage_v1alpha.ERROR}},
-		volumes: []storage_v1alpha.DiskVolume{{ID: entity.Id("volume-1"), ActualState: storage_v1alpha.DV_ERROR, ErrorMessage: "attach failed"}},
+		disks:   []*disk_v1alpha.ResourceHealth{disk},
+		volumes: []*disk_v1alpha.ResourceHealth{volume},
 	}
 	crashed := &app_v1alpha.AppInfo{}
 	crashed.SetName("demo")
@@ -50,7 +56,7 @@ func TestDoctorResourceChecks(t *testing.T) {
 	if got := checkApps(env); got.Status != checkFail || !strings.Contains(got.Summary, "demo (7 crashes") || got.Problem == nil {
 		t.Fatalf("apps check = %+v", got)
 	}
-	if got := checkDisks(env); got.Status != checkFail || !strings.Contains(got.Summary, "attach failed") {
+	if got := checkDisks(env); got.Status != checkFail || got.Summary != "disk disk-1, volume volume-1: volume lifecycle failed; inspect server logs" {
 		t.Fatalf("disk check = %+v", got)
 	}
 	env.apps = []*app_v1alpha.AppInfo{healthy}

@@ -89,6 +89,21 @@ web: bundle exec puma -C config/puma.rb
 
 See [Services](../services.md) for running Sidekiq or other workers alongside web.
 
+## Private dependencies
+
+For a private gem server, pass its credentials in the variable Bundler reads for that
+host: uppercase, with dots as double underscores. For `https://gems.acme.dev`:
+
+```toml
+[[build.secrets]]
+id = "gems"
+ref = "registry/gems-acme"
+env = "BUNDLE_GEMS__ACME__DEV"
+```
+
+For private Git repositories, store a netrc with a read token and mount it with `file = "~/.netrc"`. That covers gems with a `git:` source, including SSH URLs like
+`git@github.com:acme/gem`. See [Private Dependencies](../private-dependencies.md) for the full walkthrough.
+
 ## Environment variables
 
 `miren init` stages the secrets a Rails app needs on first deploy: it **generates**
@@ -131,6 +146,7 @@ See [App Configuration — Environment Variables](../app-configuration.md#enviro
 - **Start command:** Rails/Puma/Rack auto-detected, bind `0.0.0.0:$PORT`; or set a `Procfile`
 - **Env vars:** `miren env set -e/-s`, `KEY=@file` to read from disk, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; `env = "BUNDLE_<HOST>"`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 

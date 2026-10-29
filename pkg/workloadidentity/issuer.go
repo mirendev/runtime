@@ -9,7 +9,7 @@
 // verification while new tokens are signed with a freshly generated RS256 key.
 //
 // Miren Cloud is never in the signing path. The private key is generated here,
-// stays on disk here, and is not sent anywhere — so a compromise of cloud
+// stays in the cluster's etcd and local cache, and is never sent to cloud — so a compromise of cloud
 // yields public keys and no ability to mint an identity. Cloud contributes
 // organization_id and cluster_id as claim metadata during registration and,
 // when a cluster opts in, hosts discovery on the cluster's behalf.
@@ -63,6 +63,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -81,6 +82,7 @@ type IssuerConfig struct {
 }
 
 type Issuer struct {
+	mu sync.RWMutex
 	// primary is the default signing key. All issued tokens are signed with it.
 	primary *signingKey
 	// keys are the live signing keys: primary first, then any keys loaded from
@@ -99,6 +101,19 @@ type Issuer struct {
 	supersededIssuer string
 	organizationID   string
 	clusterID        string
+}
+
+// Adopt updates pointers handed out during early boot after authoritative
+// credentials have been restored. Signing and verification see one keyset.
+func (iss *Issuer) Adopt(restored *Issuer) {
+	restored.mu.RLock()
+	defer restored.mu.RUnlock()
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	iss.primary, iss.keys = restored.primary, append([]*signingKey(nil), restored.keys...)
+	iss.advertised = append([]jose.JSONWebKey(nil), restored.advertised...)
+	iss.issuerURL, iss.supersededIssuer = restored.issuerURL, restored.supersededIssuer
+	iss.organizationID, iss.clusterID = restored.organizationID, restored.clusterID
 }
 
 // TokenIssuer is the minting surface the sandbox controller depends on. The
@@ -282,6 +297,8 @@ func loadLiveKeysDir(dir string) []*signingKey {
 }
 
 func (iss *Issuer) IssuerURL() string {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	return iss.issuerURL
 }
 
@@ -292,6 +309,12 @@ func (iss *Issuer) IssuerURL() string {
 // paths must consult this instead of comparing against IssuerURL, or an anchor
 // flip invalidates every token already in circulation.
 func (iss *Issuer) AcceptedIssuers() []string {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
+	return iss.acceptedIssuers()
+}
+
+func (iss *Issuer) acceptedIssuers() []string {
 	if iss.supersededIssuer == "" {
 		return []string{iss.issuerURL}
 	}
@@ -300,14 +323,20 @@ func (iss *Issuer) AcceptedIssuers() []string {
 
 // AcceptsIssuer reports whether tokens carrying this iss should be verified.
 func (iss *Issuer) AcceptsIssuer(issuer string) bool {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	return issuer != "" && (issuer == iss.issuerURL || issuer == iss.supersededIssuer)
 }
 
 func (iss *Issuer) PublicKey() any {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	return iss.primary.public
 }
 
 func (iss *Issuer) Hostname() string {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	return issuerHostname(iss.issuerURL)
 }
 
@@ -318,8 +347,10 @@ func (iss *Issuer) Hostname() string {
 // anchor can still fetch keys for tokens minted before the flip. Nothing new is
 // issued under it, so the window closes on its own.
 func (iss *Issuer) Hostnames() []string {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	var hosts []string
-	for _, issuer := range iss.AcceptedIssuers() {
+	for _, issuer := range iss.acceptedIssuers() {
 		if host := issuerHostname(issuer); host != "" {
 			hosts = append(hosts, host)
 		}
@@ -365,6 +396,8 @@ func (iss *Issuer) IssueToken(app, sandboxID string) (string, error) {
 }
 
 func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOptions) (string, error) {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	subject, err := newSandboxSubject(iss.organizationID, app, sandboxID)
 	if err != nil {
 		return "", fmt.Errorf("building sandbox workload subject: %w", err)
@@ -431,6 +464,8 @@ func (iss *Issuer) sign(claims WorkloadClaims) (string, error) {
 }
 
 func (iss *Issuer) DiscoveryDocument() []byte {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	doc := map[string]any{
 		"issuer":                                iss.issuerURL,
 		"jwks_uri":                              iss.issuerURL + "/.well-known/miren/jwks",
@@ -472,6 +507,12 @@ func (iss *Issuer) supportedAlgs() []string {
 // Callers must not cache the result: it tracks whatever key set the Issuer
 // currently holds, which is what keeps verification correct across a rotation.
 func (iss *Issuer) VerificationKeys() []jose.JSONWebKey {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
+	return iss.verificationKeys()
+}
+
+func (iss *Issuer) verificationKeys() []jose.JSONWebKey {
 	seen := map[string]bool{}
 	var keys []jose.JSONWebKey
 	add := func(jwk jose.JSONWebKey) {
@@ -493,7 +534,9 @@ func (iss *Issuer) VerificationKeys() []jose.JSONWebKey {
 }
 
 func (iss *Issuer) JWKSDocument() ([]byte, error) {
-	return json.Marshal(jose.JSONWebKeySet{Keys: iss.VerificationKeys()})
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
+	return json.Marshal(jose.JSONWebKeySet{Keys: iss.verificationKeys()})
 }
 
 // KeySetFingerprint identifies the current set of verification keys.
@@ -504,7 +547,9 @@ func (iss *Issuer) JWKSDocument() ([]byte, error) {
 // before hashing so a reordering of the same keys is not mistaken for a
 // rotation.
 func (iss *Issuer) KeySetFingerprint() string {
-	keys := iss.VerificationKeys()
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
+	keys := iss.verificationKeys()
 
 	ids := make([]string, 0, len(keys))
 	for _, key := range keys {

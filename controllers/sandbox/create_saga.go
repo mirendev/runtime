@@ -312,10 +312,11 @@ type bootContainersIn struct {
 }
 
 type bootContainersOut struct {
-	WaitPortIDs     []string          `json:"wait_port_ids" saga:"wait_port_ids"`
-	WaitPortPorts   []int             `json:"wait_port_ports" saga:"wait_port_ports"`
-	PortWaitTimeout string            `json:"port_wait_timeout" saga:"port_wait_timeout"`
-	AllCgroups      map[string]string `json:"all_cgroups" saga:"all_cgroups"`
+	WaitPortIDs     []string                 `json:"wait_port_ids" saga:"wait_port_ids"`
+	WaitPortPorts   []int                    `json:"wait_port_ports" saga:"wait_port_ports"`
+	PortWaitTimeout string                   `json:"port_wait_timeout" saga:"port_wait_timeout"`
+	AllCgroups      map[string]string        `json:"all_cgroups" saga:"all_cgroups"`
+	StartupTimings  []ContainerStartupTiming `json:"startup_timings,omitempty" saga:"-"`
 }
 
 func bootContainers(ctx context.Context, in bootContainersIn) (_ bootContainersOut, err error) {
@@ -362,9 +363,9 @@ func bootContainers(ctx context.Context, in bootContainersIn) (_ bootContainersO
 		return bootContainersOut{}, fmt.Errorf("configuring volumes: %w", err)
 	}
 
-	waitPorts, err := deps.runtime.BootContainers(ctx, sb, ep, in.TaskPID, cgroups, meta, volumeMounts)
+	waitPorts, timings, err := deps.runtime.BootContainers(ctx, sb, ep, in.TaskPID, cgroups, meta, volumeMounts)
 	if err != nil {
-		return bootContainersOut{}, fmt.Errorf("booting containers: %w", err)
+		return bootContainersOut{StartupTimings: timings}, fmt.Errorf("booting containers: %w", err)
 	}
 
 	var wpIDs []string
@@ -380,6 +381,7 @@ func bootContainers(ctx context.Context, in bootContainersIn) (_ bootContainersO
 		WaitPortPorts:   wpPorts,
 		PortWaitTimeout: sb.Spec.PortWaitTimeout,
 		AllCgroups:      cgroups,
+		StartupTimings:  timings,
 	}, nil
 }
 

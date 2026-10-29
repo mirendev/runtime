@@ -58,7 +58,7 @@ func (c *ServerLifecycle) Start(ctx context.Context) error {
 	c.watcher = lifecyclesync.NewWatcher(log, store)
 	c.reporter = lifecyclesync.NewReporter(log, store, launcher, c.watcher, instanceIdentity{c.instance})
 	c.upgrader = NewRunnerUpgrader(log, store, c.watcher, instanceIdentity{c.instance}.InstanceID(),
-		entityNodes{c.eac}, rpcRunnerDialer(c.state), DefaultRunnerUpgradeOptions())
+		entityNodes{c.eac}, rpcRunnerDialer(c.state), DefaultRunnerUpgradeOptions()).WithFleetStore(c.clusterState)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel

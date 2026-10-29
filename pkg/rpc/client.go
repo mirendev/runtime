@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -874,16 +875,22 @@ request:
 
 		defer hr.Body.Close()
 
+		var responseBody string
 		if hr.StatusCode == http.StatusOK {
 			err = cbor.NewDecoder(hr.Body).Decode(result)
 		} else {
 			et, _ := io.ReadAll(hr.Body)
+			responseBody = string(et)
 			err = fmt.Errorf("unexpected status code: %d: %s", hr.StatusCode, et)
 		}
 
 		// We perform this draining read because quic/http3 populates the trailers
 		// as part of the body read.
 		io.Copy(io.Discard, hr.Body)
+
+		if err := httpPermissionError(hr, responseBody); err != nil {
+			return err
+		}
 
 		switch hr.Trailer.Get("rpc-status") {
 		case "ok", "":
@@ -1044,6 +1051,12 @@ request:
 // WebTransport upgrade surfaces the RPC status via response trailers on HTTP/3,
 // with headers as a fallback, so we check both.
 func (c *NetworkClient) handleCallStreamDialError(hr *http.Response, dialErr error) (bool, error) {
+	if hr != nil {
+		if err := httpPermissionError(hr, ""); err != nil {
+			return false, err
+		}
+	}
+
 	statusFor := func(key string) string {
 		if hr == nil {
 			return ""
@@ -1074,6 +1087,31 @@ func (c *NetworkClient) handleCallStreamDialError(hr *http.Response, dialErr err
 	}
 
 	return false, fmt.Errorf("error performing callstream request: %w", dialErr)
+}
+
+// Pre-handler denials use HTTP status, with details in headers, trailers, or the body.
+// Preserve the same permission category as the message transport.
+func httpPermissionError(resp *http.Response, body string) error {
+	var code string
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		code = "unauthorized"
+	case http.StatusForbidden:
+		code = "forbidden"
+	default:
+		return nil
+	}
+	message := resp.Trailer.Get("rpc-error")
+	if message == "" {
+		message = resp.Header.Get("rpc-error")
+	}
+	if message == "" {
+		message = strings.TrimSpace(body)
+	}
+	if message == "" {
+		message = http.StatusText(resp.StatusCode)
+	}
+	return cond.RemoteError("permission", code, message)
 }
 
 func (c *NetworkClient) handleCallStream(

@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -9,22 +9,23 @@ func RouteRemove(ctx *Context, opts struct {
 	Host string `position:"0" usage:"Hostname of the route to remove"`
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("entities")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
+	ic := ingress_v1alpha.NewRoutesClient(client)
 
 	host := opts.Host
 
 	// If no host provided, show interactive picker
 	if host == "" {
-		routes, err := ic.List(ctx)
+		res, err := ic.List(ctx, "")
 		if err != nil {
 			return err
 		}
 
+		routes := res.Routes()
 		if len(routes) == 0 {
 			ctx.Printf("No routes found\n")
 			return nil
@@ -33,15 +34,15 @@ func RouteRemove(ctx *Context, opts struct {
 		// Create picker items
 		items := make([]ui.PickerItem, len(routes))
 		for i, r := range routes {
-			displayHost := r.Route.Host
-			if displayHost == "" && r.Route.Default {
+			displayHost := r.Host()
+			if displayHost == "" && r.DefaultRoute() {
 				displayHost = "(default)"
 			}
-			appDisplay := ui.CleanEntityID(string(r.Route.App))
+			appDisplay := r.App()
 
 			items[i] = ui.TablePickerItem{
 				Columns: []string{displayHost, appDisplay},
-				ItemID:  r.Route.Host,
+				ItemID:  r.Host(),
 			}
 		}
 
@@ -55,11 +56,11 @@ func RouteRemove(ctx *Context, opts struct {
 			// If we can't run interactive mode (no TTY), show available routes
 			ctx.Printf("Cannot run interactive mode. Available routes:\n")
 			for _, r := range routes {
-				displayHost := r.Route.Host
-				if displayHost == "" && r.Route.Default {
+				displayHost := r.Host()
+				if displayHost == "" && r.DefaultRoute() {
 					displayHost = "(default)"
 				}
-				ctx.Printf("  %s → %s\n", displayHost, ui.CleanEntityID(string(r.Route.App)))
+				ctx.Printf("  %s → %s\n", displayHost, r.App())
 			}
 			ctx.Printf("\nUsage: miren route remove <host>\n")
 			return nil
@@ -74,7 +75,7 @@ func RouteRemove(ctx *Context, opts struct {
 	}
 
 	// Delete the route
-	err = ic.DeleteByHost(ctx, host)
+	_, err = ic.Remove(ctx, host)
 	if err != nil {
 		return err
 	}

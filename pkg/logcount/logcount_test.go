@@ -1,12 +1,15 @@
 package logcount
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/pkg/slogfmt"
 )
@@ -86,6 +89,40 @@ func TestCountAtOverridesCountedLevel(t *testing.T) {
 
 	assert.Equal(t, uint64(1), counts.Load(SourceMiren, 1))
 	assert.Zero(t, counts.Load(SourceMiren, 3))
+}
+
+func TestMirenLevel(t *testing.T) {
+	bg := context.Background()
+
+	assert.Equal(t, slog.LevelWarn, MirenLevel(bg, slog.LevelWarn))
+	assert.Equal(t, slog.LevelInfo, MirenLevel(CountAt(bg, slog.LevelInfo), slog.LevelError))
+
+	// A relay clamps a child's level on purpose, so the printed level stands.
+	relayed := Relayed(bg, SourceEtcd, slog.LevelError)
+	assert.Equal(t, slog.LevelInfo, MirenLevel(relayed, slog.LevelInfo))
+}
+
+func TestJournalPriorityLeavesCountsAlone(t *testing.T) {
+	var buf bytes.Buffer
+	counts := &Counts{}
+	inner := slogfmt.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}).
+		WithJournalPriority(MirenLevel)
+	log := slog.New(NewHandler(inner, counts))
+
+	log.Warn("w")
+	log.ErrorContext(CountAt(context.Background(), slog.LevelInfo), "Log leveling changed")
+	log.Log(Relayed(context.Background(), SourceVMAgent, slog.LevelError), slog.LevelInfo, "clamped")
+
+	assert.Equal(t, uint64(1), counts.Load(SourceMiren, 2))
+	assert.Equal(t, uint64(1), counts.Load(SourceMiren, 1))
+	assert.Zero(t, counts.Load(SourceMiren, 3))
+	assert.Equal(t, uint64(1), counts.Load(SourceVMAgent, 3))
+
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+	assert.True(t, strings.HasPrefix(lines[0], "<4>"), "warn: %q", lines[0])
+	assert.True(t, strings.HasPrefix(lines[1], "<6>"), "CountAt info: %q", lines[1])
+	assert.True(t, strings.HasPrefix(lines[2], "<6>"), "clamped relay: %q", lines[2])
 }
 
 func TestSourceFor(t *testing.T) {

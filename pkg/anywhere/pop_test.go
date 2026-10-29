@@ -152,3 +152,59 @@ func TestServePOPCleanupSkipsReplacedEntry(t *testing.T) {
 		t.Fatal("old goroutine's cleanup deleted the replacement entry")
 	}
 }
+
+func TestSandboxWSURL(t *testing.T) {
+	const sandbox = "http://10.0.0.5:8080"
+
+	cases := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{name: "root", path: "/", want: "ws://10.0.0.5:8080/"},
+		{name: "path and query", path: "/socket?room=a&x=1", want: "ws://10.0.0.5:8080/socket?room=a&x=1"},
+		{name: "escaped path kept", path: "/a%2Fb", want: "ws://10.0.0.5:8080/a%2Fb"},
+		{name: "double slash stays a path", path: "//evil.example/x", want: "ws://10.0.0.5:8080//evil.example/x"},
+		{name: "userinfo trick", path: "@evil.example/x", wantErr: true},
+		{name: "port trick", path: ":9999/x", wantErr: true},
+		{name: "absolute form", path: "http://evil.example/x", wantErr: true},
+		{name: "relative", path: "socket", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target, err := parseWSTarget(tc.path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseWSTarget(%q) accepted, want error", tc.path)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseWSTarget(%q): %v", tc.path, err)
+			}
+
+			got, err := buildSandboxWSURL(sandbox, target)
+			if err != nil {
+				t.Fatalf("buildSandboxWSURL: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSandboxWSURLRejectsUnexpectedBase(t *testing.T) {
+	target, err := parseWSTarget("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, base := range []string{"", "10.0.0.5:8080", "https://10.0.0.5:8080", "unix:///tmp/sock"} {
+		if _, err := buildSandboxWSURL(base, target); err == nil {
+			t.Errorf("buildSandboxWSURL(%q) accepted, want error", base)
+		}
+	}
+}

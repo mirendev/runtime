@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/workloadroles"
@@ -351,6 +352,8 @@ func TestAuthorizeOIDC(t *testing.T) {
 		{"builder", "buildfromtar", true},
 		{"builder", "analyzeapp", true},
 		{"telemetry", "reportspans", true},
+		{"sandboxpools", "list", true},
+		{"sandboxpools", "setdesired", false},
 		{"unknown", "anything", false},
 		{"deployment", "unknown", false},
 		{"", "", false},
@@ -390,6 +393,12 @@ func TestCompositeAuthorizer_WorkloadRoles(t *testing.T) {
 		{workloadroles.RoleAppDebugger, [2]string{"sandboxexec", "exec"}, [2]string{"deployment", "deployversion"}},
 		{workloadroles.RoleClusterReadonly, [2]string{"crud", "list"}, [2]string{"crud", "setenvvar"}},
 		{workloadroles.RoleClusterAdmin, [2]string{"sandboxexec", "exec"}, [2]string{"entityaccess", "delete"}},
+		{workloadroles.RoleAppReadonly, [2]string{"sandboxpools", "list"}, [2]string{"sandboxpools", "setdesired"}},
+		{workloadroles.RoleAppAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"entityaccess", "patch"}},
+		{workloadroles.RoleClusterReadonly, [2]string{"sandboxpools", "list"}, [2]string{"sandboxpools", "setdesired"}},
+		{workloadroles.RoleClusterAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"runnerregistration", "issueworkloadtoken"}},
+		{workloadroles.RoleClusterAdmin, [2]string{"addons", "rotatecredential"}, [2]string{"crud", "setworkloadrole"}},
+		{workloadroles.RoleAppAdmin, [2]string{"crud", "setenvvar"}, [2]string{"addons", "rotatecredential"}},
 	}
 
 	for _, c := range cases {
@@ -400,6 +409,39 @@ func TestCompositeAuthorizer_WorkloadRoles(t *testing.T) {
 		if err := comp.Authorize(context.Background(), id, c.denied[0], c.denied[1]); err == nil {
 			t.Errorf("%s: %s.%s should be denied", c.role, c.denied[0], c.denied[1])
 		}
+	}
+}
+
+func TestCompositeAuthorizer_SandboxOperations(t *testing.T) {
+	comp := NewCompositeAuthorizer(nil)
+	for _, tc := range []struct {
+		role                    string
+		list, selectApp, mutate bool
+	}{
+		{workloadroles.RoleNone, false, false, false},
+		{workloadroles.RoleAppReadonly, false, false, false},
+		{workloadroles.RoleAppDeployer, false, false, false},
+		{workloadroles.RoleAppDebugger, false, true, false},
+		{workloadroles.RoleAppAdmin, false, true, true},
+		{workloadroles.RoleClusterReadonly, true, false, false},
+		{workloadroles.RoleClusterDeployer, true, false, true},
+		{workloadroles.RoleClusterDebugger, true, true, false},
+		{workloadroles.RoleClusterAdmin, true, true, true},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			id := workloadIdentity("shop", tc.role)
+			for action, allowed := range map[string]bool{"list": tc.list, "selectforapp": tc.selectApp, "stop": tc.mutate, "delete": tc.mutate} {
+				err := comp.Authorize(context.Background(), id, "sandboxes", action)
+				if allowed {
+					require.NoError(t, err, action)
+				} else {
+					require.Error(t, err, action)
+				}
+			}
+			// These additions do not grant raw store access or runner authority.
+			require.Error(t, comp.Authorize(context.Background(), id, "entityaccess", "get"))
+			require.Error(t, comp.Authorize(context.Background(), id, "runnerregistration", "issueworkloadtoken"))
+		})
 	}
 }
 
@@ -438,6 +480,35 @@ func TestCompositeAuthorizer_SetWorkloadRoleIsOperatorOnly(t *testing.T) {
 		if err := comp.Authorize(context.Background(), id, "crud", "setworkloadrole"); err == nil {
 			t.Errorf("workload role %q must not set workload roles", role)
 		}
+	}
+}
+
+// Shared ingress identities are managed by operators, never deploy/workload tokens.
+func TestCompositeAuthorizer_IdentityProvidersAreOperatorOnly(t *testing.T) {
+	for _, action := range []string{"addoidc", "addgithub", "addpassword", "list", "show", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			comp := NewCompositeAuthorizer(nil)
+			for _, method := range []rpc.AuthMethod{rpc.AuthMethodOIDC, rpc.AuthMethodSystem, rpc.AuthMethodSigned} {
+				if err := comp.Authorize(context.Background(), &rpc.Identity{Method: method}, "identityproviders", action); err == nil {
+					t.Errorf("%s must not manage providers", method)
+				}
+			}
+			for role := range workloadroles.Roles {
+				if err := comp.Authorize(context.Background(), workloadIdentity("myapp", role), "identityproviders", action); err == nil {
+					t.Errorf("workload role %q must not manage providers", role)
+				}
+			}
+			if err := comp.Authorize(context.Background(), &rpc.Identity{Method: rpc.AuthMethodCert}, "identityproviders", action); err != nil {
+				t.Errorf("cluster certificate should be allowed: %v", err)
+			}
+			for _, deny := range []error{nil, errors.New("cloud RBAC denied")} {
+				comp := NewCompositeAuthorizer(&mockAuthorizer{err: deny})
+				err := comp.Authorize(context.Background(), &rpc.Identity{Method: rpc.AuthMethodJWT}, "identityproviders", action)
+				if !errors.Is(err, deny) {
+					t.Errorf("operator JWT must honor cloud RBAC: got %v, want %v", err, deny)
+				}
+			}
+		})
 	}
 }
 
@@ -481,6 +552,31 @@ func TestCompositeAuthorizer_UnknownMethodDenied(t *testing.T) {
 		err := comp.Authorize(context.Background(), identity, "admin", "runcommand")
 		if err == nil {
 			t.Errorf("unknown auth method must be denied (primary=%v)", primary)
+		}
+	}
+}
+
+func TestCompositeResourceChecksRetainWorkloadBoundaries(t *testing.T) {
+	comp := NewCompositeAuthorizer(nil)
+	for _, tc := range []struct {
+		role, target, action string
+		allowed              bool
+	}{
+		{workloadroles.RoleAppDeployer, "mine", "deploy", true},
+		{workloadroles.RoleAppDeployer, "other", "deploy", false},
+		{workloadroles.RoleAppDeployer, "", "create", false},
+		{workloadroles.RoleClusterAdmin, "", "create", true},
+	} {
+		identity := workloadIdentity("mine", tc.role)
+		if tc.role == workloadroles.RoleClusterAdmin {
+			identity.Metadata["app"] = ""
+		}
+		ctx := rpc.ContextWithIdentity(t.Context(), identity)
+		err := comp.AuthorizeResource(ctx, identity, rpc.ResourceRequest{Resource: "app", Action: tc.action, Instance: tc.target})
+		if tc.allowed {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
 		}
 	}
 }

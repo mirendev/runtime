@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -58,34 +57,20 @@ func RouteTimeout(ctx *Context, opts struct {
 		return err
 	}
 
-	client, err := ctx.RPCClient("entities")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	ic := ingress.NewClient(ctx.Log, client)
-
-	var route *ingress_v1alpha.HttpRoute
-	var routeLabel string
-
+	ic := ingress_v1alpha.NewRoutesClient(client)
+	res, err := ic.Show(ctx, host, opts.Default)
+	if err != nil {
+		return err
+	}
+	route := res.Route()
+	routeLabel := host
 	if opts.Default {
-		route, err = ic.LookupDefault(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to lookup default route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("no default route configured")
-		}
 		routeLabel = "default"
-	} else {
-		route, err = ic.Lookup(ctx, host)
-		if err != nil {
-			return fmt.Errorf("failed to lookup route: %w", err)
-		}
-		if route == nil {
-			return fmt.Errorf("route not found for host: %s", host)
-		}
-		routeLabel = host
 	}
 
 	type RouteTimeoutJSON struct {
@@ -95,7 +80,7 @@ func RouteTimeout(ctx *Context, opts struct {
 
 	switch {
 	case opts.Clear:
-		if route.RequestTimeout == "" {
+		if route.RequestTimeout() == "" {
 			if opts.IsJSON() {
 				return PrintJSON(RouteTimeoutJSON{Route: routeLabel})
 			}
@@ -103,7 +88,7 @@ func RouteTimeout(ctx *Context, opts struct {
 			return nil
 		}
 
-		if _, err := ic.ClearRouteRequestTimeout(ctx, route); err != nil {
+		if _, err := ic.Timeout(ctx, host, opts.Default, ""); err != nil {
 			return fmt.Errorf("failed to clear request timeout on route: %w", err)
 		}
 
@@ -114,15 +99,15 @@ func RouteTimeout(ctx *Context, opts struct {
 		return nil
 
 	case wantTimeout != "":
-		updated, err := ic.SetRouteRequestTimeout(ctx, route, wantTimeout)
+		updated, err := ic.Timeout(ctx, host, opts.Default, wantTimeout)
 		if err != nil {
 			return fmt.Errorf("failed to set request timeout on route: %w", err)
 		}
-		route = updated
+		route = updated.Route()
 
 	default:
 		// No value given — report the current setting.
-		if route.RequestTimeout == "" {
+		if route.RequestTimeout() == "" {
 			if opts.IsJSON() {
 				return PrintJSON(RouteTimeoutJSON{Route: routeLabel})
 			}
@@ -132,12 +117,12 @@ func RouteTimeout(ctx *Context, opts struct {
 	}
 
 	if opts.IsJSON() {
-		return PrintJSON(RouteTimeoutJSON{Route: routeLabel, RequestTimeout: route.RequestTimeout})
+		return PrintJSON(RouteTimeoutJSON{Route: routeLabel, RequestTimeout: route.RequestTimeout()})
 	}
 
 	items := []ui.NamedValue{
 		ui.NewNamedValue("Route", routeLabel),
-		ui.NewNamedValue("Timeout", route.RequestTimeout),
+		ui.NewNamedValue("Timeout", route.RequestTimeout()),
 	}
 
 	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())

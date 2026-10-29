@@ -124,6 +124,16 @@ func CountAt(ctx context.Context, level slog.Level) context.Context {
 	return Relayed(ctx, SourceMiren, level)
 }
 
+// MirenLevel returns the level a miren line logged with ctx is counted at:
+// the one CountAt set, or printed when it set none. Relayed children keep
+// their printed level, since a clamp lowers it on purpose.
+func MirenLevel(ctx context.Context, printed slog.Level) slog.Level {
+	if rel, ok := ctx.Value(relayKey{}).(relay); ok && rel.source == SourceMiren {
+		return rel.level
+	}
+	return printed
+}
+
 // Handler counts every record it handles into Counts, then passes it on.
 type Handler struct {
 	inner  slog.Handler

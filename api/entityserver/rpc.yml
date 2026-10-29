@@ -271,6 +271,9 @@ interfaces:
           - name: revision
             type: int64
             doc: The store revision this page was read at.
+          - name: incomplete
+            type: bool
+            doc: True when corrupt entities were omitted. Readable values are still returned; callers requiring complete coverage must reject this page.
 
       - name: makeAttr
         parameters:
@@ -381,3 +384,9 @@ interfaces:
           - name: schemas
             type: list
             element: AttributeSchema
+
+      - name: deleteAtRevision
+        doc: Delete only the entity at the supplied positive revision, failing on concurrent changes.
+        parameters:
+          - {name: id, type: string}
+          - {name: revision, type: int64}

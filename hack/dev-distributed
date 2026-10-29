@@ -90,7 +90,7 @@ start_coordinator() {
   # --dns-names coordinator: include "coordinator" hostname in etcd TLS cert SANs
   # so runners can connect to etcd via the peer hostname.
   peer_exec coordinator bash -c \
-    "nohup ./bin/miren server -vv --mode standalone --self-signed-tls --dns-names coordinator >$COORDINATOR_LOGFILE 2>&1 </dev/null & echo \$! >$COORDINATOR_PIDFILE; disown"
+    "nohup ./bin/miren server -vv --self-signed-tls --dns-names coordinator >$COORDINATOR_LOGFILE 2>&1 </dev/null & echo \$! >$COORDINATOR_PIDFILE; disown"
 
   echo -n "    Waiting for coordinator to be ready"
   for i in $(seq 1 300); do

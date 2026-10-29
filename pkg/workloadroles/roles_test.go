@@ -86,13 +86,14 @@ func TestAppScopedRolesOnlyGrantGuardedMethods(t *testing.T) {
 // The cert-only carve-outs must never appear in any role, not even cluster-admin.
 func TestCarveOutsAbsentFromAllRoles(t *testing.T) {
 	forbidden := map[string][]string{
-		"entityaccess":       {"get", "put", "create", "replace", "patch", "delete", "list", "reindex"},
+		"entityaccess":       {"get", "put", "create", "replace", "patch", "delete", "deleteatrevision", "list", "reindex"},
 		"stream":             {"recv"},
 		"runnerregistration": {"issueworkloadtoken", "createinvite", "join", "revokeinvite", "removerunner", "cordonrunner", "uncordonrunner", "drainrunner", "refreshcertificate", "query"},
 		"nodeadmin":          {"query"},
 		"netdb":              {"releaseip", "releasesubnet", "releaseall", "gc"},
 		"outboardcontrol":    {"checkversion"},
 		"oidcbindings":       {"add", "remove", "list"},
+		"identityproviders":  {"addoidc", "addgithub", "addpassword", "list", "show", "remove"},
 		// Maintenance takes a hostname out of service for everyone. It is an
 		// operator action on shared ingress, guarded by rpc.BoundApp rather
 		// than rpc.AllowApp, so no app-scoped or cluster role should reach it.
@@ -144,6 +145,8 @@ func TestRoleMembershipSpotChecks(t *testing.T) {
 	}{
 		{RoleAppReadonly, [2]string{"logs", "applogs"}, [2]string{"crud", "setenvvar"}},
 		{RoleAppReadonly, [2]string{"appstatus", "appinfo"}, [2]string{"sandboxexec", "exec"}},
+		{RoleAppReadonly, [2]string{"crud", "listversions"}, [2]string{"crud", "getconfiguration"}},
+		{RoleClusterReadonly, [2]string{"crud", "listversions"}, [2]string{"entityaccess", "list"}},
 		{RoleAppDeployer, [2]string{"deployment", "deployversion"}, [2]string{"sandboxexec", "exec"}},
 		{RoleAppDeployer, [2]string{"builder", "buildfromtar"}, [2]string{"crud", "setenvvar"}},
 		{RoleAppDebugger, [2]string{"sandboxexec", "exec"}, [2]string{"deployment", "deployversion"}},
@@ -188,7 +191,7 @@ func TestMergeDoesNotMutateInputs(t *testing.T) {
 	if len(appRead["logs"]) != before {
 		t.Error("merge mutated the appRead block")
 	}
-	if appRead["crud"] != nil {
-		t.Error("merge leaked appConfig's crud resource into appRead")
+	if appRead["crud"]["setconfiguration"] {
+		t.Error("merge leaked appConfig's crud action into appRead")
 	}
 }

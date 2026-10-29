@@ -30,6 +30,13 @@ func (t *ConcurrencyTracker) AcquireLease() int {
 	return size
 }
 
+// AcquireOverflow allocates one slot past capacity for a request admitted
+// over target. Such a lease carries only that request, so it isn't batched.
+func (t *ConcurrencyTracker) AcquireOverflow() int {
+	t.used++
+	return 1
+}
+
 func (t *ConcurrencyTracker) ReleaseLease(size int) {
 	t.strategy.releaseCapacity(t, size)
 }

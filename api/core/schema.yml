@@ -75,6 +75,10 @@ kinds:
       doc: The email address of the project owner
 
   app:
+    owned_by:
+      type: string
+      doc: Cloud principal subject that owns the app; empty for legacy apps and non-Cloud creators
+
     project:
       type: ref
       doc: The project that the app belongs to

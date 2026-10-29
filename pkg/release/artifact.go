@@ -50,31 +50,25 @@ func AssetBaseURL() string {
 	return DefaultAssetBaseURL
 }
 
+// Filename is the artifact's name on the asset service, which is also its
+// name in the version.json manifest.
+func (a Artifact) Filename() string {
+	switch a.Type {
+	case ArtifactTypeBinary:
+		return fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
+	case ArtifactTypeBase, ArtifactTypeRelease:
+		// The base package is Linux only; other platforms get the binary.
+		if a.Platform == "linux" {
+			return fmt.Sprintf("miren-base-%s-%s.tar.gz", a.Platform, a.Arch)
+		}
+		return fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
+	}
+	return fmt.Sprintf("miren-%s-%s-%s.tar.gz", a.Type, a.Platform, a.Arch)
+}
+
 // GetDownloadURL returns the asset service URL for this artifact
 func (a Artifact) GetDownloadURL() string {
-	baseURL := AssetBaseURL()
-
-	// Binary artifacts (just the miren binary) - available for all platforms as .tar.gz
-	if a.Type == ArtifactTypeBinary {
-		filename := fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
-		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
-		return fullURL
-	}
-	// Base artifacts (full release package) - only available for Linux as .tar.gz
-	if a.Type == ArtifactTypeBase || a.Type == ArtifactTypeRelease {
-		if a.Platform == "linux" {
-			filename := fmt.Sprintf("miren-base-%s-%s.tar.gz", a.Platform, a.Arch)
-			fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
-			return fullURL
-		}
-		// Non-Linux platforms should use binary artifacts
-		filename := fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
-		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
-		return fullURL
-	}
-	// Fallback (shouldn't reach here)
-	filename := fmt.Sprintf("miren-%s-%s-%s.tar.gz", a.Type, a.Platform, a.Arch)
-	fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
+	fullURL, _ := url.JoinPath(AssetBaseURL(), a.Version, a.Filename())
 	return fullURL
 }
 

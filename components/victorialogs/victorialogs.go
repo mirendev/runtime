@@ -31,6 +31,9 @@ const (
 	defaultHTTPPort           = 9428
 	componentSpecLabel        = "dev.miren.victorialogs.spec"
 	componentSpecFile         = "victorialogs.spec"
+	// seedStateFile records which state of the previous epoch an epoch
+	// directory was seeded from.
+	seedStateFile = "epoch.seed"
 	// Bump this whenever createContainer changes an arg, mount, or other spec
 	// detail not represented by desiredSpecFingerprint.
 	componentSpecVersion = "1"
@@ -39,6 +42,20 @@ const (
 var (
 	victoriaLogsImage = imagerefs.VictoriaLogs
 )
+
+// formatEpochs are the data directories for each on-disk format that an
+// older release cannot read, oldest first. The last is the live store. Each
+// is seeded from the one before it, and nothing writes to an earlier one
+// again, so a rollback to a release that predates an epoch finds its own
+// directory as it left it, without that release having to know any of this.
+// Add an epoch when an image bump changes the format irreversibly; ordinary
+// bumps stay in the current one.
+//
+// Epoch 2 is VictoriaLogs v1.52 (MIR-2077); epoch 1 is the v1.0 store of
+// Miren v0.16 and earlier. Seeding hardlinks rather than copies: VictoriaLogs
+// never modifies an existing part file. It writes new parts, unlinks merged
+// ones, and replaces parts.json by rename.
+var formatEpochs = []string{"victorialogs", "victorialogs-v2"}
 
 type VictoriaLogsConfig struct {
 	HTTPPort        int
@@ -92,7 +109,19 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 		return fmt.Errorf("failed to pull victorialogs image: %w", err)
 	}
 
-	dataPath := filepath.Join(c.DataPath, "victorialogs")
+	previousPath := filepath.Join(c.DataPath, formatEpochs[len(formatEpochs)-2])
+	dataPath := filepath.Join(c.DataPath, formatEpochs[len(formatEpochs)-1])
+
+	// An older release that exited uncleanly can leave its container running
+	// on the previous epoch with writes still buffered. Stop it before the
+	// previous epoch is fingerprinted, so a seed never misses them.
+	if err := c.removeContainerOn(ctx, previousPath); err != nil {
+		return err
+	}
+	seeded, err := seedEpoch(c.Log, previousPath, dataPath, func() error { return c.removeContainerForSeed(ctx) })
+	if err != nil {
+		return fmt.Errorf("seed victorialogs data from %s: %w", previousPath, err)
+	}
 
 	err = os.MkdirAll(dataPath, 0755)
 	if err != nil {
@@ -182,7 +211,9 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 		}
 	} else if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("load victorialogs container: %w", err)
-	} else if previousSpec != specFingerprint {
+	} else if previousSpec != specFingerprint && !seeded {
+		// A freshly seeded epoch needs no backup: the previous epoch it was
+		// linked from is left untouched for the older release.
 		entries, readErr := os.ReadDir(dataPath)
 		if readErr != nil {
 			return readErr
@@ -498,7 +529,167 @@ func preserveOrRestoreData(dataPath, previousSpec, restore string, imageChanged 
 	return os.Rename(tmp, backup)
 }
 
+// seedEpoch creates dataPath from the stopped previous epoch, or re-creates it
+// when an older release has written to the previous epoch since the last seed
+// (a rollback followed by another upgrade). It reports whether it seeded.
+// stopWriters runs before anything is linked, since a store must not be linked
+// while it is being written: a v0.16 container left by an unclean exit may
+// still be running on the previous epoch.
+func seedEpoch(log *slog.Logger, previousPath, dataPath string, stopWriters func() error) (bool, error) {
+	if !hasData(previousPath) {
+		return false, nil
+	}
+	fingerprint, err := epochFingerprint(previousPath)
+	if err != nil {
+		return false, err
+	}
+	reseed := false
+	if _, err := os.Stat(dataPath); err == nil {
+		recorded, readErr := os.ReadFile(filepath.Join(dataPath, seedStateFile))
+		if os.IsNotExist(readErr) {
+			return false, nil // Not seeded from the previous epoch; nothing to reconcile.
+		} else if readErr != nil {
+			return false, readErr
+		}
+		if strings.TrimSpace(string(recorded)) == fingerprint {
+			return false, nil
+		}
+		reseed = true
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if err := stopWriters(); err != nil {
+		return false, err
+	}
+	// The container stop may have flushed the previous epoch.
+	if fingerprint, err = epochFingerprint(previousPath); err != nil {
+		return false, err
+	}
+	staged, err := hardlinkFiltered(previousPath, skipForSeed)
+	if err != nil {
+		return false, fmt.Errorf("link previous epoch (it must share a filesystem with %s): %w", dataPath, err)
+	}
+	defer os.RemoveAll(staged)
+	// A spec recorded in the previous epoch describes that directory, not
+	// this one.
+	if err := os.Remove(filepath.Join(staged, componentSpecFile)); err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := os.WriteFile(filepath.Join(staged, seedStateFile), []byte(fingerprint+"\n"), 0o644); err != nil {
+		return false, err
+	}
+	if reseed {
+		replaced := fmt.Sprintf("%s.replaced-%d", dataPath, time.Now().UnixNano())
+		log.Warn("an older release wrote to the previous victorialogs epoch since it was seeded; re-seeding and setting the newer store aside", "previous", previousPath, "replaced", replaced)
+		if err := os.Rename(dataPath, replaced); err != nil {
+			return false, err
+		}
+	}
+	if err := os.Rename(staged, dataPath); err != nil {
+		return false, err
+	}
+	log.Info("seeded victorialogs data from the previous epoch, which is left untouched for rollback", "previous", previousPath, "data", dataPath)
+	return true, nil
+}
+
+func (c *VictoriaLogsComponent) removeContainerForSeed(ctx context.Context) error {
+	container, err := c.CC.LoadContainer(ctx, victoriaLogsContainerName)
+	if errdefs.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("load victorialogs container: %w", err)
+	}
+	task, err := container.Task(ctx, nil)
+	if err == nil {
+		err = c.StopTask(ctx, task)
+	}
+	if err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("stopping victorialogs before seeding: %w", err)
+	}
+	if err := c.CleanupExistingContainer(ctx, container); err != nil {
+		return fmt.Errorf("removing victorialogs container before seeding: %w", err)
+	}
+	c.ClearRuntimeState()
+	return nil
+}
+
+func (c *VictoriaLogsComponent) removeContainerOn(ctx context.Context, path string) error {
+	container, err := c.CC.LoadContainer(ctx, victoriaLogsContainerName)
+	if errdefs.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("load victorialogs container: %w", err)
+	}
+	spec, err := container.Spec(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect victorialogs container: %w", err)
+	}
+	for _, mount := range spec.Mounts {
+		if mount.Destination == "/victoria-logs-data" && filepath.Clean(mount.Source) == filepath.Clean(path) {
+			return c.removeContainerForSeed(ctx)
+		}
+	}
+	return nil
+}
+
+func hasData(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Name() != "flock.lock" {
+			return true
+		}
+	}
+	return false
+}
+
+var tempFilePattern = regexp.MustCompile(`\.tmp\.[0-9]+$`)
+
+// skipForSeed leaves out what VictoriaLogs opens in place. flock.lock is
+// truncated and locked on open, so a shared inode would tie the two stores'
+// locks together, and an interrupted atomic write's .tmp.N file may be
+// reused by name. Neither carries data.
+func skipForSeed(entry os.DirEntry) bool {
+	return entry.Name() == "flock.lock" || tempFilePattern.MatchString(entry.Name())
+}
+
+// epochFingerprint identifies a store's contents by name, size and
+// modification time. VictoriaLogs only adds and removes files, so any write
+// by an older release changes it.
+func epochFingerprint(path string) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(path, func(p string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || skipForSeed(entry) {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(path, p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%d\n", rel, info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
+}
+
 func hardlinkData(source string) (string, error) {
+	return hardlinkFiltered(source, nil)
+}
+
+func hardlinkFiltered(source string, skip func(os.DirEntry) bool) (string, error) {
 	info, err := os.Lstat(source)
 	if err != nil {
 		return "", err
@@ -519,6 +710,9 @@ func hardlinkData(source string) (string, error) {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		if skip != nil && !entry.IsDir() && skip(entry) {
 			return nil
 		}
 		dest := filepath.Join(tmp, rel)

@@ -80,6 +80,10 @@ func AppRun(ctx *Context, opts struct {
 	}
 
 	detached, err := attachToRun(ctx, runs, runID, created.SandboxName(), true)
+	var truncated runOutputTruncatedError
+	if errors.As(err, &truncated) {
+		return reportTruncatedRun(ctx, runs, truncated)
+	}
 	if err != nil {
 		return err
 	}
@@ -207,7 +211,14 @@ func AppAttach(ctx *Context, opts struct {
 	}
 
 	detached, err := attachToRun(ctx, runs, info.Id(), info.Sandbox(), false)
-	if err != nil {
+	var truncated runOutputTruncatedError
+	switch {
+	case errors.As(err, &truncated):
+		// Unlike `miren app run`, a gap here is expected rather than a failure:
+		// joining a run partway through means its earlier output has already
+		// gone by. Say so, and still report how the run ended.
+		fmt.Fprintf(ctx.Stderr, "\nthis terminal missed some output from %s; the full output is in `miren logs run %s`\n", info.Id(), info.Id())
+	case err != nil:
 		return err
 	}
 	if detached {
@@ -271,6 +282,9 @@ func attachToRun(ctx *Context, runs *app_v1alpha.RunsClient, runID, sandboxName 
 		if err == nil {
 			return false, nil
 		}
+		if outputTruncated(err) {
+			return false, runOutputTruncatedError{runID: runID, cause: err}
+		}
 		if !attachTargetMissing(err) {
 			return false, fmt.Errorf("attaching to run %s: %w", runID, err)
 		}
@@ -321,6 +335,35 @@ func attachTargetMissing(err error) bool {
 		strings.Contains(msg, "is not running yet")
 }
 
+// outputTruncated reports whether an attach ended with the server saying the
+// client did not get all of the output. Text matching for the same reason as
+// attachTargetMissing.
+func outputTruncated(err error) bool {
+	return strings.Contains(err.Error(), "output truncated")
+}
+
+// runOutputTruncatedError says this terminal did not receive all of a run's
+// output. For `miren app run` it fails the command: the run's own exit code is
+// reported separately, so swallowing it would let a script take half a
+// database dump for the whole thing (MIR-2012).
+type runOutputTruncatedError struct {
+	runID string
+	cause error
+
+	// outcome says how the run ended, when that is known.
+	outcome string
+}
+
+func (e runOutputTruncatedError) Error() string {
+	msg := "output from run " + e.runID + " did not all reach this terminal"
+	if e.outcome != "" {
+		msg = "run " + e.runID + " finished and " + e.outcome + ", but its output did not all reach this terminal"
+	}
+	return fmt.Sprintf("%s; the full output is in `miren logs run %s`: %v", msg, e.runID, e.cause)
+}
+
+func (e runOutputTruncatedError) Unwrap() error { return e.cause }
+
 // runIsOver reports whether the run has already reached a terminal state. A
 // read failure answers no: the caller keeps waiting, which its own deadline
 // bounds, rather than abandoning an attach over a transient blip.
@@ -355,6 +398,19 @@ const runSettleTimeout = 15 * time.Second
 // A *failure* to read the run is different from a run with no code: the task's
 // outcome is unknown, and exiting 0 would tell a script it succeeded.
 func reportRunExit(ctx *Context, runs *app_v1alpha.RunsClient, runID string) error {
+	code, ok, err := awaitRunExit(ctx, runs, runID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		ctx.SetExitCode(code)
+	}
+	return nil
+}
+
+// awaitRunExit waits for a finishing run to record its exit code, reporting
+// whether it had one.
+func awaitRunExit(ctx *Context, runs *app_v1alpha.RunsClient, runID string) (int, bool, error) {
 	deadline := time.Now().Add(runSettleTimeout)
 
 	var lastErr error
@@ -364,32 +420,51 @@ func reportRunExit(ctx *Context, runs *app_v1alpha.RunsClient, runID string) err
 			lastErr = err
 		} else if info := got.Run(); info != nil {
 			if info.HasExitCode() {
-				ctx.SetExitCode(int(info.ExitCode()))
-				return nil
+				return int(info.ExitCode()), true, nil
 			}
 			// Terminal without a code: canceled and timed-out runs report the
 			// teardown's exit rather than the task's, so there is nothing
 			// honest to hand back to the shell.
 			if isTerminalRunStatus(info.Status()) {
-				return nil
+				return 0, false, nil
 			}
 			lastErr = nil
 		}
 
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("reading run %s to report its exit code: %w", runID, lastErr)
+				return 0, false, fmt.Errorf("reading run %s to report its exit code: %w", runID, lastErr)
 			}
 			// Still running after the container went away. Nothing to report,
 			// and inventing a 0 would be the lie this function exists to avoid.
 			ctx.Log.Warn("run had not recorded an outcome when its terminal closed", "run", runID)
-			return nil
+			return 0, false, nil
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return 0, false, ctx.Err()
 		}
 		time.Sleep(runAttachPoll)
 	}
+}
+
+// reportTruncatedRun fails a run whose output did not all arrive, and says how
+// the run itself ended.
+//
+// Both halves matter to a script. Failing is what stops a truncated dump from
+// passing for a whole one; the outcome is what lets the caller tell a truncated
+// success from a truncated failure, without which the only safe response is to
+// run the command again -- wrong for anything that is not idempotent.
+func reportTruncatedRun(ctx *Context, runs *app_v1alpha.RunsClient, truncated runOutputTruncatedError) error {
+	code, ok, err := awaitRunExit(ctx, runs, truncated.runID)
+	switch {
+	case err != nil:
+		truncated.outcome = "how it ended could not be read"
+	case ok:
+		truncated.outcome = fmt.Sprintf("it exited %d", code)
+	default:
+		truncated.outcome = "it ended without an exit code"
+	}
+	return truncated
 }
 
 func isTerminalRunStatus(status string) bool {

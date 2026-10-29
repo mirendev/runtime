@@ -65,8 +65,8 @@ func isForeground(fd int) bool {
 }
 
 func termStatusReport(o *termenv.Output, sequence int) (string, error) {
-	tty := o.TTY()
-	if tty == nil {
+	tty, ok := o.Writer().(*os.File)
+	if !ok || tty == nil {
 		return "", termenv.ErrStatusReport
 	}
 	fd := int(tty.Fd())
@@ -156,7 +156,7 @@ func xTermColor(s string) (termenv.RGBColor, error) {
 
 func readNextByte(o *termenv.Output) (byte, error) {
 	var b [1]byte
-	n, err := o.TTY().Read(b[:])
+	n, err := o.Writer().(*os.File).Read(b[:])
 	if err != nil {
 		return 0, err
 	}

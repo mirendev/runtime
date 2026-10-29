@@ -2,190 +2,247 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
+	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
+	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
 
-func candidateIDs(candidates []sandboxCandidate) []string {
-	ids := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		ids = append(ids, c.ID.String())
-	}
-	return ids
+type sandboxCommandAuthorizer struct {
+	t    *testing.T
+	deny bool
 }
 
-func TestNarrowSandboxCandidates(t *testing.T) {
-	const (
-		active = entity.Id("app_version/v2")
-		old    = entity.Id("app_version/v1")
-	)
-
-	tests := []struct {
-		name          string
-		candidates    []sandboxCandidate
-		activeVersion entity.Id
-		service       string
-		appHasWeb     bool
-		want          []string
-	}{
-		{
-			name: "drops the previous version when the active one is running",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "web", Version: old},
-				{ID: "sandbox/b", Service: "web", Version: active},
-			},
-			activeVersion: active,
-			appHasWeb:     true,
-			want:          []string{"sandbox/b"},
-		},
-		{
-			// Mid-deploy the new pool may have nothing up yet. Landing in the
-			// old version beats refusing to exec.
-			name: "keeps the previous version when the active one has nothing running",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "web", Version: old},
-				{ID: "sandbox/b", Service: "web", Version: old},
-			},
-			activeVersion: active,
-			appHasWeb:     true,
-			want:          []string{"sandbox/a", "sandbox/b"},
-		},
-		{
-			name: "an app with no active version keeps everything",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "web", Version: old},
-				{ID: "sandbox/b", Service: "web", Version: active},
-			},
-			appHasWeb: true,
-			want:      []string{"sandbox/a", "sandbox/b"},
-		},
-		{
-			name: "picks web over the app's other services",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "worker", Version: active},
-				{ID: "sandbox/b", Service: "web", Version: active},
-				{ID: "sandbox/c", Service: "cron", Version: active},
-			},
-			activeVersion: active,
-			appHasWeb:     true,
-			want:          []string{"sandbox/b"},
-		},
-		{
-			name: "an app without a web service keeps its other services",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "worker", Version: active},
-				{ID: "sandbox/b", Service: "cron", Version: active},
-			},
-			activeVersion: active,
-			want:          []string{"sandbox/a", "sandbox/b"},
-		},
-		{
-			// --service is a hard filter applied against the pools, so by the
-			// time we get here the web preference must not narrow further.
-			name: "an explicit service disables the web preference",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "worker", Version: active},
-				{ID: "sandbox/b", Service: "worker", Version: active},
-			},
-			activeVersion: active,
-			service:       "worker",
-			want:          []string{"sandbox/a", "sandbox/b"},
-		},
-		{
-			// The case that matters most. Web binds a port to go ready and
-			// workers don't, so a rolling deploy routinely has worker on the
-			// new version while web is still on the old one. Preferring the
-			// version first would hand over a worker, silently, since only one
-			// candidate survives and the notice stays quiet at one.
-			name: "a rolling deploy gives you old web, never a new worker",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/a", Service: "web", Version: old},
-				{ID: "sandbox/b", Service: "worker", Version: active},
-			},
-			activeVersion: active,
-			appHasWeb:     true,
-			want:          []string{"sandbox/a"},
-		},
-		{
-			name:          "no candidates stays empty",
-			candidates:    nil,
-			activeVersion: active,
-			want:          []string{},
-		},
-		{
-			name: "result is sorted so only the caller's pick is random",
-			candidates: []sandboxCandidate{
-				{ID: "sandbox/c", Service: "web", Version: active},
-				{ID: "sandbox/a", Service: "web", Version: active},
-				{ID: "sandbox/b", Service: "web", Version: active},
-			},
-			activeVersion: active,
-			appHasWeb:     true,
-			want:          []string{"sandbox/a", "sandbox/b", "sandbox/c"},
-		},
+func (a sandboxCommandAuthorizer) Authorize(_ context.Context, _ *rpc.Identity, resource, _ string) error {
+	if resource == "entityaccess" {
+		a.t.Error("migrated sandbox command attempted EntityAccess")
 	}
+	if a.deny || (resource != "sandboxes" && resource != "sandboxexec") {
+		return fmt.Errorf("access denied: %s", resource)
+	}
+	return nil
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := narrowSandboxCandidates(tt.candidates, tt.activeVersion, tt.service, tt.appHasWeb)
-			require.False(t, got.MissingDefault)
-			require.Equal(t, tt.want, candidateIDs(got.Candidates))
+func sandboxCommandServer(t *testing.T, deny bool) (*Context, *testutils.InMemEntityServer, *rpc.State) {
+	t.Helper()
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(sandboxCommandAuthorizer{t: t, deny: deny}))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(testutils.TestLogger(t), store.Client)))
+	// Expose the raw capability as well, but deny it. Any fallback must fail.
+	server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	ctx := &Context{Context: t.Context(), Log: testutils.TestLogger(t), Stdout: &bytes.Buffer{}, Stderr: io.Discard}
+	ctx.Config.ServerAddress = server.ListenAddr()
+	t.Cleanup(func() { require.NoError(t, ctx.Close()) })
+	return ctx, store, server
+}
+
+func TestSelectAppSandboxUsesServiceRPC(t *testing.T) {
+	ctx, store, _ := sandboxCommandServer(t, false)
+	appID, err := store.Client.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	old, err := store.Client.Create(ctx, "old", &core_v1alpha.AppVersion{App: appID})
+	require.NoError(t, err)
+	active, err := store.Client.Create(ctx, "active", &core_v1alpha.AppVersion{App: appID})
+	require.NoError(t, err)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, appID, entity.Ref(core_v1alpha.AppActiveVersionId, active)))
+	pool := func(service string) entity.Id {
+		id, err := store.Client.Create(ctx, service, &compute_v1alpha.SandboxPool{App: appID, Service: service})
+		require.NoError(t, err)
+		return id
+	}
+	web, worker := pool("web"), pool("worker")
+	create := func(name string, pool, version entity.Id, scheduled bool) entity.Id {
+		id, err := store.Client.Create(ctx, name, &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING,
+			Spec: compute_v1alpha.SandboxSpec{Version: version}}, entityserver.WithLabels(types.LabelSet("pool", pool.String())))
+		require.NoError(t, err)
+		if scheduled {
+			require.NoError(t, store.Client.UpdateAttrs(ctx, id, (&compute_v1alpha.Schedule{Key: compute_v1alpha.Key{Node: "node/one"}}).Encode()))
+		}
+		return id
+	}
+	oldWeb := create("old-web", web, old, true)
+	activeWorker := create("active-worker", worker, active, true)
+	create("ephemeral", "", active, true)
+	create("unscheduled-web", web, active, false)
+	for _, tc := range []struct {
+		service string
+		want    entity.Id
+	}{{"", oldWeb}, {"worker", activeWorker}} {
+		chosen, count, err := selectAppSandbox(ctx, "shop", tc.service)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, chosen.ID)
+		require.Equal(t, 1, count)
+		require.NotEmpty(t, chosen.Brief)
+	}
+	activeWeb := create("active-web", web, active, true)
+	chosen, _, err := selectAppSandbox(ctx, "shop", "")
+	require.NoError(t, err)
+	require.Equal(t, activeWeb, chosen.ID)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, activeWeb, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusStoppedId)))
+	chosen, _, err = selectAppSandbox(ctx, "shop", "")
+	require.NoError(t, err)
+	require.Equal(t, oldWeb, chosen.ID)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, oldWeb, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusStoppedId)))
+	for _, tc := range []struct{ app, service, summary, detail string }{
+		{"shop", "", `no running web instance for app "shop"`, "miren sandbox exec -a shop --service worker"},
+		{"shop", "web", `no running sandbox for service "web" of app "shop"`, "Nothing is running and placed"},
+		{"shop", "typo", `app "shop" has no service named "typo"`, "Its services are: web, worker."},
+		{"missing", "", `no app named "missing"`, "miren app list"},
+	} {
+		_, _, err := selectAppSandbox(ctx, tc.app, tc.service)
+		require.ErrorContains(t, err, tc.summary)
+		var diagnostic *ui.Diagnostic
+		require.ErrorAs(t, err, &diagnostic)
+		var output bytes.Buffer
+		diagnostic.WriteForTerminal(&output)
+		require.Contains(t, output.String(), tc.detail)
+	}
+}
+
+func TestSandboxLifecycleCommandsUseRPC(t *testing.T) {
+	ctx, store, server := sandboxCommandServer(t, false)
+	id, err := store.Client.Create(ctx, "target", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING})
+	require.NoError(t, err)
+	config := filepath.Join(t.TempDir(), "clientconfig.yaml")
+	for range 2 {
+		out, err := RunCommand(SandboxStop, "--config", config, "--server-address", server.ListenAddr(), "target")
+		require.NoError(t, err)
+		require.Equal(t, "Stopped sandbox target\n", out.Stdout.String())
+	}
+	var sb compute_v1alpha.Sandbox
+	require.NoError(t, store.Client.GetById(ctx, id, &sb))
+	require.Equal(t, compute_v1alpha.STOPPED, sb.Status)
+	out, err := RunCommand(SandboxDelete, "--config", config, "--server-address", server.ListenAddr(), "--force", "target")
+	require.ErrorContains(t, err, "must be dead")
+	require.Empty(t, out.Stdout.String())
+	require.NoError(t, store.Client.UpdateAttrs(ctx, id, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusDeadId)))
+	out, err = RunCommand(SandboxDelete, "--config", config, "--server-address", server.ListenAddr(), "--force", "target")
+	require.NoError(t, err)
+	require.Equal(t, "Deleted sandbox target\n", out.Stdout.String())
+	require.Error(t, store.Client.GetById(ctx, id, &sb))
+}
+
+func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
+	ctx, _, server := sandboxCommandServer(t, true)
+	_, _, err := selectAppSandbox(ctx, "shop", "")
+	var denial cond.ErrRemote
+	require.ErrorAs(t, err, &denial)
+	require.Equal(t, "permission", denial.Category)
+	require.Equal(t, "forbidden", denial.Code)
+	for _, tc := range []struct {
+		command any
+		flags   []string
+	}{{SandboxStop, nil}, {SandboxDelete, []string{"--force"}}} {
+		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
+		args = append(args, tc.flags...)
+		out, err := RunCommand(tc.command, append(args, "target")...)
+		require.ErrorAs(t, err, &denial)
+		require.Equal(t, "permission", denial.Category)
+		require.Equal(t, "forbidden", denial.Code)
+		require.Empty(t, out.Stdout.String())
+	}
+}
+
+func TestSandboxCommandsFallbackWhenAPIIsUnavailable(t *testing.T) {
+	for _, oldService := range []bool{false, true} {
+		t.Run(fmt.Sprint("old-service=", oldService), func(t *testing.T) {
+			testSandboxCommandsLegacy(t, oldService)
 		})
 	}
 }
 
-// The input is a decoded snapshot the caller may still be holding; narrowing
-// must not reorder it underneath them.
-func TestNarrowSandboxCandidatesLeavesInputAlone(t *testing.T) {
-	candidates := []sandboxCandidate{
-		{ID: "sandbox/c", Service: "web"},
-		{ID: "sandbox/a", Service: "web"},
+func testSandboxCommandsLegacy(t *testing.T, oldService bool) {
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	if oldService {
+		// A real capability with no lifecycle/selection methods simulates an
+		// older service without relying on a mocked client error.
+		server.Server().ExposeValue("dev.miren.runtime/sandboxes", entityserver_v1alpha.AdaptEntityAccess(store.Server))
 	}
-
-	narrowSandboxCandidates(candidates, "", "", true)
-
-	require.Equal(t, []string{"sandbox/c", "sandbox/a"}, candidateIDs(candidates))
+	ctx := &Context{Context: t.Context(), Log: testutils.TestLogger(t), Stdout: &bytes.Buffer{}, Stderr: io.Discard}
+	ctx.Config.ServerAddress = server.ListenAddr()
+	t.Cleanup(func() { require.NoError(t, ctx.Close()) })
+	appID, err := store.Client.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	poolID, err := store.Client.Create(ctx, "web-pool", &compute_v1alpha.SandboxPool{App: appID, Service: "web"})
+	require.NoError(t, err)
+	id, err := store.Client.Create(ctx, "target", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}, entityserver.WithLabels(types.LabelSet("pool", poolID.String())))
+	require.NoError(t, err)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, id, (&compute_v1alpha.Schedule{Key: compute_v1alpha.Key{Node: "node/one"}}).Encode()))
+	chosen, count, err := selectAppSandbox(ctx, "shop", "")
+	require.NoError(t, err)
+	require.Equal(t, id, chosen.ID)
+	require.Equal(t, 1, count)
+	for _, tc := range []struct {
+		command any
+		flags   []string
+	}{{SandboxStop, nil}, {SandboxDelete, []string{"--force"}}} {
+		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
+		args = append(args, tc.flags...)
+		out, err := RunCommand(tc.command, append(args, "target")...)
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Stdout.String())
+		if len(tc.flags) == 0 {
+			require.NoError(t, store.Client.UpdateAttrs(ctx, id, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusDeadId)))
+		}
+	}
 }
 
-// The substitution phinze caught in review: exec must not answer "your web
-// service has nothing up" by handing over a worker.
-func TestNarrowSandboxCandidatesRefusesToSubstituteAService(t *testing.T) {
-	const active = entity.Id("app_version/v2")
+type selectedExecServer struct{ exec_v1alpha.SandboxExec }
 
-	candidates := []sandboxCandidate{
-		{ID: "sandbox/a", Service: "worker", Version: active},
-		{ID: "sandbox/b", Service: "cron", Version: active},
+func (*selectedExecServer) Exec(_ context.Context, state *exec_v1alpha.SandboxExecExec) error {
+	if state.Args().Category() != "id" || state.Args().Value() != "sandbox/selected" || state.Args().Command() != "echo hello" {
+		return fmt.Errorf("unexpected exec target or command")
 	}
-
-	got := narrowSandboxCandidates(candidates, active, "", true)
-
-	require.True(t, got.MissingDefault)
-	require.Empty(t, got.Candidates)
-	require.Equal(t, []string{"cron", "worker"}, got.Running)
+	state.Results().SetCode(7)
+	return nil
 }
 
-// A failed deploy leaves ActiveVersion pointing at a version that never came
-// up while the old instances keep serving. Refusing those would lock you out of
-// a shell exactly when a deploy has just broken, so version stays a preference.
-func TestNarrowSandboxCandidatesStillServesAFailedDeploy(t *testing.T) {
-	const (
-		active = entity.Id("app_version/v2")
-		old    = entity.Id("app_version/v1")
-	)
+type selectedSandboxServer struct{ compute_v1alpha.Sandboxes }
 
-	candidates := []sandboxCandidate{
-		{ID: "sandbox/a", Service: "web", Version: old},
+func (*selectedSandboxServer) SelectForApp(_ context.Context, state *compute_v1alpha.SandboxesSelectForApp) error {
+	if state.Args().App() != "shop" || state.Args().Service() != "worker" {
+		return fmt.Errorf("unexpected app or service")
 	}
+	selection := new(compute_v1alpha.SandboxSelection)
+	selection.SetId("sandbox/selected")
+	selection.SetShortId("sel")
+	selection.SetService("worker")
+	selection.SetCandidateCount(3)
+	state.Results().SetSelection(selection)
+	return nil
+}
 
-	got := narrowSandboxCandidates(candidates, active, "", true)
-
-	require.False(t, got.MissingDefault)
-	require.Equal(t, []string{"sandbox/a"}, candidateIDs(got.Candidates))
+func TestSandboxExecUsesSelectedTarget(t *testing.T) {
+	ctx, _, server := sandboxCommandServer(t, false)
+	server.Server().ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(&selectedSandboxServer{}))
+	server.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(&selectedExecServer{}))
+	require.NoError(t, SandboxExec(ctx, sandboxExecOptions{App: "shop", Service: "worker", Args: []string{"echo", "hello"}}))
+	require.Equal(t, 7, ctx.exitCode)
 }
 
 func TestNoDefaultServiceError(t *testing.T) {

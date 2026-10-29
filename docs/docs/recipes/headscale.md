@@ -1,6 +1,6 @@
 ---
 title: Run a headscale control server
-description: Self-host headscale, the open-source Tailscale control server, on Miren — reachable at your own hostname, with its database and keys on a persistent disk.
+description: Self-host headscale, the open-source Tailscale control server, on Miren at your own hostname, with its state on a persistent disk.
 keywords: [headscale, tailscale, tailnet, control server, vpn, wireguard, derp, self-hosted, example, deploy]
 ---
 
@@ -181,8 +181,8 @@ value = "https://headscale.example.com"
 ```
 
 A control server shouldn't scale to zero or run two copies against one SQLite file, hence a
-single fixed instance. [Persistent Storage](../disks.md) recommends a local disk for SQLite,
-which is what this uses; note that any disk pins the app to the coordinator node.
+single fixed instance. A local disk holds both the SQLite database and the noise key, which
+has to survive redeploys just as much; note that any disk pins the app to the coordinator node.
 
 ## Deploy
 
@@ -291,17 +291,12 @@ RUN apt-get update \
 
 COPY --from=upstream /ko-app/headscale /usr/local/bin/headscale
 COPY config.yaml /etc/headscale/config.yaml
+
+CMD ["headscale", "serve"]
 ```
 
-Now that there's a shell, set the command explicitly:
-
-```toml
-[services.web]
-command = "exec headscale serve"
-port_timeout = "120s"
-```
-
-Everything else in the recipe is unchanged, and `miren sandbox exec <id>` opens a prompt.
+The new base has no headscale `ENTRYPOINT`, so the `CMD` names the binary. The `app.toml` is
+unchanged — still no `command` — and `miren sandbox exec <id>` now opens a prompt.
 The tradeoff is a larger image and a base you're responsible for patching.
 
 ## Running the embedded DERP relay

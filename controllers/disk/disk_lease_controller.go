@@ -24,8 +24,7 @@ import (
 // young lease may belong to a sandbox that is still booting (its entity not yet
 // settled) or one that just died and whose own in-band ReleaseDiskLeases is
 // still in flight. Skipping young leases lets those in-band paths win the race.
-// The boot-time sweep (Init) bypasses this with a zero grace, since it only ever
-// sees leftovers from a prior, crashed process where nothing is mid-boot.
+// Age never proves task shutdown, including across a daemon restart.
 const OrphanSweepGracePeriod = 2 * time.Minute
 
 // leaseInfo tracks active lease details
@@ -58,6 +57,8 @@ type DiskLeaseController struct {
 
 	// diskMode determines how disk mounts are performed (universal or accelerator)
 	diskMode storage_v1alpha.DiskMode
+
+	sandboxContainersGone func(context.Context, entity.Id) (bool, error)
 }
 
 // NewDiskLeaseController creates a disk lease controller that uses disk_mount entities.
@@ -80,13 +81,19 @@ func (d *DiskLeaseController) ForceUniversalMode() {
 	d.diskMode = storage_v1alpha.UNIVERSAL
 }
 
+// SetSandboxContainersGone supplies inspection of this runner's containerd.
+// Without this authority, orphan leases remain fenced rather than guessed dead.
+func (d *DiskLeaseController) SetSandboxContainersGone(inspect func(context.Context, entity.Id) (bool, error)) {
+	d.sandboxContainersGone = inspect
+}
+
 // Init initializes the disk lease controller
 func (d *DiskLeaseController) Init(ctx context.Context) error {
 	d.diskMode = detectDiskMode(d.configuredMode)
 	d.Log.Info("disk lease controller initialized", "mode", d.diskMode)
 
-	// Zero grace at boot: anything we find is a leftover from a prior process,
-	// not a sandbox booting in this one.
+	// The owning runner still verifies container absence at boot: daemon
+	// shutdown does not imply that its app tasks stopped.
 	if err := d.ReconcileOrphanLeases(ctx, 0); err != nil {
 		// Orphan sweep is best-effort — log and continue. Individual
 		// leases may still transition normally via their entity events.
@@ -95,15 +102,15 @@ func (d *DiskLeaseController) Init(ctx context.Context) error {
 	return nil
 }
 
-// ReconcileOrphanLeases releases leases whose owning sandbox no longer
-// exists or is already DEAD. On a clean shutdown the sandbox controller
+// ReconcileOrphanLeases releases local leases whose sandbox is DEAD/missing
+// only after the owning runner confirms that no app containers remain.
+// On a clean shutdown the sandbox controller
 // releases leases via StopSandbox → ReleaseDiskLeases, but a sandbox can
 // also die without that path running: a SIGKILL, or a boot that fails
 // after binding the lease (the boot-failure defer marks the sandbox DEAD).
 // A BOUND lease left pointing at a dead sandbox then blocks every future
 // sandbox that wants the same disk. This sweep runs both at boot (Init)
-// and periodically, turning a latent deadlock into a transient, self-
-// healing one bounded by the sweep interval.
+// and periodically. Unknown runner/task ownership stays fenced.
 //
 // minLeaseAge skips leases younger than the given age. The recurring sweep
 // passes OrphanSweepGracePeriod so it never reclaims a lease that may still
@@ -130,7 +137,7 @@ func (d *DiskLeaseController) ReconcileOrphanLeases(ctx context.Context, minLeas
 		if lease.Status != storage_v1alpha.BOUND && lease.Status != storage_v1alpha.PENDING {
 			continue
 		}
-		if lease.SandboxId == "" {
+		if lease.SandboxId == "" || lease.NodeId == "" || !d.NodeId.Matches(lease.NodeId) {
 			continue
 		}
 
@@ -155,6 +162,17 @@ func (d *DiskLeaseController) ReconcileOrphanLeases(ctx context.Context, minLeas
 			continue
 		}
 		if !sandboxDead {
+			continue
+		}
+		if d.sandboxContainersGone == nil {
+			continue
+		}
+		gone, err := d.sandboxContainersGone(ctx, lease.SandboxId)
+		if err != nil {
+			d.Log.Warn("orphan lease sweep: cannot verify runner teardown", "sandbox", lease.SandboxId, "error", err)
+			continue
+		}
+		if !gone {
 			continue
 		}
 
