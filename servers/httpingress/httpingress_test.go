@@ -936,6 +936,54 @@ func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.App
 	}
 }
 
+type versionedBootActivator struct {
+	stubActivator
+	versions map[entity.Id]*bootingActivator
+}
+
+func (a *versionedBootActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*activator.Lease, error) {
+	return a.versions[ver.ID].AcquireLease(ctx, ver, service)
+}
+
+func TestColdStartAfterVersionChange(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "new version ready")
+	}))
+	defer backend.Close()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("previous boot failed=%t", failed), func(t *testing.T) {
+			oldReady := make(chan struct{})
+			defer close(oldReady)
+			newReady := make(chan struct{})
+			close(newReady)
+			s := newTimeoutTestServer(5 * time.Second)
+			s.apps = make(map[string]*appUsage)
+			s.aa = &versionedBootActivator{versions: map[entity.Id]*bootingActivator{
+				"version/old": {ready: oldReady, stubActivator: stubActivator{err: activator.ErrSandboxDiedEarly}},
+				"version/new": {ready: newReady, url: backend.URL},
+			}}
+			name := "test"
+			request := func(version entity.Id) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+				r.Header.Set("Accept", "text/html")
+				w := httptest.NewRecorder()
+				target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}, version: core_v1alpha.AppVersion{ID: version}}
+				s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
+				return w
+			}
+			if failed {
+				s.aa.(*versionedBootActivator).versions["version/old"].ready = newReady
+				require.Equal(t, http.StatusRequestTimeout, request("version/old").Code)
+			} else {
+				require.Equal(t, http.StatusServiceUnavailable, request("version/old").Code)
+			}
+			w := request("version/new")
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, "new version ready", w.Body.String())
+		})
+	}
+}
+
 func TestColdStartLoading(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

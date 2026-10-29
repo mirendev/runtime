@@ -469,6 +469,7 @@ func (h *Server) useLeaseLocked(app string) *lease {
 func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *core_v1alpha.AppVersion, service string) (*lease, error) {
 	timer := time.NewTimer(1500 * time.Millisecond)
 	defer timer.Stop()
+	bootKey := key + ":" + ver.ID.String()
 
 	for {
 		h.mu.Lock()
@@ -478,13 +479,13 @@ func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *co
 			h.mu.Unlock()
 			return l, nil
 		}
-		boot := h.boots[key]
+		boot := h.boots[bootKey]
 		if boot == nil {
 			boot = &appBoot{done: make(chan struct{})}
 			if h.boots == nil {
 				h.boots = make(map[string]*appBoot)
 			}
-			h.boots[key] = boot
+			h.boots[bootKey] = boot
 			go func() {
 				actContext, cancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
 				defer cancel()
@@ -495,15 +496,15 @@ func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *co
 
 				h.mu.Lock()
 				if boot.err == nil && boot.lease != nil {
-					delete(h.boots, key)
+					delete(h.boots, bootKey)
 				} else {
 					// Keep the terminal result long enough for all current loading
 					// pages to see it, then allow a new boot and reclaim the entry.
 					time.AfterFunc(bootFailureTTL, func() {
 						h.mu.Lock()
 						defer h.mu.Unlock()
-						if h.boots[key] == boot {
-							delete(h.boots, key)
+						if h.boots[bootKey] == boot {
+							delete(h.boots, bootKey)
 						}
 					})
 				}
