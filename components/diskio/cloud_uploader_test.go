@@ -303,7 +303,7 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		response := map[string]any{
 			"update_id":        "volup-" + body.Key,
-			"complete_url":     "/api/v1/disk/volumes/vol-test/updates/volup-" + body.Key + "/complete",
+			"complete_url":     strings.TrimSuffix(r.URL.Path, "/upload") + "/volup-" + body.Key + "/complete",
 			"supports_prepare": true, "already_active": row.active, "kind": row.kind,
 			"prepared":     row.prepared && !row.active,
 			"ordering_key": row.key, "md5": row.md5, "crc32c": row.crc, "size": row.size,
@@ -480,6 +480,103 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			require.Equal(t, expected, actual)
 		})
 	}
+}
+
+func TestLogWatcherNewVolumeProgressesDuringBlockedCompletion(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	const oldKey = "400000000000000100000001"
+	const newKey = "400000000000000200000001"
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/volup-"+oldKey+"/complete") {
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			var body struct {
+				Prepare bool `json:"prepare_only"`
+			}
+			if err := json.Unmarshal(data, &body); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(data))
+			if !body.Prepare {
+				once.Do(func() { close(blocked) })
+				<-release
+			}
+		}
+		remote.ServeHTTP(w, r)
+	}
+	state, err := LoadState(t.TempDir())
+	require.NoError(t, err)
+	addVolume := func(id, key string, count int) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "logs"), 0755))
+		for i := 0; i < count; i++ {
+			label := key[:16] + fmt.Sprintf("%08x", i+1)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "logs", "disk."+label+".log"), []byte(label), 0600))
+		}
+		require.NoError(t, state.SetVolumeAndSave(id, &VolumeState{
+			EntityId: id, VolumeId: id, CloudVolumeId: id, DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR,
+		}))
+		return dir
+	}
+	oldDir := addVolume("vol-old", oldKey, uploadConcurrency+1)
+	require.NoError(t, state.SetMountAndSave("mount", &MountState{
+		EntityId: "mount", VolumeId: "vol-old", CloudVolumeId: "vol-old", LeaseNonce: "nonce", LeaseOwned: true, Mode: storage_v1alpha.VM_ACCELERATOR,
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	watch := NewLogWatcher(slog.Default(), state, NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state), time.Millisecond)
+	runErr := make(chan error, 1)
+	go func() { runErr <- watch.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		close(release)
+		watch.Wait()
+	})
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old volume did not reach completion")
+	}
+	// Discover a disk after the old scan started, not just in its snapshot.
+	newDir := addVolume("vol-new", newKey, 2)
+	require.Eventually(t, func() bool {
+		horizon, err := readLogHorizon(newDir)
+		return err == nil && horizon == "400000000000000200000002"
+	}, 5*time.Second, time.Millisecond)
+	remote.mu.Lock()
+	order := append([]string(nil), remote.order...)
+	remote.mu.Unlock()
+	require.Equal(t, []string{newKey, "400000000000000200000002"}, order)
+	// Neither deletion nor cancellation may discard the unresolved batch.
+	vc := NewDiskVolumeController(slog.Default(), t.TempDir(), compute.NewNodeId("node"), state, NewRealDiskVolumeOps(slog.Default()), newMockDiskMountOps())
+	deleteCtx, deleteCancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer deleteCancel()
+	require.ErrorIs(t, vc.Reconcile(deleteCtx, &storage_v1alpha.DiskVolume{
+		ID: "vol-old", DesiredState: storage_v1alpha.DV_ABSENT, ActualState: storage_v1alpha.DV_READY,
+	}, nil), context.DeadlineExceeded)
+	cancel()
+	select {
+	case err := <-runErr:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not join cancelled uploads")
+	}
+	watch.Wait()
+	require.Equal(t, "nonce", state.LeaseNonceForCloudVolume("vol-old"))
+	require.True(t, state.HasPendingCloudUpload("vol-old"))
+	horizon, err := readLogHorizon(oldDir)
+	require.NoError(t, err)
+	require.Empty(t, horizon)
+	files, err := os.ReadDir(filepath.Join(oldDir, "logs"))
+	require.NoError(t, err)
+	require.Len(t, files, uploadConcurrency+1)
 }
 
 func TestDiskMountReleaseDrainsFinalSegmentBeforeLease(t *testing.T) {
