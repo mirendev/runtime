@@ -927,6 +927,9 @@ func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.App
 	}
 	select {
 	case <-a.ready:
+		if a.err != nil {
+			return nil, a.err
+		}
 		return &activator.Lease{URL: a.url, Size: 10}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -966,7 +969,11 @@ func TestColdStartLoading(t *testing.T) {
 			if tc.fast {
 				close(ready)
 			} else {
-				timer := time.AfterFunc(2200*time.Millisecond, func() { close(ready) })
+				delay := 2200 * time.Millisecond
+				if tc.loading {
+					delay = 3800 * time.Millisecond
+				}
+				timer := time.AfterFunc(delay, func() { close(ready) })
 				defer timer.Stop()
 			}
 			w := httptest.NewRecorder()
@@ -981,20 +988,51 @@ func TestColdStartLoading(t *testing.T) {
 				require.Equal(t, "2", w.Header().Get("Retry-After"))
 				require.Contains(t, w.Body.String(), "Loading…")
 				require.Contains(t, w.Body.String(), `<meta http-equiv="refresh" content="2">`)
-				// The original request has returned, but boot must finish and
-				// the next navigation must reach the app with its URL intact.
-				// This activator cannot start a second boot to mask cancellation
-				// or a lost lease from the first request.
-				<-ready
-				require.Eventually(t, func() bool {
-					w = httptest.NewRecorder()
-					s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
-					return w.Code == http.StatusOK
-				}, time.Second, 10*time.Millisecond)
+				// Retrying while still booting must join the existing acquisition.
+				// This activator rejects a second acquisition, exposing duplicates.
+				w = httptest.NewRecorder()
+				s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				require.Contains(t, w.Body.String(), "Loading…")
+				// A further retry is still pending when boot finishes and must
+				// proxy immediately, rather than waiting for another refresh.
+				w = httptest.NewRecorder()
+				s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
 			}
 			require.Equal(t, http.StatusOK, w.Code)
 			require.Equal(t, tc.method+" /orders?sort=desc payload", w.Body.String())
 		})
+	}
+}
+
+func TestColdStartFailureAfterLoading(t *testing.T) {
+	ready := make(chan struct{})
+	defer func() {
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+	}()
+	s := newTimeoutTestServer(5 * time.Second)
+	s.apps = make(map[string]*appUsage)
+	s.aa = &bootingActivator{ready: ready, stubActivator: stubActivator{err: activator.ErrSandboxDiedEarly}}
+	target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}}
+	name := "test"
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+		r.Header.Set("Accept", "text/html")
+		w := httptest.NewRecorder()
+		s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
+		return w
+	}
+	require.Contains(t, request().Body.String(), "Loading…")
+	close(ready)
+	for range 2 {
+		w := request()
+		require.Equal(t, http.StatusRequestTimeout, w.Code)
+		require.Contains(t, w.Body.String(), "This app couldn&#39;t start.")
+		require.NotContains(t, w.Body.String(), "window.location.reload")
 	}
 }
 
