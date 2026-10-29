@@ -81,11 +81,32 @@ func TestClusterAddJSONSuccess(t *testing.T) {
 	r.Equal("cluster-prod", added.XID)
 	r.Equal("Acme", added.Organization)
 	r.True(added.ViaCloud)
+	r.True(added.ForceCloud)
 	r.Empty(added.Address, "a routed cluster is dialed at no address of its own")
 	r.Equal("cloud", added.Identity)
 	r.True(added.Insecure, "the test cloud is http, and the entry says so")
 	r.True(added.Active, "the first cluster added becomes the active one")
 	r.Contains(added.ConfigFile, "acme-prod.yaml")
+}
+
+func TestClusterAddJSONAutomaticFallback(t *testing.T) {
+	srv := fakeCloud(t, []ClusterResponse{{Name: "prod", XID: "cluster-prod"}}, map[string]bool{"cluster-prod": true})
+	configWithIdentity(t, srv.URL)
+	withCloudRouteProbe(t, func(*Context, *clientconfig.Config, string, *clientconfig.IdentityConfig, *ClusterResponse) bool {
+		return true
+	})
+	result, printed, exitCode := runClusterAdd(t, jsonAddOpts("prod"))
+	require.Zero(t, exitCode)
+	require.True(t, result.OK)
+	require.True(t, result.Cluster.ViaCloud)
+	require.False(t, result.Cluster.ForceCloud)
+	require.Contains(t, printed, `"force_cloud": false`)
+	require.Empty(t, result.Cluster.Address)
+	cfg, err := clientconfig.LoadConfig()
+	require.NoError(t, err)
+	cluster, err := cfg.GetCluster("prod")
+	require.NoError(t, err)
+	require.False(t, cluster.ViaCloud)
 }
 
 // A failure has to be legible twice over: as a document a caller can branch on,

@@ -44,6 +44,15 @@ commands off-network do not each wait for a timeout. After that, direct routing
 is tried again. Moving between networks does not permanently change your config.
 Advertised addresses and the cluster CA fingerprint are retained even when you
 add the cluster remotely, so a later direct connection can verify the cluster.
+When only the fingerprint is saved, the first TLS handshake fails verification
+and supplies the certificate chain. The CLI checks the CA fingerprint, then
+retries with that CA trusted and normal TLS verification enabled. This adds a
+handshake attempt to the direct probe; entries with a saved CA do not need it.
+
+The cache records a failed direct attempt, not proof that cloud is available.
+If the cluster has no working cloud link, commands can fail through cloud until
+the hint expires. Use `miren -vv app list` to see why direct routing failed;
+debug output includes the attempted addresses and errors, even on cache hits.
 
 It tries the route rather than asking whether one exists, because those are
 different questions. Cloud can hold a link to a cluster whose runtime is older

@@ -569,9 +569,12 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		return nil, codedErrorf(codeConfigError, "failed to save cluster configuration: %w", err)
 	}
 
-	if opts.viaCloud {
+	if explicitViaCloud {
 		ctx.Completed("Successfully added cluster %q with identity %q, routed through Miren Cloud", clusterName, identityName)
 		ctx.Info("Commands reach it over the connection it holds open to cloud, so it needs no address here.")
+	} else if opts.viaCloud {
+		ctx.Completed("Successfully added cluster %q with identity %q; reached through Miren Cloud while adding", clusterName, identityName)
+		ctx.Info("Future connections use direct when reachable, otherwise via cloud.")
 	} else if identityName != "" {
 		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
 	} else {
@@ -592,7 +595,8 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		Name:       clusterName,
 		XID:        clusterXID,
 		Address:    address,
-		ViaCloud:   clusterConfig.ViaCloud,
+		ViaCloud:   opts.viaCloud,
+		ForceCloud: clusterConfig.ViaCloud,
 		Identity:   identityName,
 		Insecure:   clusterConfig.Insecure,
 		Active:     mainConfig.ActiveCluster() == clusterName,

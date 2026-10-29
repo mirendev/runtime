@@ -1,9 +1,11 @@
 package clientconfig
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/slogrus"
 )
 
 type routingCredentialRecorder struct {
@@ -52,8 +55,10 @@ func TestAutomaticClusterRouting(t *testing.T) {
 		AllAddresses: []string{"invalid::::", server.ListenAddr()}, CACertFingerprint: ca.Fingerprint(),
 	}
 	config := viaCloudConfig(t, cluster)
+	var diagnostics bytes.Buffer
+	ctx := slogrus.WithLogger(t.Context(), slog.New(slog.NewJSONHandler(&diagnostics, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	connect := func() error {
-		state, err := cluster.State(t.Context(), config)
+		state, err := cluster.State(ctx, config)
 		require.NoError(t, err)
 		defer state.Close()
 		_, err = state.Client("missing")
@@ -73,8 +78,21 @@ func TestAutomaticClusterRouting(t *testing.T) {
 	require.Empty(t, cluster.CACert, "discovered trust is per connection, not a config mutation")
 
 	cluster.CACertFingerprint = "wrong-pin"
+	diagnostics.Reset()
 	require.ErrorContains(t, connect(), "503", "a mismatched CA must fall back to cloud")
+	require.Contains(t, diagnostics.String(), server.ListenAddr())
+	require.Contains(t, diagnostics.String(), "cluster CA fingerprint mismatch")
+	diagnostics.Reset()
+	require.ErrorContains(t, connect(), "503")
+	require.Contains(t, diagnostics.String(), "Using cached direct-route failure")
+	require.Contains(t, diagnostics.String(), server.ListenAddr())
+	require.Contains(t, diagnostics.String(), "cluster CA fingerprint mismatch")
 	cluster.CACertFingerprint = ca.Fingerprint()
+	assertDirect()
+
+	cluster.TLSServerName = "other-api.miren"
+	require.ErrorContains(t, connect(), "503", "pinned-root recovery must respect an explicit server name")
+	cluster.TLSServerName = ""
 	assertDirect()
 
 	// Existing direct entries use their saved CA and explicit TLS server name.
@@ -102,6 +120,21 @@ func TestAutomaticClusterRouting(t *testing.T) {
 	require.ErrorContains(t, connect(), "503")
 	require.Zero(t, runnerRecorder.bearers.Load(), "a mismatched CA must not receive the bearer token")
 	cluster.CACertFingerprint = ca.Fingerprint()
+
+	expiredCert, err := ca.IssueCertificate(caauth.Options{
+		CommonName: APIServerName, DNSNames: []string{APIServerName}, ValidFor: -time.Hour,
+	})
+	require.NoError(t, err)
+	expiredRecorder := &routingCredentialRecorder{}
+	expiredServer, err := rpc.NewState(t.Context(), rpc.WithBindAddr("127.0.0.1:0"),
+		rpc.WithCertPEMs(expiredCert.CertPEM, expiredCert.KeyPEM), rpc.WithAuthenticator(expiredRecorder))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = expiredServer.Close() })
+	cluster.AllAddresses = []string{expiredServer.ListenAddr()}
+	diagnostics.Reset()
+	require.ErrorContains(t, connect(), "503", "a matching pin and hostname must not bypass certificate expiry")
+	require.Contains(t, diagnostics.String(), "expired")
+	require.Zero(t, expiredRecorder.bearers.Load(), "an expired API certificate must not receive the bearer token")
 
 	// Simulate adding while remote, then returning to the direct network.
 	cluster.AllAddresses = []string{"invalid::::"}
@@ -151,9 +184,9 @@ insecure: true
 	}
 	assertDirect()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	canceledCtx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = cluster.State(ctx, config)
+	_, err = cluster.State(canceledCtx, config)
 	require.ErrorIs(t, err, context.Canceled)
 }
 

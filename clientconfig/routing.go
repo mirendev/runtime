@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/log"
 	"github.com/quic-go/quic-go"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -44,6 +46,8 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 	cachePath := filepath.Join(cacheDir, fmt.Sprintf("cloud_route_%x", key))
 	if cacheDir != "" {
 		if info, err := os.Stat(cachePath); err == nil && time.Since(info.ModTime()) < cloudRouteCacheTTL {
+			reason, _ := os.ReadFile(cachePath)
+			log.G(ctx).WithField("cluster", c.XID).WithField("direct_errors", string(reason)).Debug("Using cached direct-route failure; trying cloud")
 			return c.viaCloudOptions(ctx, config)
 		}
 	}
@@ -55,6 +59,7 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 	type result struct {
 		cluster *ClusterConfig
 		err     error
+		address string
 	}
 	results := make(chan result, len(addresses))
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -62,9 +67,10 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 	for _, address := range addresses {
 		go func() {
 			cluster, err := c.probeDirectRoute(probeCtx, address)
-			results <- result{cluster, err}
+			results <- result{cluster, err, address}
 		}()
 	}
+	var failures []string
 	for range addresses {
 		select {
 		case res := <-results:
@@ -72,7 +78,11 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 				cancel()
 				return res.cluster.directRPCOptions(ctx, config, "")
 			}
+			failure := fmt.Sprintf("%s: %v", res.address, res.err)
+			failures = append(failures, failure)
+			log.G(ctx).WithField("cluster", c.XID).WithField("direct_error", failure).Debug("Direct cluster route failed")
 		case <-probeCtx.Done():
+			failures = append(failures, fmt.Sprintf("probing %v: %v", addresses, probeCtx.Err()))
 			goto relay
 		}
 	}
@@ -81,9 +91,10 @@ relay:
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	log.G(ctx).WithField("cluster", c.XID).WithField("direct_errors", strings.Join(failures, "; ")).Debug("No verified direct route; trying cloud")
 	opts, err := c.viaCloudOptions(ctx, config)
 	if err == nil && cacheDir != "" {
-		_ = os.WriteFile(cachePath, nil, 0600)
+		_ = os.WriteFile(cachePath, []byte(strings.Join(failures, "; ")), 0600)
 	}
 	return opts, err
 }
@@ -130,33 +141,8 @@ func (c *ClusterConfig) probeDirectRoute(ctx context.Context, address string) (*
 			return nil, fmt.Errorf("invalid cluster CA")
 		}
 	} else if c.CACertFingerprint != "" {
-		// Replace system-root validation with a pinned-root chain validation,
-		// not an unauthenticated connectivity check.
-		tlsConfig.InsecureSkipVerify = true
-		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
-			root := state.PeerCertificates[len(state.PeerCertificates)-1]
-			sum := sha1.Sum(root.Raw)
-			if !strings.EqualFold(hex.EncodeToString(sum[:]), c.CACertFingerprint) {
-				return fmt.Errorf("cluster CA fingerprint mismatch")
-			}
-			roots := x509.NewCertPool()
-			roots.AddCert(root)
-			intermediates := x509.NewCertPool()
-			for _, cert := range state.PeerCertificates[1:] {
-				intermediates.AddCert(cert)
-			}
-			name := tlsConfig.ServerName
-			leaf := state.PeerCertificates[0]
-			if c.TLSServerName == "" && leaf.VerifyHostname(name) != nil && slices.Contains(leaf.DNSNames, APIServerName) {
-				name = APIServerName
-			}
-			if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: name}); err != nil {
-				return err
-			}
-			direct.CACert = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
-			direct.TLSServerName = name
-			return nil
-		}
+		// Require pinned-root recovery even if the peer has a system-trusted CA.
+		tlsConfig.RootCAs = x509.NewCertPool()
 	}
 	network := "udp6"
 	if ip.IP.To4() != nil {
@@ -169,9 +155,36 @@ func (c *ClusterConfig) probeDirectRoute(ctx context.Context, address string) (*
 	defer socket.Close()
 	transport := &quic.Transport{Conn: socket}
 	defer transport.Close()
-	conn, err := transport.Dial(ctx, &net.UDPAddr{IP: ip.IP, Port: port, Zone: ip.Zone}, tlsConfig, &quic.Config{
+	remoteAddr := &net.UDPAddr{IP: ip.IP, Port: port, Zone: ip.Zone}
+	quicConfig := &quic.Config{
 		InitialPacketSize: rpc.InitialPacketSize, HandshakeIdleTimeout: 2 * time.Second,
-	})
+	}
+	conn, err := transport.Dial(ctx, remoteAddr, tlsConfig, quicConfig)
+	if err != nil && c.CACert == "" && c.CACertFingerprint != "" {
+		var verification *tls.CertificateVerificationError
+		if !errors.As(err, &verification) {
+			return nil, err
+		}
+		// A failed handshake exposes the chain without disabling verification.
+		// Trust its root only after checking the cloud-provided fingerprint.
+		certs := verification.UnverifiedCertificates
+		root := certs[len(certs)-1]
+		sum := sha1.Sum(root.Raw)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), c.CACertFingerprint) {
+			return nil, fmt.Errorf("cluster CA fingerprint mismatch")
+		}
+		tlsConfig = tlsConfig.Clone()
+		tlsConfig.RootCAs = x509.NewCertPool()
+		tlsConfig.RootCAs.AddCert(root)
+		if c.TLSServerName == "" && certs[0].VerifyHostname(tlsConfig.ServerName) != nil && slices.Contains(certs[0].DNSNames, APIServerName) {
+			tlsConfig.ServerName = APIServerName
+		}
+		conn, err = transport.Dial(ctx, remoteAddr, tlsConfig, quicConfig)
+		if err == nil {
+			direct.CACert = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+			direct.TLSServerName = tlsConfig.ServerName
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

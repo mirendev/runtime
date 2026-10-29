@@ -80,9 +80,13 @@ func TestAddClusterFallbackPreservesAutomaticRouting(t *testing.T) {
 	withCloudRouteProbe(t, func(*Context, *clientconfig.Config, string, *clientconfig.IdentityConfig, *ClusterResponse) bool {
 		return true
 	})
-	added, err := addCluster(presenceContext(t), addClusterOptions{clusterName: "prod"})
+	ctx := presenceContext(t)
+	added, err := addCluster(ctx, addClusterOptions{clusterName: "prod"})
 	require.NoError(t, err)
-	require.False(t, added.ViaCloud, "a successful fallback is not a forced route")
+	require.True(t, added.ViaCloud, "cloud was used while adding")
+	require.False(t, added.ForceCloud, "a successful fallback is not a forced route")
+	require.Contains(t, ctx.Stdout.(*bytes.Buffer).String(), "direct when reachable, otherwise via cloud")
+	require.NotContains(t, ctx.Stdout.(*bytes.Buffer).String(), "needs no address here")
 	cfg, err := clientconfig.LoadConfig()
 	require.NoError(t, err)
 	cluster, err := cfg.GetCluster("prod")
@@ -90,6 +94,12 @@ func TestAddClusterFallbackPreservesAutomaticRouting(t *testing.T) {
 	require.False(t, cluster.ViaCloud)
 	require.Equal(t, addresses, cluster.AllAddresses)
 	require.Equal(t, "trusted-pin", cluster.CACertFingerprint)
+	listCtx := presenceContext(t)
+	require.NoError(t, ClusterList(listCtx, struct {
+		FormatOptions
+		ConfigCentric
+	}{}))
+	require.Contains(t, listCtx.Stdout.(*bytes.Buffer).String(), "direct when reachable, otherwise via cloud")
 }
 
 // A cluster nothing can dial and cloud cannot reach is a dead end. The picker
