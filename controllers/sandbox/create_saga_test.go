@@ -27,6 +27,7 @@ import (
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -537,6 +538,47 @@ func (h *testHarness) execution(t *testing.T) *saga.Execution {
 // =============================================================================
 // Tests
 // =============================================================================
+
+func TestCreateSandboxSaga_StartsIdleDelayAtReadiness(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	h := newTestHarness(t)
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-4 * time.Minute) }
+	// The activator can sync its tracking timestamp before boot finishes.
+	h.entities.sandbox.LastActivity = time.Now().Add(-3 * time.Minute)
+	id, err := server.Client.Create(ctx, "slow-boot", h.entities.sandbox)
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+
+	registry := saga.NewRegistry()
+	log := testutils.TestLogger(t)
+	store := &sandboxOps{ctrl: &SandboxController{EAC: server.EAC}}
+	require.NoError(t, registerCreateSandboxSaga(registry, store, h.networking, h.runtime, h.obs, "node/test-node", log))
+	executor := saga.NewExecutor(saga.NewMemoryStorage(), saga.WithRegistry(registry), saga.WithLogger(log))
+
+	before := time.Now()
+	require.NoError(t, executor.Start(sagaCreateSandbox).Input("sandbox_id", id.String()).WithID("boot").Execute(ctx))
+	after := time.Now()
+	resp, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var ready compute.Sandbox
+	ready.Decode(resp.Entity().Entity())
+	require.Equal(t, compute.RUNNING, ready.Status)
+	require.WithinRange(t, ready.LastActivity, before, after)
+	assert.True(t, resp.Entity().Entity().GetCreatedAt().Before(before.Add(-3*time.Minute)))
+
+	// Replaying startup must not extend the idle deadline or overwrite activity.
+	activity := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		entity.Time(compute.SandboxLastActivityId, activity)).Attrs(), 0)
+	require.NoError(t, err)
+	require.NoError(t, executor.Start(sagaCreateSandbox).Input("sandbox_id", id.String()).WithID("resume").Execute(ctx))
+	resp, err = server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	ready.Decode(resp.Entity().Entity())
+	assert.Equal(t, activity, ready.LastActivity)
+}
 
 func TestCreateSandboxSaga_HappyPath(t *testing.T) {
 	h := newTestHarness(t)

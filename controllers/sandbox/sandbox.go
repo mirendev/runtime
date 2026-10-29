@@ -1385,7 +1385,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 							"id", co.ID, "createdAt", createdAt, "age", age)
 						patchAttrs := entity.New(
 							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
+							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING, LastActivity: time.Now()}).Encode,
 						)
 						_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {
