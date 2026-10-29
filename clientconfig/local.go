@@ -105,13 +105,22 @@ func (c *ClusterConfig) RPCOptions(ctx context.Context, config *Config) ([]rpc.S
 
 // RPCOptionsWithName returns RPC options with cluster name for caching
 func (c *ClusterConfig) RPCOptionsWithName(ctx context.Context, config *Config, clusterName string) ([]rpc.StateOption, error) {
-	// A cloud-routed cluster settles the matter before anything below: the
-	// address probing, the cluster CA, and the direct-dial paths all reason
-	// about a cluster we can reach, which is exactly what this cluster is not.
 	if c.ViaCloud {
 		return c.viaCloudOptions(ctx, config)
 	}
+	if c.XID != "" && c.Identity != "" && c.IdentityTokenPath == "" {
+		identity, err := config.GetIdentity(c.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if (identity.Type == IdentityKeypair || identity.Type == IdentityToken) && (identity.Issuer != "" || c.CloudURL != "") {
+			return c.routedOptions(ctx, config)
+		}
+	}
+	return c.directRPCOptions(ctx, config, clusterName)
+}
 
+func (c *ClusterConfig) directRPCOptions(ctx context.Context, config *Config, clusterName string) ([]rpc.StateOption, error) {
 	// If AllAddresses is set, find a working address
 	hostname := c.Hostname
 	if len(c.AllAddresses) > 0 && clusterName != "" {
@@ -284,7 +293,8 @@ func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]
 	if c.Insecure {
 		opts = append(opts, rpc.WithSkipVerify)
 	}
-	if c.TLSServerName != "" {
+	// Automatic fallback must verify cloud's hostname, not the cluster's.
+	if c.ViaCloud && c.TLSServerName != "" {
 		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
 	}
 

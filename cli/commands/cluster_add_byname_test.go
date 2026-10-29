@@ -71,6 +71,27 @@ func TestAddClusterByNameRoutedThroughCloud(t *testing.T) {
 	r.Error(err, "the cloud name is not also written")
 }
 
+func TestAddClusterFallbackPreservesAutomaticRouting(t *testing.T) {
+	addresses := []string{"invalid::::"}
+	srv := fakeCloud(t, []ClusterResponse{
+		{Name: "prod", XID: "cluster-prod", APIAddresses: addresses, CACertFingerprint: "trusted-pin"},
+	}, nil)
+	configWithIdentity(t, srv.URL)
+	withCloudRouteProbe(t, func(*Context, *clientconfig.Config, string, *clientconfig.IdentityConfig, *ClusterResponse) bool {
+		return true
+	})
+	added, err := addCluster(presenceContext(t), addClusterOptions{clusterName: "prod"})
+	require.NoError(t, err)
+	require.False(t, added.ViaCloud, "a successful fallback is not a forced route")
+	cfg, err := clientconfig.LoadConfig()
+	require.NoError(t, err)
+	cluster, err := cfg.GetCluster("prod")
+	require.NoError(t, err)
+	require.False(t, cluster.ViaCloud)
+	require.Equal(t, addresses, cluster.AllAddresses)
+	require.Equal(t, "trusted-pin", cluster.CACertFingerprint)
+}
+
 // A cluster nothing can dial and cloud cannot reach is a dead end. The picker
 // greys it out; named, it has to be refused outright — falling through would
 // probe localhost and could pin whatever is listening there under a remote

@@ -59,15 +59,16 @@ type KeyConfig struct {
 
 // ClusterConfig holds the configuration for a single cluster
 type ClusterConfig struct {
-	Hostname     string   `yaml:"hostname"`
-	AllAddresses []string `yaml:"all_addresses,omitempty"` // All available addresses for this cluster
-	Identity     string   `yaml:"identity,omitempty"`      // Reference to an identity in the Identities section
-	XID          string   `yaml:"xid,omitempty"`           // Cloud cluster XID for permission checks
-	CACert       string   `yaml:"ca_cert,omitempty"`       // PEM encoded CA certificate
-	ClientCert   string   `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (deprecated, use identity)
-	ClientKey    string   `yaml:"client_key,omitempty"`    // PEM encoded client key (deprecated, use identity)
-	Insecure     bool     `yaml:"insecure,omitempty"`      // Skip TLS verification
-	CloudAuth    bool     `yaml:"cloud_auth,omitempty"`    // Use cloud authentication (deprecated, use identity)
+	Hostname          string   `yaml:"hostname"`
+	AllAddresses      []string `yaml:"all_addresses,omitempty"`       // All available addresses for this cluster
+	Identity          string   `yaml:"identity,omitempty"`            // Reference to an identity in the Identities section
+	XID               string   `yaml:"xid,omitempty"`                 // Cloud cluster XID for permission checks
+	CACert            string   `yaml:"ca_cert,omitempty"`             // PEM encoded CA certificate
+	CACertFingerprint string   `yaml:"ca_cert_fingerprint,omitempty"` // Cloud-advertised CA pin, for clusters added remotely
+	ClientCert        string   `yaml:"client_cert,omitempty"`         // PEM encoded client certificate (deprecated, use identity)
+	ClientKey         string   `yaml:"client_key,omitempty"`          // PEM encoded client key (deprecated, use identity)
+	Insecure          bool     `yaml:"insecure,omitempty"`            // Skip TLS verification
+	CloudAuth         bool     `yaml:"cloud_auth,omitempty"`          // Use cloud authentication (deprecated, use identity)
 
 	// IdentityTokenPath is a workload identity token file to authenticate with,
 	// re-read on each request because the sandbox controller refreshes it in
@@ -78,13 +79,8 @@ type ClusterConfig struct {
 	// against, for when the dial address cannot be a certificate SAN.
 	TLSServerName string `yaml:"tls_server_name,omitempty"`
 
-	// ViaCloud routes RPC through Miren Cloud rather than dialing the cluster,
-	// for a cluster this machine has no route to. It needs XID to name the
-	// cluster and an identity to authenticate as; Hostname is unused.
-	//
-	// Opting in is explicit rather than a fallback from a failed direct dial,
-	// so that every command's answer comes from a path you chose. A silent
-	// fallback would also make every command wait out a dial timeout first.
+	// ViaCloud forces RPC through Miren Cloud. Otherwise cloud-authenticated
+	// clusters try direct addresses first and fall back to the relay.
 	ViaCloud bool `yaml:"via_cloud,omitempty"`
 
 	// CloudURL overrides where the relay lives. Normally empty: the identity's
