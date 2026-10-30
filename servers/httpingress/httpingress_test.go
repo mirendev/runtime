@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -910,6 +913,183 @@ func (stubActivator) Invalidations() <-chan activator.SandboxInvalidation {
 	return make(chan activator.SandboxInvalidation)
 }
 func (stubActivator) SetPoolCreator(activator.PoolCreator) {}
+
+type bootingActivator struct {
+	stubActivator
+	ready    <-chan struct{}
+	url      string
+	started  atomic.Bool
+	overflow bool
+}
+
+func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.AppVersion, _ string) (*activator.Lease, error) {
+	if a.started.Swap(true) {
+		return nil, errors.New("boot already requested")
+	}
+	select {
+	case <-a.ready:
+		if a.err != nil {
+			return nil, a.err
+		}
+		size := 10
+		if a.overflow {
+			size = 1
+		}
+		return &activator.Lease{URL: a.url, Size: size, Overflow: a.overflow}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type versionedBootActivator struct {
+	stubActivator
+	versions map[entity.Id]*bootingActivator
+}
+
+func (a *versionedBootActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*activator.Lease, error) {
+	return a.versions[ver.ID].AcquireLease(ctx, ver, service)
+}
+
+func TestColdStartAfterVersionChange(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "new version ready")
+	}))
+	defer backend.Close()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("previous boot failed=%t", failed), func(t *testing.T) {
+			oldReady := make(chan struct{})
+			defer close(oldReady)
+			newReady := make(chan struct{})
+			close(newReady)
+			s := newTimeoutTestServer(5 * time.Second)
+			s.apps = make(map[string]*appUsage)
+			s.aa = &versionedBootActivator{versions: map[entity.Id]*bootingActivator{
+				"version/old": {ready: oldReady, stubActivator: stubActivator{err: activator.ErrSandboxDiedEarly}},
+				"version/new": {ready: newReady, url: backend.URL},
+			}}
+			name := "test"
+			request := func(version entity.Id) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+				r.Header.Set("Accept", "text/html")
+				w := httptest.NewRecorder()
+				target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}, version: core_v1alpha.AppVersion{ID: version}}
+				s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
+				return w
+			}
+			if failed {
+				s.aa.(*versionedBootActivator).versions["version/old"].ready = newReady
+				require.Equal(t, http.StatusRequestTimeout, request("version/old").Code)
+			} else {
+				require.Equal(t, http.StatusServiceUnavailable, request("version/old").Code)
+			}
+			w := request("version/new")
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, "new version ready", w.Body.String())
+		})
+	}
+}
+
+func TestColdStartLoading(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = fmt.Fprintf(w, "%s %s %s", r.Method, r.URL.RequestURI(), body)
+	}))
+	defer backend.Close()
+
+	for _, tc := range []struct {
+		name, method, accept, dest string
+		fast, loading, overflow    bool
+	}{
+		{name: "slow navigation", method: "GET", accept: "text/html", dest: "document", loading: true},
+		{name: "fast navigation", method: "GET", accept: "text/html", fast: true},
+		{name: "fast overflow navigation", method: "GET", accept: "text/html", fast: true, overflow: true},
+		{name: "slow overflow navigation", method: "GET", accept: "text/html", loading: true, overflow: true},
+		{name: "API", method: "GET", accept: "application/json"},
+		{name: "POST", method: "POST", accept: "text/html", dest: "document"},
+		{name: "fetch", method: "GET", accept: "text/html", dest: "empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ready := make(chan struct{})
+			s := newTimeoutTestServer(5 * time.Second)
+			s.apps = make(map[string]*appUsage)
+			s.aa = &bootingActivator{ready: ready, url: backend.URL, overflow: tc.overflow}
+			target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}}
+			appName := "test"
+			request := func() *http.Request {
+				r := httptest.NewRequest(tc.method, "http://app.example.com/orders?sort=desc", strings.NewReader("payload"))
+				r.Header.Set("Accept", tc.accept)
+				r.Header.Set("Sec-Fetch-Dest", tc.dest)
+				return r
+			}
+			if tc.fast {
+				close(ready)
+			} else {
+				delay := 2200 * time.Millisecond
+				if tc.loading {
+					delay = 3800 * time.Millisecond
+				}
+				timer := time.AfterFunc(delay, func() { close(ready) })
+				defer timer.Stop()
+			}
+			w := httptest.NewRecorder()
+			start := time.Now()
+			s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+			elapsed := time.Since(start)
+			if tc.loading {
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				require.GreaterOrEqual(t, elapsed, 1500*time.Millisecond)
+				require.Less(t, elapsed, 2200*time.Millisecond)
+				require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+				require.Equal(t, "2", w.Header().Get("Retry-After"))
+				require.Contains(t, w.Body.String(), "Loading…")
+				require.Contains(t, w.Body.String(), `<meta http-equiv="refresh" content="2">`)
+				// Retrying while still booting must join the existing acquisition.
+				// This activator rejects a second acquisition, exposing duplicates.
+				w = httptest.NewRecorder()
+				s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				require.Contains(t, w.Body.String(), "Loading…")
+				// A further retry is still pending when boot finishes and must
+				// proxy immediately, rather than waiting for another refresh.
+				w = httptest.NewRecorder()
+				s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+			}
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, tc.method+" /orders?sort=desc payload", w.Body.String())
+		})
+	}
+}
+
+func TestColdStartFailureAfterLoading(t *testing.T) {
+	ready := make(chan struct{})
+	defer func() {
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+	}()
+	s := newTimeoutTestServer(5 * time.Second)
+	s.apps = make(map[string]*appUsage)
+	s.aa = &bootingActivator{ready: ready, stubActivator: stubActivator{err: activator.ErrSandboxDiedEarly}}
+	target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}}
+	name := "test"
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+		r.Header.Set("Accept", "text/html")
+		w := httptest.NewRecorder()
+		s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
+		return w
+	}
+	require.Contains(t, request().Body.String(), "Loading…")
+	close(ready)
+	for range 2 {
+		w := request()
+		require.Equal(t, http.StatusRequestTimeout, w.Code)
+		require.Contains(t, w.Body.String(), "This app couldn&#39;t start.")
+		require.NotContains(t, w.Body.String(), "window.location.reload")
+	}
+}
 
 func TestDiskBackedPreviewIngressDenial(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
