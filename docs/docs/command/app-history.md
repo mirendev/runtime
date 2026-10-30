@@ -18,9 +18,11 @@ miren app history [flags]
 
 - `--all` — Show all deployments (ignore limit)
 - `--detailed` — Show all columns including git information
+- `--ephemeral` — Show only ephemeral app versions
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
 - `--limit, -n` — Maximum number of deployments to show (default: `10`)
+- `--versions` — Show app versions, including versions without a deployment
 
 ## Config Options
 

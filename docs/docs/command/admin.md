@@ -1,12 +1,12 @@
 ---
 title: "miren admin"
 sidebar_label: "admin"
-description: "Call an admin method on an application"
+description: "Alias for 'miren app admin run'"
 ---
 
 # miren admin
 
-Call an admin method on an application
+Alias for 'miren app admin run'
 
 The admin interface allows you to execute custom administrative functions in your running application—useful for user management, cache clearing, database operations, and other maintenance tasks.
 
@@ -15,7 +15,7 @@ The admin interface allows you to execute custom administrative functions in you
 Use the `--list` flag to discover what admin methods your application exposes:
 
 ```bash
-$ miren admin --list
+$ miren app admin run --list
 
 Admin methods for go-admin
 
@@ -38,17 +38,17 @@ Admin methods for go-admin
   ├ limit number
   └ offset number
 
-Usage: miren admin -a go-admin <method> [key=value ...]
+Usage: miren app admin run -a go-admin <method> [key=value ...]
 ```
 
 ## Parameter Validation
 
-By default, `miren admin` validates method names and parameters against the application's introspection data before making the call. This catches typos and missing required parameters early.
+By default, `miren app admin run` validates method names and parameters against the application's introspection data before making the call. This catches typos and missing required parameters early.
 
 To skip validation (e.g., if your app doesn't support introspection), use `--no-validate`:
 
 ```bash
-miren admin --no-validate some-method
+miren app admin run --no-validate some-method
 ```
 
 ## Output Formats
@@ -62,10 +62,10 @@ You can override this behavior:
 
 ```bash
 # Force JSON output for scripting
-miren admin --json get-stats | jq '.total_users'
+miren app admin run --json get-stats | jq '.total_users'
 
 # Force pretty output even when piping
-miren admin --pretty get-user user_id=123
+miren app admin run --pretty get-user user_id=123
 ```
 
 ## Error Handling
@@ -73,7 +73,7 @@ miren admin --pretty get-user user_id=123
 If the admin call fails, the command exits with a non-zero status and displays the error:
 
 ```bash
-$ miren admin get-user user_id=nonexistent
+$ miren app admin run get-user user_id=nonexistent
 admin call failed (code -32001): user not found
 ```
 
@@ -97,8 +97,10 @@ miren admin [method] [args...] [flags]
 
 ## Flags
 
+- `--format` — Output format (text, json) (default: `text`)
 - `--func-help` — Show help for a specific admin method
-- `--json, -j` — Output as highlighted JSON (default for non-TTY)
+- `--json` — Shorthand for --format json
+- `--legacyjson, -j` — Deprecated: use --json or --format json
 - `--list, -l` — List available admin methods
 - `--no-validate` — Skip method/parameter validation
 - `--params-file, -f` — Read params as JSON from file (use - for stdin)
@@ -125,23 +127,23 @@ miren admin [method] [args...] [flags]
 **List available admin methods:**
 
 ```bash
-miren admin --list -a myapp
+miren app admin run --list -a myapp
 ```
 
 **Call an admin method:**
 
 ```bash
-miren admin health -a myapp
+miren app admin run health -a myapp
 ```
 
 **Call a method with JSON output:**
 
 ```bash
-miren admin stats -a myapp --json
+miren app admin run stats -a myapp --json
 ```
 
 **Call a method with params from a file:**
 
 ```bash
-miren admin migrate -a myapp -f params.json
+miren app admin run migrate -a myapp -f params.json
 ```

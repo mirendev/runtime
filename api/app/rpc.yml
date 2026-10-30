@@ -34,6 +34,11 @@ types:
         index: 6
         optional: true
         doc: Present only for a labeled ephemeral version with a known expiry.
+      - name: short_id
+        type: string
+        index: 7
+        optional: true
+        doc: Short human-friendly ID; omitted by older servers.
 
   - type: LogTarget
     fields:

@@ -1,12 +1,12 @@
 ---
 title: "miren app runs cancel"
 sidebar_label: "app runs cancel"
-description: "End a run early"
+description: "Deprecated: use 'miren run cancel'"
 ---
 
 # miren app runs cancel
 
-End a run early
+Deprecated: use 'miren run cancel'
 
 ## Usage
 
@@ -39,7 +39,7 @@ miren app runs cancel <run> [flags]
 **Cancel a run:**
 
 ```bash
-miren app runs cancel run/myapp-reindex-4kq2np
+miren run cancel run/myapp-reindex-4kq2np
 ```
 
 ## See also

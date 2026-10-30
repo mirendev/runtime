@@ -88,6 +88,7 @@ func fetchAppVersionsLegacy(ctx *Context, name string, ephemeral bool, limit int
 		}
 		v := &app_v1alpha.AppVersionSummary{}
 		v.SetId(string(av.ID))
+		v.SetShortId(lr.Entity().ShortId())
 		v.SetVersion(av.Version)
 		v.SetStatus(status)
 		v.SetCreatedAt(standard.ToTimestamp(lr.Entity().GetCreatedAt()))
@@ -110,6 +111,7 @@ func fetchAppVersionsLegacy(ctx *Context, name string, ephemeral bool, limit int
 func printAppVersionsJSON(versions []*app_v1alpha.AppVersionSummary) error {
 	type versionJSON struct {
 		ID             string `json:"id"`
+		ShortID        string `json:"short_id,omitempty"`
 		Version        string `json:"version"`
 		Status         string `json:"status"`
 		CreatedAt      string `json:"created_at"`
@@ -122,6 +124,7 @@ func printAppVersionsJSON(versions []*app_v1alpha.AppVersionSummary) error {
 	for _, v := range versions {
 		item := versionJSON{
 			ID:        v.Id(),
+			ShortID:   v.ShortId(),
 			Version:   v.Version(),
 			Status:    v.Status(),
 			CreatedAt: standard.FromTimestamp(v.CreatedAt()).UTC().Format(time.RFC3339),
@@ -139,7 +142,7 @@ func printAppVersionsJSON(versions []*app_v1alpha.AppVersionSummary) error {
 }
 
 func printAllVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSummary) error {
-	headers := []string{"VERSION", "STATUS", "CREATED", "LABEL"}
+	headers := []string{"ID", "VERSION", "STATUS", "CREATED", "LABEL"}
 	var rows []ui.Row
 
 	for _, v := range versions {
@@ -154,6 +157,7 @@ func printAllVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSumma
 		}
 
 		rows = append(rows, ui.Row{
+			ui.DisplayShortID(v.ShortId(), v.Id()),
 			v.Version(),
 			v.Status(),
 			humanFriendlyTimestamp(standard.FromTimestamp(v.CreatedAt())),
@@ -176,7 +180,7 @@ func printAllVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSumma
 }
 
 func printEphemeralVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersionSummary) error {
-	headers := []string{"VERSION", "LABEL", "CREATED", "EXPIRES"}
+	headers := []string{"ID", "VERSION", "LABEL", "CREATED", "EXPIRES"}
 	var rows []ui.Row
 
 	for _, v := range versions {
@@ -186,6 +190,7 @@ func printEphemeralVersionsTable(ctx *Context, versions []*app_v1alpha.AppVersio
 		}
 
 		rows = append(rows, ui.Row{
+			ui.DisplayShortID(v.ShortId(), v.Id()),
 			v.Version(),
 			v.EphemeralLabel(),
 			humanFriendlyTimestamp(standard.FromTimestamp(v.CreatedAt())),

@@ -17,6 +17,7 @@ miren app status [flags]
 ## Flags
 
 - `--format` — Output format (text, json) (default: `text`)
+- `--graph, -g` — Include resource usage graphs
 - `--json` — Shorthand for --format json
 
 ## Config Options

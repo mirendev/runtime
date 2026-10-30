@@ -3,7 +3,7 @@ package commands
 import "fmt"
 
 func ClusterCurrent(ctx *Context, opts struct {
-	AppCentric
+	ConfigCentric
 }) error {
 	cc, name, err := opts.LoadCluster()
 	if err != nil {

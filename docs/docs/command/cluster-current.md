@@ -1,12 +1,12 @@
 ---
 title: "miren cluster current"
 sidebar_label: "cluster current"
-description: "Show the pinned cluster for this app"
+description: "Show the globally selected cluster"
 ---
 
 # miren cluster current
 
-Show the pinned cluster for this app
+Show the globally selected cluster
 
 ## Usage
 
@@ -14,15 +14,10 @@ Show the pinned cluster for this app
 miren cluster current [flags]
 ```
 
-## Config Options
+## Flags
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-
-## App Options
-
-- `--app, -a` — Application name
-- `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
 

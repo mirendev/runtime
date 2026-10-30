@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"miren.dev/runtime/appconfig"
@@ -17,6 +18,9 @@ type deployTargetAddOpts struct {
 }
 
 func DeployTargetAdd(ctx *Context, opts deployTargetAddOpts) error {
+	if opts.Default {
+		fmt.Fprintln(os.Stderr, "Warning: target --default is deprecated and will be removed next release; target order no longer selects a cluster. Use -C or MIREN_CLUSTER.")
+	}
 	name := opts.Name
 	if name == "" {
 		if !ui.IsInteractive() {
@@ -62,7 +66,7 @@ func DeployTargetAdd(ctx *Context, opts deployTargetAddOpts) error {
 	}
 	ctx.Printf("\n")
 	if len(dc.Targets) == 1 || opts.Default {
-		ctx.Printf("Default deploy target: %s\n", name)
+		ctx.Printf("Legacy default deploy target (order only): %s\n", name)
 	}
 	return nil
 }
@@ -161,10 +165,11 @@ func DeployTargetList(ctx *Context, opts deployTargetProjectOpts) error {
 		rows[i] = ui.Row{target.Name, target.Cluster, clusterID, isDefault}
 	}
 	table := ui.NewTable(
-		ui.WithColumns(ui.AutoSizeColumns([]string{"TARGET", "CLUSTER", "CLOUD ID", "DEFAULT"}, rows, nil)),
+		ui.WithColumns(ui.AutoSizeColumns([]string{"TARGET", "CLUSTER", "CLOUD ID", "LEGACY DEFAULT"}, rows, nil)),
 		ui.WithRows(rows),
 	)
 	ctx.Printf("%s\n", table.Render())
+	ctx.Printf("Legacy default records target order only; select a target with -C or MIREN_CLUSTER.\n")
 	return nil
 }
 
@@ -197,6 +202,7 @@ func DeployTargetRemove(ctx *Context, opts deployTargetNameOpts) error {
 }
 
 func DeployTargetSetDefault(ctx *Context, opts deployTargetNameOpts) error {
+	fmt.Fprintln(os.Stderr, "Warning: deploy target set-default is deprecated and will be removed next release; target order no longer selects a cluster. Use -C or MIREN_CLUSTER.")
 	dc, err := appconfig.LoadDeployConfigUnder(opts.ResolvedDir())
 	if err != nil {
 		return fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
@@ -210,6 +216,6 @@ func DeployTargetSetDefault(ctx *Context, opts deployTargetNameOpts) error {
 	if err := appconfig.SaveDeployConfigUnder(opts.ResolvedDir(), dc); err != nil {
 		return fmt.Errorf("error saving %s: %w", appconfig.DeployConfigPath, err)
 	}
-	ctx.Printf("Default deploy target: %s\n", opts.Name)
+	ctx.Printf("Legacy default deploy target (order only): %s\n", opts.Name)
 	return nil
 }

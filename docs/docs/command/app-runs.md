@@ -1,12 +1,12 @@
 ---
 title: "miren app runs"
 sidebar_label: "app runs"
-description: "List recent task runs"
+description: "Deprecated: use 'miren run list'"
 ---
 
 # miren app runs
 
-List recent task runs
+Deprecated: use 'miren run list'
 
 ## Usage
 
@@ -42,18 +42,18 @@ miren app runs [flags]
 **Show recent runs:**
 
 ```bash
-miren app runs
+miren run list
 ```
 
 **Show runs of one task as JSON:**
 
 ```bash
-miren app runs --task migrate --format json
+miren run list --task migrate --format json
 ```
 
 ## Subcommands
 
-- [`miren app runs cancel`](./app-runs-cancel.md) — End a run early
+- [`miren app runs cancel`](./app-runs-cancel.md) — Deprecated: use 'miren run cancel'
 
 ## See also
 

@@ -26,23 +26,27 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
 	}
 	type deploymentJSON struct {
-		ID           string          `json:"id"`
-		Status       string          `json:"status"`
-		AppVersionID string          `json:"app_version_id,omitempty"`
-		DeployedAt   string          `json:"deployed_at,omitempty"`
-		DeployedBy   *deployedByJSON `json:"deployed_by,omitempty"`
-		Phase        string          `json:"phase,omitempty"`
-		ErrorMessage string          `json:"error_message,omitempty"`
-		Message      string          `json:"message,omitempty"`
-		GitInfo      *gitInfoJSON    `json:"git_info,omitempty"`
+		ID                string          `json:"id"`
+		ShortID           string          `json:"short_id,omitempty"`
+		Status            string          `json:"status"`
+		AppVersionID      string          `json:"app_version_id,omitempty"`
+		AppVersionShortID string          `json:"app_version_short_id,omitempty"`
+		DeployedAt        string          `json:"deployed_at,omitempty"`
+		DeployedBy        *deployedByJSON `json:"deployed_by,omitempty"`
+		Phase             string          `json:"phase,omitempty"`
+		ErrorMessage      string          `json:"error_message,omitempty"`
+		Message           string          `json:"message,omitempty"`
+		GitInfo           *gitInfoJSON    `json:"git_info,omitempty"`
 	}
 
 	var deps []deploymentJSON
 	for _, dep := range deployments {
 		d := deploymentJSON{
-			ID:           dep.Id(),
-			Status:       dep.Status(),
-			AppVersionID: dep.AppVersionId(),
+			ID:                dep.Id(),
+			ShortID:           dep.ShortId(),
+			Status:            dep.Status(),
+			AppVersionID:      dep.AppVersionId(),
+			AppVersionShortID: dep.AppVersionShortId(),
 		}
 
 		d.DeployedBy = deployedByOf(dep)
@@ -137,10 +141,30 @@ func AppHistory(ctx *Context, opts struct {
 	AppCentric
 	FormatOptions
 
-	Limit    int  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
-	All      bool `long:"all" description:"Show all deployments (ignore limit)"`
-	Detailed bool `long:"detailed" description:"Show all columns including git information"`
+	Limit     int  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
+	All       bool `long:"all" description:"Show all deployments (ignore limit)"`
+	Detailed  bool `long:"detailed" description:"Show all columns including git information"`
+	Versions  bool `long:"versions" description:"Show app versions, including versions without a deployment"`
+	Ephemeral bool `long:"ephemeral" description:"Show only ephemeral app versions"`
 }) error {
+	if opts.Versions || opts.Ephemeral {
+		limit := opts.Limit
+		if opts.All {
+			limit = 0
+		}
+		versions, err := fetchAppVersions(ctx, opts.App, opts.Ephemeral, limit)
+		if err != nil {
+			return err
+		}
+		if opts.IsJSON() {
+			return printAppVersionsJSON(versions)
+		}
+		if opts.Ephemeral {
+			return printEphemeralVersionsTable(ctx, versions)
+		}
+		return printAllVersionsTable(ctx, versions)
+	}
+
 	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")
 	if err != nil {
 		return fmt.Errorf("failed to connect to deployment service: %w", err)
@@ -237,7 +261,7 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "MESSAGE")
+		headers = append(headers, "WHEN", "ID", "GIT SHA", "BRANCH", "MESSAGE")
 		builder = ui.Columns().
 			NoTruncate(0).
 			MaxWidth(len(headers)-1, 40)
@@ -280,7 +304,7 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage, message)
 	} else {
 		gitSha, gitBranch, _ := formatGitInfo(dep)
-		row = append(row, gitSha, gitBranch, message)
+		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), gitSha, gitBranch, message)
 	}
 
 	return row

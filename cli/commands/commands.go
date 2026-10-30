@@ -21,35 +21,26 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren version --server",
 		}),
 	))
-	d.Dispatch("login", Infer("login", "Authenticate with miren.cloud", Login,
-		WithGroup(GroupClient),
-		WithExample(mflags.Example{
-			Name: "Login",
-			Body: "miren login",
-		}),
-		WithExample(mflags.Example{
-			Name: "Login to a specific cloud instance",
-			Body: "miren login --url https://cloud.example.com",
-		}),
-	))
-	d.Dispatch("logout", Infer("logout", "Remove local authentication credentials", Logout,
-		WithGroup(GroupClient),
-		WithExample(mflags.Example{
-			Name: "Logout",
-			Body: "miren logout",
-		}),
-	))
-	d.Dispatch("whoami", Infer("whoami", "Display information about the current authenticated user", Whoami,
-		WithGroup(GroupClient),
-		WithExample(mflags.Example{
-			Name: "Show current user",
-			Body: "miren whoami",
-		}),
-		WithExample(mflags.Example{
-			Name: "JSON output",
-			Body: "miren whoami --json",
-		}),
-	))
+	d.Dispatch("cloud", Section("cloud", "Miren Cloud authentication", "", WithSectionGroup(GroupClient)))
+	login := Infer("cloud login", "Authenticate with miren.cloud", Login,
+		WithLocalOnly(),
+		WithExample(mflags.Example{Name: "Login", Body: "miren cloud login"}),
+		WithExample(mflags.Example{Name: "Login to a specific cloud instance", Body: "miren cloud login --url https://cloud.example.com"}),
+	)
+	d.Dispatch("cloud login", login)
+	d.Dispatch("login", login.Alias("login", WithGroup(GroupClient)))
+	logout := Infer("cloud logout", "Remove local authentication credentials", Logout,
+		WithLocalOnly(),
+		WithExample(mflags.Example{Name: "Logout", Body: "miren cloud logout"}),
+	)
+	d.Dispatch("cloud logout", logout)
+	d.Dispatch("logout", logout.Alias("logout", WithGroup(GroupClient)))
+	whoami := Infer("cloud whoami", "Display information about the current authenticated user", Whoami,
+		WithExample(mflags.Example{Name: "Show current user", Body: "miren cloud whoami"}),
+		WithExample(mflags.Example{Name: "JSON output", Body: "miren cloud whoami --json"}),
+	)
+	d.Dispatch("cloud whoami", whoami)
+	d.Dispatch("whoami", whoami.Alias("whoami", WithGroup(GroupClient)))
 	d.Dispatch("detective", Infer("detective", "Debug with Workbench and read-only local source tools", Detective,
 		WithGroup(GroupClient),
 		WithDescription(workbenchDescription),
@@ -68,93 +59,79 @@ func RegisterAll(d *mflags.Dispatcher) {
 	))
 
 	// App lifecycle commands
-	d.Dispatch("init", Infer("init", "Initialize a new application", Init,
-		WithGroup(GroupGettingStarted),
-		WithExample(mflags.Example{
-			Name: "Initialize in current directory",
-			Body: "miren init",
-		}),
-		WithExample(mflags.Example{
-			Name: "Initialize with a specific name",
-			Body: "miren init --name myapp",
-		}),
-	))
-	d.Dispatch("deploy", Infer("deploy", "Deploy an application", Deploy,
-		WithGroup(GroupGettingStarted),
+	initApp := Infer("app init", "Initialize a new application", Init,
+		WithExample(mflags.Example{Name: "Initialize in current directory", Body: "miren app init"}),
+		WithExample(mflags.Example{Name: "Initialize with a specific name", Body: "miren app init --name myapp"}),
+	)
+	d.Dispatch("app init", initApp)
+	d.Dispatch("init", initApp.Alias("init", WithGroup(GroupGettingStarted)))
+	d.Dispatch("deployment", Section("deployment", "Manage deployments", "", WithSectionGroup(GroupGettingStarted)))
+	deploy := Infer("deployment create", "Deploy an application", Deploy,
 		WithDescription(deployDescription),
-		WithExample(mflags.Example{
-			Name: "Basic",
-			Body: "miren deploy",
-		}),
+		WithExample(mflags.Example{Name: "Basic", Body: "miren deployment create"}),
 		WithExample(mflags.Example{
 			Name: "Analyze",
 			Body: `Before deploying, the system can tell you how it's going
 to treat your application by running:
 
-miren deploy --analyze
+miren deployment create --analyze
 `,
 		}),
-		WithExample(mflags.Example{
-			Name: "Set environment variables during deploy",
-			Body: "miren deploy -e DATABASE_URL=postgres://localhost/mydb",
-		}),
-		WithExample(mflags.Example{
-			Name: "Deploy an existing version",
-			Body: "miren deploy --version v3",
-		}),
+		WithExample(mflags.Example{Name: "Set environment variables during deploy", Body: "miren deployment create -e DATABASE_URL=postgres://localhost/mydb"}),
+		WithExample(mflags.Example{Name: "Deploy an existing version", Body: "miren deployment create --version v3"}),
 		WithExample(mflags.Example{
 			Name: "Deploy from a script or CI",
 			Body: `Progress goes to stderr; stdout carries one JSON document
 with the status, version, and URLs:
 
-miren deploy --format json | jq -r .app_version
+miren deployment create --format json | jq -r .app_version
 `,
 		}),
 		WithExample(mflags.Example{
 			Name: "Follow a deploy as a stream of events",
 			Body: `One JSON object per line on stdout, nothing on stderr:
 
-miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
+miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 `,
 		}),
-	))
-	d.Dispatch("deploy cancel", Infer("deploy cancel", "Cancel an in-progress deployment", DeployCancel,
-		WithExample(mflags.Example{
-			Name: "Cancel the current deployment",
-			Body: "miren deploy cancel",
-		}),
-		WithExample(mflags.Example{
-			Name: "Cancel a specific deployment",
-			Body: "miren deploy cancel -d dep_abc123",
-		}),
-	))
-	d.Dispatch("deploy target", Infer("deploy target", "List deployment targets", DeployTargetList,
-		WithExample(mflags.Example{Name: "List deployment targets", Body: "miren deploy target"}),
-	))
-	d.Dispatch("deploy target list", Infer("deploy target list", "List deployment targets", DeployTargetList))
-	d.Dispatch("deploy target add", Infer("deploy target add", "Add a deployment target", DeployTargetAdd,
-		WithExample(mflags.Example{Name: "Select a configured cluster interactively", Body: "miren deploy target add staging"}),
-		WithExample(mflags.Example{Name: "Add a target non-interactively", Body: "miren deploy target add prod my-prod-cluster"}),
-		WithExample(mflags.Example{Name: "Add the default target", Body: "miren deploy target add staging my-staging-cluster --default"}),
-	))
-	d.Dispatch("deploy target remove", Infer("deploy target remove", "Remove a deployment target", DeployTargetRemove,
-		WithExample(mflags.Example{Name: "Remove a target", Body: "miren deploy target remove staging"}),
-	))
+	)
+	d.Dispatch("deployment create", deploy)
+	d.Dispatch("deploy", deploy.Alias("deploy", WithGroup(GroupGettingStarted)))
+	deployCancel := Infer("deployment cancel", "Cancel an in-progress deployment", DeployCancel,
+		WithExample(mflags.Example{Name: "Cancel a specific deployment", Body: "miren deployment cancel dep_abc123"}),
+	)
+	d.Dispatch("deployment cancel", deployCancel)
+	d.Dispatch("deploy cancel", deployCancel.DeprecatedAlias("deploy cancel"))
+	d.Dispatch("target", Section("target", "Manage deployment targets", "", WithSectionGroup(GroupConfiguring)))
+	targetList := Infer("target list", "List deployment targets", DeployTargetList, WithLocalOnly())
+	d.Dispatch("target list", targetList)
+	d.Dispatch("deploy target", targetList.DeprecatedAlias("deploy target"))
+	d.Dispatch("deploy target list", targetList.DeprecatedAlias("deploy target list"))
+	targetAdd := Infer("target add", "Add a deployment target", DeployTargetAdd,
+		WithLocalOnly(),
+		WithExample(mflags.Example{Name: "Select a configured cluster interactively", Body: "miren target add staging"}),
+		WithExample(mflags.Example{Name: "Add a target non-interactively", Body: "miren target add prod my-prod-cluster"}),
+		WithExample(mflags.Example{Name: "Add the default target", Body: "miren target add staging my-staging-cluster --default"}),
+	)
+	d.Dispatch("target add", targetAdd)
+	d.Dispatch("deploy target add", targetAdd.DeprecatedAlias("deploy target add"))
+	targetRemove := Infer("target remove", "Remove a deployment target", DeployTargetRemove,
+		WithLocalOnly(),
+		WithExample(mflags.Example{Name: "Remove a target", Body: "miren target remove staging"}),
+	)
+	d.Dispatch("target remove", targetRemove)
+	d.Dispatch("deploy target remove", targetRemove.DeprecatedAlias("deploy target remove"))
 	d.Dispatch("deploy target set-default", Infer("deploy target set-default", "Set the default deployment target", DeployTargetSetDefault,
+		WithLocalOnly(),
 		WithExample(mflags.Example{Name: "Make production the default", Body: "miren deploy target set-default prod"}),
 	))
-	d.Dispatch("rollback", Infer("rollback", "Roll back to a previous version", Rollback,
-		WithGroup(GroupGettingStarted),
+	rollback := Infer("app rollback", "Roll back to a previous version", Rollback,
 		WithDescription(rollbackDescription),
-		WithExample(mflags.Example{
-			Name: "Rollback the app in the current directory",
-			Body: "miren rollback",
-		}),
-		WithExample(mflags.Example{
-			Name: "Rollback a specific app",
-			Body: "miren rollback -a myapp",
-		}),
-	))
+		WithExample(mflags.Example{Name: "Rollback the app in the current directory", Body: "miren app rollback"}),
+		WithExample(mflags.Example{Name: "Rollback a specific app", Body: "miren app rollback -a myapp"}),
+	)
+	d.Dispatch("app rollback", rollback)
+	d.Dispatch("rollback", rollback.Alias("rollback", WithGroup(GroupGettingStarted)))
 	d.Dispatch("logs", Infer("logs", "View logs (defaults to app logs)", LogsApp,
 		WithGroup(GroupMonitoring),
 		WithDescription(logsDescription),
@@ -248,7 +225,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren app --watch",
 		}),
 	))
-	d.Dispatch("app list", Infer("app list", "List all applications", AppList,
+	appList := Infer("app list", "List all applications", AppList,
 		WithExample(mflags.Example{
 			Name: "List all apps",
 			Body: "miren app list",
@@ -257,7 +234,9 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Name: "List apps as JSON",
 			Body: "miren app list --format json",
 		}),
-	))
+	)
+	d.Dispatch("app list", appList)
+	d.Dispatch("apps", appList.DeprecatedAlias("apps", WithGroup(GroupMonitoring)))
 	d.Dispatch("app status", Infer("app status", "Show current status of an application", AppStatus,
 		WithExample(mflags.Example{
 			Name: "Show status for the current app",
@@ -267,6 +246,12 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Name: "Show status for a specific app",
 			Body: "miren app status -a myapp",
 		}),
+	))
+	d.Dispatch("app watch", Infer("app watch", "Watch application health and resource usage", AppWatch))
+	d.Dispatch("app top", Infer("app top", "Show resource usage for an application", AppTop, WithDescription(topDescription)))
+	d.Dispatch("app pool-size", Infer("app pool-size", "Show or set a service's active sandbox pool size", AppPoolSize,
+		WithDescription("Changes the active pool's desired size without rebuilding or deploying. For autoscaled services this is temporary: the autoscaler may change it again. Set fixed concurrency in app.toml and deploy for a persistent size."),
+		WithExample(mflags.Example{Name: "Keep three web instances ready", Body: "miren app pool-size 3"}),
 	))
 	d.Dispatch("app history", Infer("app history", "Show deployment history for an application", AppHistory,
 		WithExample(mflags.Example{
@@ -278,7 +263,8 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren app history --detailed",
 		}),
 	))
-	d.Dispatch("app versions", Infer("app versions", "List app versions with status", AppVersions,
+	d.Dispatch("app versions", Infer("app versions", "Deprecated: use 'miren app history --versions'", AppVersions,
+		WithDeprecated("app history --versions"),
 		WithExample(mflags.Example{
 			Name: "List all versions",
 			Body: "miren app versions",
@@ -312,11 +298,11 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	d.Dispatch("app delete", Infer("app delete", "Delete an application and all its resources", AppDelete,
 		WithExample(mflags.Example{
 			Name: "Delete an app (with confirmation prompt)",
-			Body: "miren app delete myapp",
+			Body: "miren app delete -a myapp",
 		}),
 		WithExample(mflags.Example{
 			Name: "Delete without confirmation",
-			Body: "miren app delete myapp --force",
+			Body: "miren app delete -a myapp --yes",
 		}),
 	))
 	d.Dispatch("app run", Infer("app run", "Open interactive shell in a new sandbox", AppRun,
@@ -342,77 +328,40 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren app run --task reindex --detach",
 		}),
 	))
-	d.Dispatch("app runs", Infer("app runs", "List recent task runs", AppRuns,
-		WithGroup(GroupMonitoring),
-		WithExample(mflags.Example{
-			Name: "Show recent runs",
-			Body: "miren app runs",
-		}),
-		WithExample(mflags.Example{
-			Name: "Show runs of one task as JSON",
-			Body: "miren app runs --task migrate --format json",
-		}),
-	))
-	d.Dispatch("app runs cancel", Infer("app runs cancel", "End a run early", AppRunsCancel,
-		WithExample(mflags.Example{
-			Name: "Cancel a run",
-			Body: "miren app runs cancel run/myapp-reindex-4kq2np",
-		}),
-	))
-	d.Dispatch("app attach", Infer("app attach", "Attach to a running task", AppAttach,
+	d.Dispatch("run", Section("run", "Manage application task runs", "", WithSectionGroup(GroupMonitoring)))
+	runList := Infer("run list", "List recent task runs", AppRuns,
+		WithExample(mflags.Example{Name: "Show recent runs", Body: "miren run list"}),
+		WithExample(mflags.Example{Name: "Show runs of one task as JSON", Body: "miren run list --task migrate --format json"}),
+	)
+	d.Dispatch("run list", runList)
+	d.Dispatch("app runs", runList.DeprecatedAlias("app runs", WithGroup(GroupMonitoring)))
+	runCancel := Infer("run cancel", "End a run early", AppRunsCancel,
+		WithExample(mflags.Example{Name: "Cancel a run", Body: "miren run cancel run/myapp-reindex-4kq2np"}),
+	)
+	d.Dispatch("run cancel", runCancel)
+	d.Dispatch("app runs cancel", runCancel.DeprecatedAlias("app runs cancel"))
+	runAttach := Infer("run attach", "Attach to a running task", AppAttach,
 		WithDescription(appAttachDescription),
-		WithExample(mflags.Example{
-			Name: "Rejoin a run's terminal",
-			Body: "miren app attach run/myapp-session-4kq2np",
-		}),
-	))
-	d.Dispatch("apps", Infer("apps", "List all applications (alias for 'app list')", AppList,
-		WithGroup(GroupMonitoring),
-		WithExample(mflags.Example{
-			Name: "List all apps",
-			Body: "miren apps",
-		}),
-	))
-
-	d.Dispatch("top", Infer("top", "Show cluster-wide resource usage", Top,
-		WithGroup(GroupMonitoring),
-		WithDescription(topDescription),
-		WithExample(mflags.Example{
-			Name: "What is using the cluster's CPU",
-			Body: "miren top",
-		}),
-		WithExample(mflags.Example{
-			Name: "Which host is hot, and whether an app is to blame",
-			Body: "miren top --nodes",
-		}),
-		WithExample(mflags.Example{
-			Name: "Per-app totals, including each app's dedicated addons",
-			Body: "miren top --apps",
-		}),
-		WithExample(mflags.Example{
-			Name: "One app's usage",
-			Body: "miren top --apps --app myapp",
-		}),
-		WithExample(mflags.Example{
-			Name: "Narrow to one runner",
-			Body: "miren top --runner miren-garden-runner-1",
-		}),
-		WithExample(mflags.Example{
-			Name: "Find a spike that has already passed",
-			Body: "miren top --since 1h --aggregate max",
-		}),
-		WithExample(mflags.Example{
-			Name: "Watch continuously",
-			Body: "miren top --watch",
-		}),
-		WithExample(mflags.Example{
-			Name: "Machine-readable output",
-			Body: "miren top --format json",
-		}),
-	))
+		WithExample(mflags.Example{Name: "Rejoin a run's terminal", Body: "miren run attach run/myapp-session-4kq2np"}),
+	)
+	d.Dispatch("run attach", runAttach)
+	d.Dispatch("app attach", runAttach.DeprecatedAlias("app attach"))
 
 	// Sandbox commands
 	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription), WithSectionGroup(GroupMonitoring)))
+	top := Infer("sandbox top", "Show cluster-wide resource usage", Top,
+		WithDescription(topDescription),
+		WithExample(mflags.Example{Name: "What is using the cluster's CPU", Body: "miren sandbox top"}),
+		WithExample(mflags.Example{Name: "Which host is hot, and whether an app is to blame", Body: "miren sandbox top --nodes"}),
+		WithExample(mflags.Example{Name: "Per-app totals, including each app's dedicated addons", Body: "miren sandbox top --apps"}),
+		WithExample(mflags.Example{Name: "One app's usage", Body: "miren sandbox top --apps --app myapp"}),
+		WithExample(mflags.Example{Name: "Narrow to one runner", Body: "miren sandbox top --runner miren-garden-runner-1"}),
+		WithExample(mflags.Example{Name: "Find a spike that has already passed", Body: "miren sandbox top --since 1h --aggregate max"}),
+		WithExample(mflags.Example{Name: "Watch continuously", Body: "miren sandbox top --watch"}),
+		WithExample(mflags.Example{Name: "Machine-readable output", Body: "miren sandbox top --format json"}),
+	)
+	d.Dispatch("sandbox top", top)
+	d.Dispatch("top", top.Alias("top", WithGroup(GroupMonitoring)))
 	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList,
 		WithDescription(sandboxListDescription),
 		WithExample(mflags.Example{
@@ -448,8 +397,8 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren sandbox delete sb_abc123",
 		}),
 		WithExample(mflags.Example{
-			Name: "Force delete without confirmation",
-			Body: "miren sandbox delete sb_abc123 --force",
+			Name: "Delete without confirmation",
+			Body: "miren sandbox delete sb_abc123 --yes",
 		}),
 	))
 	d.Dispatch("sandbox inspect", Infer("sandbox inspect", "Show one sandbox's resource usage and failure history", SandboxInspect,
@@ -488,18 +437,6 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 
 	// Sandbox pool commands
 	d.Dispatch("sandbox-pool", Section("sandbox-pool", "Sandbox pool management commands", "", WithSectionGroup(GroupMonitoring)))
-	d.Dispatch("sandbox-pool list", Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList,
-		WithExample(mflags.Example{
-			Name: "List all pools",
-			Body: "miren sandbox-pool list",
-		}),
-	))
-	d.Dispatch("sandbox-pool set-desired", Infer("sandbox-pool set-desired", "Set desired instance count for a sandbox pool", SandboxPoolSetDesired,
-		WithExample(mflags.Example{
-			Name: "Scale a pool to 3 instances",
-			Body: "miren sandbox-pool set-desired web 3",
-		}),
-	))
 
 	// Environment variable commands
 	d.Dispatch("env", Section("env", "Environment variable management commands", "", WithSectionGroup(GroupConfiguring)))
@@ -604,13 +541,12 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren secret enable payments/stripe-key@x1A",
 		}),
 	))
-	d.Dispatch("secret destroy", Infer("secret destroy", "Permanently delete a version's value", SecretDestroy,
+	secretDelete := Infer("secret delete", "Permanently delete a version's value", SecretDestroy,
 		WithDescription(secretDestroyDescription),
-		WithExample(mflags.Example{
-			Name: "Destroy a version's value for good",
-			Body: "miren secret destroy payments/stripe-key@x1A",
-		}),
-	))
+		WithExample(mflags.Example{Name: "Destroy a version's value for good", Body: "miren secret delete payments/stripe-key@x1A"}),
+	)
+	d.Dispatch("secret delete", secretDelete)
+	d.Dispatch("secret destroy", secretDelete.DeprecatedAlias("secret destroy"))
 
 	d.Dispatch("secret keyring", Infer("secret keyring", "Show the cluster keyring and any rotation in flight", SecretKeyring,
 		WithDescription(secretKeyringDescription),
@@ -658,17 +594,13 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren addon list",
 		}),
 	))
-	d.Dispatch("addon destroy", Infer("addon destroy", "Remove an addon from an application", AddonDestroy,
+	addonDelete := Infer("addon delete", "Remove an addon from an application", AddonDestroy,
 		WithDescription(addonDestroyDescription),
-		WithExample(mflags.Example{
-			Name: "Remove an addon",
-			Body: "miren addon destroy miren-postgresql",
-		}),
-		WithExample(mflags.Example{
-			Name: "Remove without confirmation",
-			Body: "miren addon destroy miren-postgresql --force",
-		}),
-	))
+		WithExample(mflags.Example{Name: "Remove an addon", Body: "miren addon delete miren-postgresql"}),
+		WithExample(mflags.Example{Name: "Remove without confirmation", Body: "miren addon delete miren-postgresql --yes"}),
+	)
+	d.Dispatch("addon delete", addonDelete)
+	d.Dispatch("addon destroy", addonDelete.DeprecatedAlias("addon destroy"))
 	d.Dispatch("addon rotate", Infer("addon rotate", "Rotate an addon's backing credential", AddonRotate,
 		WithDescription(addonRotateDescription),
 		WithExample(mflags.Example{
@@ -682,13 +614,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	))
 
 	// Route commands
-	d.Dispatch("route", Infer("route", "List all HTTP routes", Route,
-		WithGroup(GroupConfiguring),
-		WithExample(mflags.Example{
-			Name: "List all routes",
-			Body: "miren route",
-		}),
-	))
+	d.Dispatch("route", Section("route", "Manage HTTP routes", "", WithSectionGroup(GroupConfiguring)))
 	d.Dispatch("route list", Infer("route list", "List all HTTP routes", RouteList,
 		WithExample(mflags.Example{
 			Name: "List all routes",
@@ -702,15 +628,14 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	d.Dispatch("route set", Infer("route set", "Create or update an HTTP route", RouteSet,
 		WithExample(mflags.Example{
 			Name: "Route a domain to an app",
-			Body: "miren route set example.com myapp",
+			Body: "miren route set example.com -a myapp",
 		}),
 	))
-	d.Dispatch("route remove", Infer("route remove", "Remove an HTTP route", RouteRemove,
-		WithExample(mflags.Example{
-			Name: "Remove a route",
-			Body: "miren route remove example.com",
-		}),
-	))
+	routeDelete := Infer("route delete", "Remove an HTTP route", RouteRemove,
+		WithExample(mflags.Example{Name: "Remove a route", Body: "miren route delete example.com"}),
+	)
+	d.Dispatch("route delete", routeDelete)
+	d.Dispatch("route remove", routeDelete.DeprecatedAlias("route remove"))
 	d.Dispatch("route show", Infer("route show", "Show details of an HTTP route", RouteShow,
 		WithExample(mflags.Example{
 			Name: "Show route details",
@@ -834,12 +759,14 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "Show config info",
 			Body: "miren config info",
 		}),
 	))
 	d.Dispatch("config load", Infer("config load", "Load config and merge it with your current config", ConfigLoad,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "Load a config file",
 			Body: "miren config load --input cluster-config.yaml",
@@ -851,14 +778,9 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	))
 
 	// Cluster commands
-	d.Dispatch("cluster", Infer("cluster", "List configured clusters", Cluster,
-		WithGroup(GroupClient),
-		WithExample(mflags.Example{
-			Name: "List clusters",
-			Body: "miren cluster",
-		}),
-	))
+	d.Dispatch("cluster", Section("cluster", "Manage configured clusters", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("cluster list", Infer("cluster list", "List all configured clusters", ClusterList,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "List all clusters",
 			Body: "miren cluster list",
@@ -869,6 +791,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("cluster switch", Infer("cluster switch", "Switch to a different cluster", ClusterSwitch,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "Switch to a cluster",
 			Body: "miren cluster switch production",
@@ -880,7 +803,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren cluster restart -C production",
 		}),
 	))
-	d.Dispatch("cluster upgrade", Infer("cluster upgrade", "Upgrade the active cluster's server and wait for it to report ready", ClusterUpgrade,
+	d.Dispatch("cluster upgrade", Infer("cluster upgrade", "A remote cluster: upgrade its server and wait for it to report ready", ClusterUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade a named cluster to the latest release",
 			Body: "miren cluster upgrade -C production",
@@ -891,6 +814,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("cluster available", Infer("cluster available", "List the clusters Miren Cloud has for your account", ClusterAvailable,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "List clusters you could add",
 			Body: "miren cluster available",
@@ -905,6 +829,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("cluster add", Infer("cluster add", "Add a new cluster configuration", ClusterAdd,
+		WithLocalOnly(),
 		WithDescription(clusterAddJSONDoc),
 		WithExample(mflags.Example{
 			Name: "Add a cluster interactively",
@@ -928,12 +853,14 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("cluster remove", Infer("cluster remove", "Remove a cluster from the configuration", ClusterRemove,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "Remove a cluster",
 			Body: "miren cluster remove my-cluster",
 		}),
 	))
-	d.Dispatch("cluster current", Infer("cluster current", "Show the pinned cluster for this app", ClusterCurrent,
+	d.Dispatch("cluster current", Infer("cluster current", "Show the globally selected cluster", ClusterCurrent,
+		WithLocalOnly(),
 		WithExample(mflags.Example{
 			Name: "Show current cluster",
 			Body: "miren cluster current",
@@ -1031,16 +958,12 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren runner token list",
 		}),
 	))
-	d.Dispatch("runner remove", Infer("runner remove", "Remove a registered runner and clean up resources", RunnerRemove,
-		WithExample(mflags.Example{
-			Name: "Remove a runner by name",
-			Body: "miren runner remove my-runner",
-		}),
-		WithExample(mflags.Example{
-			Name: "Force remove a runner with active sandboxes",
-			Body: "miren runner remove my-runner --force",
-		}),
-	))
+	runnerDelete := Infer("runner delete", "Remove a registered runner and clean up resources", RunnerRemove,
+		WithExample(mflags.Example{Name: "Remove a runner by name", Body: "miren runner delete my-runner"}),
+		WithExample(mflags.Example{Name: "Force remove a runner with active sandboxes", Body: "miren runner delete my-runner --force"}),
+	)
+	d.Dispatch("runner delete", runnerDelete)
+	d.Dispatch("runner remove", runnerDelete.DeprecatedAlias("runner remove"))
 	d.Dispatch("runner cordon", Infer("runner cordon", "Mark a runner unschedulable without stopping its sandboxes", RunnerCordon,
 		WithExample(mflags.Example{
 			Name: "Cordon a runner",
@@ -1139,14 +1062,19 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	))
 
 	// Server commands
-	d.Dispatch("server", Infer("server", "Start the miren server", Server,
-		WithGroup(GroupServer),
+	server := Infer("server start", "Start the miren server", Server,
 		WithDaemon(),
 		WithExample(mflags.Example{
 			Name: "Start the server",
-			Body: "sudo miren server",
+			Body: "sudo miren server start",
 		}),
-	))
+	)
+	d.Dispatch("server start", server)
+	d.Dispatch("server", server.Alias("server", WithGroup(GroupServer)))
+	downloadRelease := Infer("server download-release", "Download and extract miren release", DownloadRelease,
+		WithExample(mflags.Example{Name: "Download the latest release", Body: "miren server download-release"}),
+	)
+	d.Dispatch("server download-release", downloadRelease)
 	d.Dispatch("server config", Section("server config", "Server configuration management commands", ""))
 	d.Dispatch("server config generate", Infer("server config generate", "Generate a server configuration file from current settings", ServerConfigGenerate,
 		WithExample(mflags.Example{
@@ -1270,13 +1198,8 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 
 	// CLI management commands
 	d.Dispatch("download", Section("download", "Download management commands", "", WithSectionGroup(GroupServer)))
-	d.Dispatch("download release", Infer("download release", "Download and extract miren release", DownloadRelease,
-		WithExample(mflags.Example{
-			Name: "Download the latest release",
-			Body: "miren download release",
-		}),
-	))
-	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)", Upgrade,
+	d.Dispatch("download release", downloadRelease.DeprecatedAlias("download release"))
+	d.Dispatch("upgrade", Infer("upgrade", "This machine: upgrade miren (server or runner and CLI on a systemd host, otherwise CLI)", Upgrade,
 		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Upgrade the CLI on a client machine",
@@ -1345,26 +1268,17 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 	d.Dispatch("auth provider remove", Infer("auth provider remove", "Remove an identity provider", AuthProviderRemove))
 
 	// Admin commands
-	d.Dispatch("admin", Infer("admin", "Call an admin method on an application", Admin,
-		WithGroup(GroupConfiguring),
+	d.Dispatch("app admin", Section("app admin", "Application-defined admin methods", ""))
+	d.Dispatch("app admin list", Infer("app admin list", "List application-defined admin methods", AdminList))
+	admin := Infer("app admin run", "Call an admin method on an application", Admin,
 		WithDescription(adminDescription),
-		WithExample(mflags.Example{
-			Name: "List available admin methods",
-			Body: "miren admin --list -a myapp",
-		}),
-		WithExample(mflags.Example{
-			Name: "Call an admin method",
-			Body: "miren admin health -a myapp",
-		}),
-		WithExample(mflags.Example{
-			Name: "Call a method with JSON output",
-			Body: "miren admin stats -a myapp --json",
-		}),
-		WithExample(mflags.Example{
-			Name: "Call a method with params from a file",
-			Body: "miren admin migrate -a myapp -f params.json",
-		}),
-	))
+		WithExample(mflags.Example{Name: "List available admin methods", Body: "miren app admin run --list -a myapp"}),
+		WithExample(mflags.Example{Name: "Call an admin method", Body: "miren app admin run health -a myapp"}),
+		WithExample(mflags.Example{Name: "Call a method with JSON output", Body: "miren app admin run stats -a myapp --json"}),
+		WithExample(mflags.Example{Name: "Call a method with params from a file", Body: "miren app admin run migrate -a myapp -f params.json"}),
+	)
+	d.Dispatch("app admin run", admin)
+	d.Dispatch("admin", admin.Alias("admin", WithGroup(GroupConfiguring)))
 
 	// Debug commands (unstable, may change without notice)
 	d.Dispatch("debug", Section("debug", "Debug and troubleshooting commands", `
@@ -1373,6 +1287,17 @@ Use these commands to help diagnose issues with the miren runtime.
 Warning: These commands are intended for advanced users and developers. They may change or be removed without notice.
 
 `, WithSectionGroup(GroupServer)))
+	d.Dispatch("debug sandbox-pool", Section("debug sandbox-pool", "Sandbox pool diagnostics", ""))
+	poolList := Infer("debug sandbox-pool list", "List all sandbox pools", SandboxPoolList,
+		WithExample(mflags.Example{Name: "List all pools", Body: "miren debug sandbox-pool list"}),
+	)
+	d.Dispatch("debug sandbox-pool list", poolList)
+	d.Dispatch("sandbox-pool list", poolList.DeprecatedAlias("sandbox-pool list"))
+	poolSetDesired := Infer("debug sandbox-pool set-desired", "Set desired instance count for a sandbox pool", SandboxPoolSetDesired,
+		WithExample(mflags.Example{Name: "Scale a pool to 3 instances", Body: "miren debug sandbox-pool set-desired web 3"}),
+	)
+	d.Dispatch("debug sandbox-pool set-desired", poolSetDesired)
+	d.Dispatch("sandbox-pool set-desired", poolSetDesired.DeprecatedAlias("sandbox-pool set-desired"))
 	d.Dispatch("debug connection", Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection))
 	d.Dispatch("debug advertise", Infer("debug advertise", "Show which addresses the server would advertise and why", DebugAdvertise))
 	d.Dispatch("debug reindex", Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex))
@@ -1531,7 +1456,7 @@ const deployDescription = `Deploy uploads your project files and configuration, 
 
 To activate an existing version without selecting or building another image, pass ` + "`" + `--version` + "`" + `:
 ` + "```" + `bash
-miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
+miren deployment create --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
 
@@ -1551,7 +1476,7 @@ Use ` + "`" + `--format json` + "`" + ` to get the result as a single JSON docum
 Use ` + "`" + `--format jsonl` + "`" + ` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an ` + "`" + `event` + "`" + ` name and a ` + "`" + `time` + "`" + `, and stderr stays empty. Events are ` + "`" + `start` + "`" + `, ` + "`" + `message` + "`" + `, ` + "`" + `upload` + "`" + `, ` + "`" + `upload_complete` + "`" + `, ` + "`" + `build_step` + "`" + ` (with ` + "`" + `status` + "`" + ` started, done, cached, or error), ` + "`" + `build_log` + "`" + `, ` + "`" + `build_error` + "`" + `, ` + "`" + `build_complete` + "`" + `, ` + "`" + `deployment` + "`" + ` (phase changes, using the deployment record's phase names), ` + "`" + `warning` + "`" + `, ` + "`" + `health` + "`" + ` (an ` + "`" + `outcome` + "`" + ` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an ` + "`" + `ok` + "`" + ` flag, and the app's health classification with its instance counts), ` + "`" + `port_warning` + "`" + `, ` + "`" + `app_log` + "`" + ` (recent crash output on a failed rollout), ` + "`" + `log` + "`" + ` (the CLI's own log records, which would otherwise go to stderr), and finally ` + "`" + `result` + "`" + `, which carries the same fields as the ` + "`" + `--format json` + "`" + ` document.
 
 :::note[Config changes deploy on their own]
-Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deploy` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
+Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon delete` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deployment create` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
 :::`
 
 const debugDeployEventsDescription = `A deploy run with ` + "`" + `--format jsonl` + "`" + ` writes one JSON object per line and nothing a person would want to read. This command turns that stream back into the output the deploy would have printed: the phase summaries, build steps, health verdict, routes, and final status. Point it at a saved file, or pipe a live deploy through it.
@@ -1570,7 +1495,7 @@ Use restart to:
 - Pick up data restored out-of-band (for example, after ` + "`" + `miren disk restore` + "`" + `)
 
 :::note[Config and env changes restart on their own]
-You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon destroy` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
+You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon delete` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
 :::`
 
 const secretSetDescription = `Stores a value in the cluster's secret store. The value is encrypted at rest and is never echoed, logged, or written to disk by this command — it travels to the server, which holds the only key.
