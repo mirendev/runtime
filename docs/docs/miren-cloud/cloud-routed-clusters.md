@@ -25,8 +25,7 @@ firewall rule to add.
 
 ## Setting one up
 
-Usually you do not have to do anything. `miren cluster add` picks this route on
-its own when it is the one that works:
+Usually you do not have to do anything. Add your cluster normally:
 
 ```bash
 miren cluster add
@@ -35,16 +34,32 @@ miren cluster add
 If the cluster you pick advertises no address your machine can dial, or
 advertises addresses that do not answer, the command tries the cloud route
 itself: it opens a session through cloud and makes a call. If the cluster
-answers, the entry is written to route through cloud and it tells you so. A
+answers, the entry is saved and it tells you which route worked. A
 cluster that neither you nor cloud can reach still fails, because that is a real
 problem rather than a routing choice.
+
+Each subsequent connection tries the saved direct addresses first, then falls
+back to cloud. Failed direct attempts are cached for 30 seconds, so repeated
+commands off-network do not each wait for a timeout. After that, direct routing
+is tried again. Moving between networks does not permanently change your config.
+Advertised addresses and the cluster CA fingerprint are retained even when you
+add the cluster remotely, so a later direct connection can verify the cluster.
+When only the fingerprint is saved, the first TLS handshake fails verification
+and supplies the certificate chain. The CLI checks the CA fingerprint, then
+retries with that CA trusted and normal TLS verification enabled. This adds a
+handshake attempt to the direct probe; entries with a saved CA do not need it.
+
+The cache records a failed direct attempt, not proof that cloud is available.
+If the cluster has no working cloud link, commands can fail through cloud until
+the hint expires. Use `miren -vv app list` to see why direct routing failed;
+debug output includes the attempted addresses and errors, even on cache hits.
 
 It tries the route rather than asking whether one exists, because those are
 different questions. Cloud can hold a link to a cluster whose runtime is older
 than this feature, and that cluster will sit there without answering. Making the
 call is what tells the two apart.
 
-To skip the direct attempt entirely, ask for it:
+To force cloud routing, skipping direct attempts on every connection, ask for it:
 
 ```bash
 miren cluster add --via-cloud
@@ -200,8 +215,34 @@ rather than going looking for a fault.
 **It is slower than a direct connection.** Every frame takes an extra hop, and
 the relay is not the path to choose when you have a direct one available.
 
-**One cloud, one cluster.** The route is per-cluster. Clusters you can reach
-directly should stay that way.
+:::note[Route selection precedes RPC]
+
+Automatic routing checks direct connectivity with a verified TLS handshake.
+Once that succeeds, the command uses a separate direct RPC connection. If that
+connection subsequently fails, the command fails rather than replaying it
+through cloud. In-flight operations are never automatically replayed.
+
+:::
+
+:::note[Existing forced routes stay forced]
+
+Older versions wrote `via_cloud: true` for both explicit `--via-cloud` requests
+and automatic fallbacks. Both remain forced cloud routes after upgrading:
+the saved config cannot distinguish their intent, and automatic fallbacks
+discarded the direct addresses and CA.
+
+Re-add the cluster without `--via-cloud` to enable automatic routing and retrieve
+its advertised addresses and CA fingerprint:
+
+```bash
+miren cluster add --cluster NAME --force
+```
+
+Use the cluster's name in cloud for `NAME`. If its saved local name differs, add
+`--as LOCAL_NAME` to replace the existing entry rather than create another one.
+If the cloud name exists in multiple organizations, add `--organization ORG`.
+
+:::
 
 ## Configuration
 

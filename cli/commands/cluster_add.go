@@ -327,6 +327,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	var clusterCert *clusterCertificate
 	var allAddresses []string
 	var clusterXID string
+	var selectedCluster *ClusterResponse
 
 	// What the cluster is called in cloud, and whose it is. Empty in manual
 	// mode, where cloud is never asked and neither is knowable.
@@ -351,8 +352,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		}
 
 		var (
-			selectedCluster *ClusterResponse
-			localName       string
+			localName string
 			// Which of the undialable clusters cloud can still reach. Skipped
 			// when the caller already said --via-cloud, since the answer would
 			// change nothing.
@@ -421,9 +421,9 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 			ctx.Info("%s advertises no address this machine can dial, and cloud can reach it.", selectedCluster.Name)
 		}
 
+		allAddresses = selectedCluster.APIAddresses
 		if opts.viaCloud {
-			// No address and no certificate: both describe dialing the cluster,
-			// which is the thing this entry exists to avoid.
+			// Keep advertised addresses for automatic routing on later connections.
 			//
 			// The route itself is checked when the caller asked for it by name,
 			// rather than when it was chosen above (which already probed). The
@@ -440,9 +440,6 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 
 			announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 		} else {
-			// Store all available addresses
-			allAddresses = selectedCluster.APIAddresses
-
 			// Try to connect to the cluster
 			workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
 			if err != nil {
@@ -456,11 +453,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 
 				ctx.Info("Could not reach %s directly, but cloud has a link to it.", selectedCluster.Name)
 
-				// The address and certificate belong to a route that does not
-				// work from here. Keeping either would write an entry that
-				// looks dialable and is not.
 				opts.viaCloud = true
-				allAddresses = nil
 
 				announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 			} else {
@@ -489,7 +482,10 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		AllAddresses: allAddresses,
 		Identity:     identityName,
 		XID:          clusterXID,
-		ViaCloud:     opts.viaCloud,
+		ViaCloud:     explicitViaCloud,
+	}
+	if selectedCluster != nil {
+		clusterConfig.CACertFingerprint = selectedCluster.CACertFingerprint
 	}
 
 	// A cloud reached over plain HTTP is a development one, and routing through
@@ -498,7 +494,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	// that cannot work, or one that quietly ships a credential in the clear
 	// without recording that anywhere, are both worse than saying it out loud
 	// here and putting the admission in the file.
-	if opts.viaCloud && identity != nil && strings.HasPrefix(identity.Issuer, "http://") {
+	if clusterXID != "" && identity != nil && strings.HasPrefix(identity.Issuer, "http://") {
 		clusterConfig.Insecure = true
 		ctx.Warn("%s is not encrypted, so commands to this cluster will send your credentials in the clear.", identity.Issuer)
 		ctx.Warn("Recorded as insecure: true on the cluster. Use an https cloud for anything but local development.")
@@ -573,9 +569,12 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		return nil, codedErrorf(codeConfigError, "failed to save cluster configuration: %w", err)
 	}
 
-	if opts.viaCloud {
+	if explicitViaCloud {
 		ctx.Completed("Successfully added cluster %q with identity %q, routed through Miren Cloud", clusterName, identityName)
 		ctx.Info("Commands reach it over the connection it holds open to cloud, so it needs no address here.")
+	} else if opts.viaCloud {
+		ctx.Completed("Successfully added cluster %q with identity %q; reached through Miren Cloud while adding", clusterName, identityName)
+		ctx.Info("Future connections use direct when reachable, otherwise via cloud.")
 	} else if identityName != "" {
 		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
 	} else {
@@ -597,6 +596,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		XID:        clusterXID,
 		Address:    address,
 		ViaCloud:   opts.viaCloud,
+		ForceCloud: clusterConfig.ViaCloud,
 		Identity:   identityName,
 		Insecure:   clusterConfig.Insecure,
 		Active:     mainConfig.ActiveCluster() == clusterName,
