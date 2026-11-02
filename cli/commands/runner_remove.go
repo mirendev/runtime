@@ -10,6 +10,7 @@ import (
 func RunnerRemove(ctx *Context, opts struct {
 	ConfigCentric
 
+	Yes   bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
 	Force bool   `long:"force" short:"f" description:"Force removal even if the runner has active sandboxes"`
 	Node  string `position:"0" usage:"Runner to remove (name, ID, or short ID)" required:"true"`
 }) error {
@@ -20,6 +21,15 @@ func RunnerRemove(ctx *Context, opts struct {
 	defer client.Close()
 
 	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
+
+	confirmed, err := confirmDeletion(fmt.Sprintf("Delete runner %q and its associated resources?", opts.Node), opts.Yes, false, true)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ctx.Printf("Deletion cancelled\n")
+		return nil
+	}
 
 	res, err := rc.RemoveRunner(ctx, opts.Node, opts.Force)
 	if err != nil {

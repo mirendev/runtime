@@ -12,14 +12,68 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
+	appserver "miren.dev/runtime/servers/app"
 	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
+
+func TestAppPoolSizeSelectsOnlyActiveService(t *testing.T) {
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	appID, err := store.Client.Create(t.Context(), "shop", &core_v1alpha.App{ActiveVersion: "app_version/current"})
+	require.NoError(t, err)
+	for _, name := range []string{"current", "old"} {
+		store.AddEntity(entity.New(entity.DBId, entity.Id("app_version/"+name), (&core_v1alpha.AppVersion{App: appID}).Encode))
+	}
+	for _, item := range []struct{ id, service, version string }{
+		{"pool/web", "web", "current"}, {"pool/worker", "worker", "current"}, {"pool/old", "web", "old"},
+	} {
+		require.NoError(t, store.Client.UpdateAttrs(t.Context(), entity.Id(item.id), (&compute_v1alpha.SandboxPool{
+			App: appID, Service: item.service, DesiredInstances: 2, CurrentInstances: 1, ReadyInstances: 1,
+			SandboxSpec: compute_v1alpha.SandboxSpec{Version: entity.Id("app_version/" + item.version)},
+		}).Encode(), entity.Ref(entity.DBId, entity.Id(item.id))))
+	}
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(&appserver.AppInfo{Log: slog.Default(), EC: store.Client}))
+	server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(store.Client)))
+	var stdout bytes.Buffer
+	ctx := &Context{Context: t.Context(), Log: slog.Default(), Stdout: &stdout, Stderr: io.Discard}
+	ctx.Config.ServerAddress = server.ListenAddr()
+	run := func(size, service string, json bool) error {
+		stdout.Reset()
+		return AppPoolSize(ctx, struct {
+			AppCentric
+			FormatOptions
+			Size    string `position:"0" usage:"Desired instance count (omit to show current size)"`
+			Service string `short:"s" long:"service" description:"Service to scale" default:"web"`
+		}{AppCentric: AppCentric{App: "shop"}, FormatOptions: FormatOptions{JSON: json}, Size: size, Service: service})
+	}
+	require.NoError(t, run("5", "web", true))
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	require.Equal(t, "pool/web", result["id"])
+	require.EqualValues(t, 5, result["desired_instances"])
+	for id, want := range map[string]int64{"pool/web": 5, "pool/worker": 2, "pool/old": 2} {
+		var pool compute_v1alpha.SandboxPool
+		require.NoError(t, store.Client.GetById(t.Context(), entity.Id(id), &pool))
+		require.Equal(t, want, pool.DesiredInstances)
+	}
+	require.NoError(t, run("", "web", false))
+	for _, text := range []string{"ID", "APP", "SERVICE", "DESIRED", "CURRENT", "READY", "shop", "web", "5"} {
+		require.Contains(t, stdout.String(), text)
+	}
+	require.ErrorContains(t, run("3", "missing", true), "no active pool")
+	require.ErrorContains(t, run("-1", "web", true), "non-negative")
+	require.Error(t, run("999999999999999999999999", "web", true))
+}
 
 func TestSandboxPoolCommandsLegacyEntities(t *testing.T) {
 	for _, oldService := range []bool{false, true} {

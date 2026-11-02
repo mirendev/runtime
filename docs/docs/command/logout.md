@@ -1,12 +1,12 @@
 ---
 title: "miren logout"
 sidebar_label: "logout"
-description: "Remove local authentication credentials"
+description: "Alias for 'miren cloud logout'"
 ---
 
 # miren logout
 
-Remove local authentication credentials
+Alias for 'miren cloud logout'
 
 ## Usage
 
@@ -31,5 +31,5 @@ miren logout [flags]
 **Logout:**
 
 ```bash
-miren logout
+miren cloud logout
 ```

@@ -9,6 +9,7 @@
     },
     "items": [
       "command/addon-create",
+      "command/addon-delete",
       "command/addon-destroy",
       "command/addon-list",
       "command/addon-list-available",
@@ -38,17 +39,25 @@
       "id": "command/app"
     },
     "items": [
+      "command/app-admin",
+      "command/app-admin-list",
+      "command/app-admin-run",
       "command/app-attach",
       "command/app-delete",
       "command/app-history",
+      "command/app-init",
       "command/app-list",
+      "command/app-pool-size",
       "command/app-restart",
+      "command/app-rollback",
       "command/app-run",
       "command/app-runs",
       "command/app-runs-cancel",
       "command/app-set-workload-role",
       "command/app-status",
-      "command/app-versions"
+      "command/app-top",
+      "command/app-versions",
+      "command/app-watch"
     ]
   },
   "command/apps",
@@ -74,6 +83,20 @@
       "command/auth-provider-list",
       "command/auth-provider-remove",
       "command/auth-provider-show"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "cloud",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/cloud"
+    },
+    "items": [
+      "command/cloud-login",
+      "command/cloud-logout",
+      "command/cloud-whoami"
     ]
   },
   {
@@ -163,6 +186,9 @@
       "command/debug-saga-abandon",
       "command/debug-saga-list",
       "command/debug-saga-show",
+      "command/debug-sandbox-pool",
+      "command/debug-sandbox-pool-list",
+      "command/debug-sandbox-pool-set-desired",
       "command/debug-test",
       "command/debug-test-load"
     ]
@@ -182,6 +208,19 @@
       "command/deploy-target-list",
       "command/deploy-target-remove",
       "command/deploy-target-set-default"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "deployment",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/deployment"
+    },
+    "items": [
+      "command/deployment-cancel",
+      "command/deployment-create"
     ]
   },
   "command/detective",
@@ -262,6 +301,7 @@
       "id": "command/route"
     },
     "items": [
+      "command/route-delete",
       "command/route-down",
       "command/route-list",
       "command/route-protect",
@@ -279,6 +319,20 @@
   },
   {
     "type": "category",
+    "label": "run",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/run"
+    },
+    "items": [
+      "command/run-attach",
+      "command/run-cancel",
+      "command/run-list"
+    ]
+  },
+  {
+    "type": "category",
     "label": "runner",
     "collapsed": true,
     "link": {
@@ -287,6 +341,7 @@
     },
     "items": [
       "command/runner-cordon",
+      "command/runner-delete",
       "command/runner-drain",
       "command/runner-install",
       "command/runner-join",
@@ -325,7 +380,8 @@
       "command/sandbox-exec",
       "command/sandbox-inspect",
       "command/sandbox-list",
-      "command/sandbox-stop"
+      "command/sandbox-stop",
+      "command/sandbox-top"
     ]
   },
   {
@@ -350,6 +406,7 @@
       "id": "command/secret"
     },
     "items": [
+      "command/secret-delete",
       "command/secret-destroy",
       "command/secret-disable",
       "command/secret-enable",
@@ -376,6 +433,7 @@
       "command/server-container-install",
       "command/server-container-status",
       "command/server-container-uninstall",
+      "command/server-download-release",
       "command/server-identity-anchor",
       "command/server-install",
       "command/server-operations",
@@ -386,11 +444,26 @@
       "command/server-register",
       "command/server-register-status",
       "command/server-restart",
+      "command/server-start",
       "command/server-status",
       "command/server-uninstall",
       "command/server-unregister",
       "command/server-upgrade",
       "command/server-upgrade-rollback"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "target",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/target"
+    },
+    "items": [
+      "command/target-add",
+      "command/target-list",
+      "command/target-remove"
     ]
   },
   "command/top",

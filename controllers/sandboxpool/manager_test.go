@@ -597,6 +597,115 @@ func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 	assert.Equal(t, 1, len(sandboxes), "should have exactly 1 RUNNING sandbox after scale-down")
 }
 
+func TestManagerScaleDownNeverLeasedSandboxes(t *testing.T) {
+	now := time.Now()
+	type sandboxState struct {
+		age          time.Duration
+		lastActivity time.Time
+		status       compute_v1alpha.SandboxStatus
+	}
+	for _, tc := range []struct {
+		name      string
+		mode      string
+		sandboxes []sandboxState
+		remaining []int
+	}{
+		{
+			name: "retire unused sandbox before recently active and newly created siblings",
+			sandboxes: []sandboxState{
+				{age: time.Hour, status: compute_v1alpha.RUNNING},
+				{age: 2 * time.Hour, lastActivity: now.Add(-time.Second), status: compute_v1alpha.RUNNING},
+				{age: time.Second, status: compute_v1alpha.RUNNING},
+			},
+			remaining: []int{1, 2},
+		},
+		{
+			name: "slow boot receives full idle delay after readiness",
+			sandboxes: []sandboxState{
+				{age: 4 * time.Minute, lastActivity: now, status: compute_v1alpha.RUNNING},
+			},
+			remaining: []int{0},
+		},
+		{
+			name: "all unused sandboxes scale to zero",
+			sandboxes: []sandboxState{
+				{age: time.Hour, status: compute_v1alpha.RUNNING},
+				{age: 2 * time.Hour, status: compute_v1alpha.RUNNING},
+			},
+		},
+		{
+			name: "pending sandbox is not idle capacity",
+			sandboxes: []sandboxState{
+				{age: time.Hour, status: compute_v1alpha.PENDING},
+			},
+			remaining: []int{0},
+		},
+		{
+			name: "fixed mode keeps unused sandboxes",
+			mode: "fixed",
+			sandboxes: []sandboxState{
+				{age: time.Hour, status: compute_v1alpha.RUNNING},
+			},
+			remaining: []int{0},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			mode := tc.mode
+			if mode == "" {
+				mode = "auto"
+			}
+			versionID, err := server.Client.Create(ctx, "version", &core_v1alpha.AppVersion{
+				Config: core_v1alpha.Config{Services: []core_v1alpha.Services{{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode: mode, ScaleDownDelay: "2m", NumInstances: int64(len(tc.sandboxes)),
+					},
+				}}},
+			})
+			require.NoError(t, err)
+			pool := &compute_v1alpha.SandboxPool{
+				Service: "web", DesiredInstances: int64(len(tc.sandboxes)),
+				ReferencedByVersions: []entity.Id{versionID},
+				SandboxSpec:          compute_v1alpha.SandboxSpec{Version: versionID},
+			}
+			poolID, err := server.Client.Create(ctx, "pool", pool)
+			require.NoError(t, err)
+			pool.ID = poolID
+
+			var ids []entity.Id
+			for i, state := range tc.sandboxes {
+				server.Store.NowFunc = func() time.Time { return now.Add(-state.age) }
+				id, err := server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), &compute_v1alpha.Sandbox{
+					Status: state.status, LastActivity: state.lastActivity, Spec: pool.SandboxSpec,
+				}, entityserver.WithLabels(types.LabelSet("service", pool.Service, "pool", poolID.String())))
+				require.NoError(t, err)
+				ids = append(ids, id)
+			}
+			server.Store.NowFunc = nil
+
+			manager := NewManager(testutils.TestLogger(t), server.EAC)
+			require.NoError(t, manager.checkAllPoolsForScaleDown(ctx))
+			pool = getPool(t, ctx, server, poolID)
+			require.Equal(t, int64(len(tc.remaining)), pool.DesiredInstances)
+			reconcilePool(t, ctx, server, manager, pool)
+
+			var expected []entity.Id
+			for _, i := range tc.remaining {
+				expected = append(expected, ids[i])
+			}
+			var actual []entity.Id
+			for _, sb := range listSandboxesForPool(t, ctx, server, pool) {
+				actual = append(actual, sb.ID)
+			}
+			assert.ElementsMatch(t, expected, actual)
+		})
+	}
+}
+
 // TestManagerZeroValuePersistence tests that zero values persist correctly
 // when using Patch. This is a regression test for a bug where zero values
 // were silently dropped during encoding, preventing scale-to-zero from working.

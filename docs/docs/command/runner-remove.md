@@ -1,12 +1,12 @@
 ---
 title: "miren runner remove"
 sidebar_label: "runner remove"
-description: "Remove a registered runner and clean up resources"
+description: "Deprecated: use 'miren runner delete'"
 ---
 
 # miren runner remove
 
-Remove a registered runner and clean up resources
+Deprecated: use 'miren runner delete'
 
 ## Usage
 
@@ -23,6 +23,7 @@ miren runner remove <node> [flags]
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--force, -f` — Force removal even if the runner has active sandboxes
+- `--yes, -y` — Skip confirmation prompt
 
 ## Global Options
 
@@ -35,13 +36,13 @@ miren runner remove <node> [flags]
 **Remove a runner by name:**
 
 ```bash
-miren runner remove my-runner
+miren runner delete my-runner
 ```
 
 **Force remove a runner with active sandboxes:**
 
 ```bash
-miren runner remove my-runner --force
+miren runner delete my-runner --force
 ```
 
 ## See also

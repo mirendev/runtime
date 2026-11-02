@@ -1,12 +1,12 @@
 ---
 title: "miren sandbox-pool list"
 sidebar_label: "sandbox-pool list"
-description: "List all sandbox pools"
+description: "Deprecated: use 'miren debug sandbox-pool list'"
 ---
 
 # miren sandbox-pool list
 
-List all sandbox pools
+Deprecated: use 'miren debug sandbox-pool list'
 
 ## Usage
 
@@ -32,7 +32,7 @@ miren sandbox-pool list [flags]
 **List all pools:**
 
 ```bash
-miren sandbox-pool list
+miren debug sandbox-pool list
 ```
 
 ## See also

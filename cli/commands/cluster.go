@@ -59,9 +59,9 @@ func ClusterList(ctx *Context, opts struct {
 
 	// Determine the effective cluster for the current context.
 	globalCluster := cfg.ActiveCluster()
-	_, effectiveCluster, _ := opts.LoadCluster()
-	if effectiveCluster == "" {
-		effectiveCluster = globalCluster
+	effectiveCluster := globalCluster
+	if opts.Cluster != "" {
+		effectiveCluster = opts.Cluster
 	}
 
 	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {

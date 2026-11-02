@@ -175,7 +175,7 @@ out its services and environment variables, creates the configuration, and
 walks through the first deploy.
 :::
 
-**Manage multiple clusters.** If you have more than one server, use [`miren cluster`](./command/cluster.md) to list your clusters and `miren cluster switch` to change which one you're targeting before deploying.
+**Manage multiple clusters.** Use [`miren cluster list`](./command/cluster-list.md) to list your clusters. Choose a deployment destination explicitly with `miren deploy -C <cluster>`, or configure [deployment targets](./deployment.md#deployment-targets). `miren cluster switch` changes the global selection for commands without deploy targets, but does not silently select an ambiguous deploy destination.
 
 **Configure your app.** The [App Configuration](./app-configuration.md) guide covers `.miren/app.toml` in depth: setting commands, ports, environment variables, concurrency, and more.
 

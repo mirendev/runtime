@@ -30,4 +30,5 @@ miren debug [flags]
 - [`miren debug rbac`](./debug-rbac.md) — Fetch and display RBAC rules from miren.cloud
 - [`miren debug reindex`](./debug-reindex.md) — Rebuild all entity indexes from scratch
 - [`miren debug saga`](./debug-saga.md) — Saga execution debug commands
+- [`miren debug sandbox-pool`](./debug-sandbox-pool.md) — Sandbox pool diagnostics
 - [`miren debug test`](./debug-test.md) — Debug test commands

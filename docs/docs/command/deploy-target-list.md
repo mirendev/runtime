@@ -1,12 +1,12 @@
 ---
 title: "miren deploy target list"
 sidebar_label: "deploy target list"
-description: "List deployment targets"
+description: "Deprecated: use 'miren target list'"
 ---
 
 # miren deploy target list
 
-List deployment targets
+Deprecated: use 'miren target list'
 
 ## Usage
 

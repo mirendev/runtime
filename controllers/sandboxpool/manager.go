@@ -417,8 +417,6 @@ func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.Sandb
 // This is called when actual > desired (proactive scale-down).
 // Sandboxes are retired in priority order: oldest LastActivity first.
 func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, sandboxes []*sandboxWithMeta, count int64) error {
-	now := time.Now()
-
 	// Collect all RUNNING sandboxes as candidates
 	type candidate struct {
 		sb           *compute_v1alpha.Sandbox
@@ -433,9 +431,9 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		}
 
 		lastActivity := sbm.sandbox.LastActivity
-		// If LastActivity is not set, treat as current time (most recently active)
+		// Never-leased sandboxes age from creation, just as in the idle check.
 		if lastActivity.IsZero() {
-			lastActivity = now
+			lastActivity = sbm.createdAt
 		}
 
 		candidates = append(candidates, candidate{
@@ -713,8 +711,8 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 
 		lastActivity := sbm.sandbox.LastActivity
 		if lastActivity.IsZero() {
-			// No activity recorded yet - treat as recently active
-			continue
+			// Lease renewals set LastActivity; unused capacity must also expire.
+			lastActivity = sbm.createdAt
 		}
 
 		idleTime := now.Sub(lastActivity)

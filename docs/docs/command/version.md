@@ -20,6 +20,7 @@ miren version [flags]
 - `--config` — Path to the config file
 - `--deps` — Show dependencies
 - `--format` — Output format (text, json) (default: `text`)
+- `--json` — Shorthand for --format json
 - `--server, -s` — Also report the version of the active cluster's server
 
 ## Global Options

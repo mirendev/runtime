@@ -129,7 +129,7 @@ func setupAppDir(t *testing.T, appName string) string {
 }
 
 func TestConfigCentricPerAppState(t *testing.T) {
-	t.Run("resolves per-app cluster in app directory", func(t *testing.T) {
+	t.Run("ignores per-app cluster in app directory", func(t *testing.T) {
 		r := require.New(t)
 		setupAppDir(t, "my-app")
 
@@ -144,9 +144,9 @@ func TestConfigCentricPerAppState(t *testing.T) {
 		cc := ConfigCentric{cfg: cfg}
 		cluster, name, err := cc.LoadCluster()
 		r.NoError(err)
-		r.Equal("app-cluster", name)
+		r.Equal("global-cluster", name)
 		r.NotNil(cluster)
-		r.Equal("10.0.0.1:8443", cluster.Hostname)
+		r.Equal("10.0.0.2:8443", cluster.Hostname)
 	})
 
 	t.Run("falls back to global default without app directory", func(t *testing.T) {

@@ -40,7 +40,7 @@ type SandboxContainerRuntime interface {
 	CleanupContainer(ctx context.Context, cont containerd.Container)
 	BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container, shortID string) (containerd.Task, error)
 	ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error)
-	BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, error)
+	BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, []ContainerStartupTiming, error)
 	DestroySubContainers(ctx context.Context, id entity.Id) error
 	ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error
 	ReleaseHubs(id entity.Id)
@@ -54,6 +54,18 @@ type SandboxContainerRuntime interface {
 	// other than the one Miren configured. ok is false when the container is no
 	// longer monitored and its pid is unknown.
 	DiagnoseListening(id string) (routable []int, loopback []int, ok bool)
+}
+
+// ContainerStartupTiming records attempted startup operations, including a
+// failing operation. Durations are nanoseconds; absent stages were not reached.
+// ImageCache is hit/miss after a successful/missing lookup, or empty on error.
+// image_lookup sums lookups before and after a pull; image_pull_unpack is one
+// operation. container_create includes snapshot creation and OCI spec options.
+type ContainerStartupTiming struct {
+	Name        string                   `json:"name"`
+	Image       string                   `json:"image"`
+	ImageCache  string                   `json:"image_cache,omitempty"`
+	DurationsNS map[string]time.Duration `json:"durations_ns"`
 }
 
 // SandboxObservability provides metrics and service management.

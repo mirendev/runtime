@@ -127,7 +127,7 @@ func (o *sandboxOps) ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, 
 	return o.ctrl.ConfigureVolumes(ctx, sb, meta)
 }
 
-func (o *sandboxOps) BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, error) {
+func (o *sandboxOps) BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, []ContainerStartupTiming, error) {
 	return o.ctrl.BootContainers(ctx, sb, ep, sbPid, cgroups, meta, volumeMounts)
 }
 

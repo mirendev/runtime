@@ -1,12 +1,12 @@
 ---
 title: "miren deploy target add"
 sidebar_label: "deploy target add"
-description: "Add a deployment target"
+description: "Deprecated: use 'miren target add'"
 ---
 
 # miren deploy target add
 
-Add a deployment target
+Deprecated: use 'miren target add'
 
 ## Usage
 
@@ -44,19 +44,19 @@ miren deploy target add [name] [clustername] [flags]
 **Select a configured cluster interactively:**
 
 ```bash
-miren deploy target add staging
+miren target add staging
 ```
 
 **Add a target non-interactively:**
 
 ```bash
-miren deploy target add prod my-prod-cluster
+miren target add prod my-prod-cluster
 ```
 
 **Add the default target:**
 
 ```bash
-miren deploy target add staging my-staging-cluster --default
+miren target add staging my-staging-cluster --default
 ```
 
 ## See also

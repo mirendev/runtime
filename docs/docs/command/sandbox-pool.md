@@ -16,5 +16,5 @@ miren sandbox-pool [flags]
 
 ## Subcommands
 
-- [`miren sandbox-pool list`](./sandbox-pool-list.md) — List all sandbox pools
-- [`miren sandbox-pool set-desired`](./sandbox-pool-set-desired.md) — Set desired instance count for a sandbox pool
+- [`miren sandbox-pool list`](./sandbox-pool-list.md) — Deprecated: use 'miren debug sandbox-pool list'
+- [`miren sandbox-pool set-desired`](./sandbox-pool-set-desired.md) — Deprecated: use 'miren debug sandbox-pool set-desired'

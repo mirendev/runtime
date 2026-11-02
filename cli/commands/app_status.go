@@ -6,22 +6,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
-	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
-func AppStatus(ctx *Context, opts struct {
+type AppStatusOptions struct {
 	AppCentric
 	FormatOptions
-}) error {
+	Graph bool `short:"g" long:"graph" description:"Include resource usage graphs"`
+}
+
+func AppStatus(ctx *Context, opts AppStatusOptions) error {
 	// Connect to app service
 	appCl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return fmt.Errorf("failed to connect to app service: %w", err)
 	}
+	defer appCl.Close()
 	appClient := app_v1alpha.NewCrudClient(appCl)
 
 	// Get app configuration
@@ -41,14 +43,11 @@ func AppStatus(ctx *Context, opts struct {
 	if err != nil {
 		return fmt.Errorf("failed to connect to deployment service: %w", err)
 	}
+	defer depCl.Close()
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
-	// Determine which cluster to query
-	// Use explicit cluster if specified with -C flag, otherwise use current context
+	// Target aliases resolve to a concrete cluster during context setup.
 	clusterId := ctx.ClusterName
-	if opts.Cluster != "" {
-		clusterId = opts.Cluster
-	}
 
 	// Get active deployment
 	activeDeployment, err := depClient.GetActiveDeployment(ctx, opts.App, clusterId)
@@ -69,216 +68,56 @@ func AppStatus(ctx *Context, opts struct {
 		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId, health, healthErr)
 	}
 
-	// Define styles
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Muted)
-	greenStyle := lipgloss.NewStyle().Foreground(theme.Success)
-	blueStyle := lipgloss.NewStyle().Foreground(theme.Info)
-	yellowStyle := lipgloss.NewStyle().Foreground(theme.Warning)
-	redStyle := lipgloss.NewStyle().Foreground(theme.Error)
-
-	// Print header
-	ctx.Printf("%s\n\n", headerStyle.Render(fmt.Sprintf("Status for %s", opts.App)))
-
-	// App info
-	ctx.Printf("%s %s\n", labelStyle.Render("App:"), opts.App)
-	ctx.Printf("%s %s\n", labelStyle.Render("Cluster:"), clusterId)
-
-	// Version info
+	items := []ui.NamedValue{
+		ui.NewNamedValue("App", opts.App),
+		ui.NewNamedValue("Cluster", clusterId),
+	}
 	if appResult.HasVersionId() && appResult.VersionId() != "" {
-		versionDisplay := ui.DisplayShortID(appResult.VersionShortId(), appResult.VersionId())
-		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), versionDisplay)
+		items = append(items, ui.NewNamedValue("Current Version", ui.DisplayShortID(appResult.VersionShortId(), appResult.VersionId())))
 	} else {
-		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), yellowStyle.Render("No version deployed"))
+		items = append(items, ui.NewNamedValue("Current Version", "No version deployed"))
 	}
 	if source := formatSource(appResult.SourceKind(), appResult.SourceValue()); source != "" {
-		ctx.Printf("%s %s\n", labelStyle.Render("Source:"), source)
+		items = append(items, ui.NewNamedValue("Source", source))
 	}
-
-	if role := appResult.WorkloadRole(); role != "" {
-		ctx.Printf("%s %s\n", labelStyle.Render("Workload Role:"), role)
-	}
-
 	if down := appResult.MaintenanceRoutes(); len(down) > 0 {
-		ctx.Printf("%s %s\n", labelStyle.Render("Maintenance:"),
-			yellowStyle.Render(fmt.Sprintf("%s serving a holding page", maintenanceRouteList(down))))
+		items = append(items, ui.NewNamedValue("Maintenance", fmt.Sprintf("%s serving a holding page", maintenanceRouteList(down))))
 	}
 
-	// Configuration
-	if appConfig != nil {
-		ctx.Printf("\n%s\n", labelStyle.Render("Configuration:"))
-		// Environment variables: show keys only. Values live behind the one
-		// masked surface, 'miren env'. See MIR-1356.
-		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
-			var keys []string
-			for _, kv := range appConfig.EnvVars() {
-				if kv.HasKey() {
-					keys = append(keys, kv.Key())
-				}
-			}
-			sort.Strings(keys)
-
-			ctx.Printf("\n%s (%d)\n", labelStyle.Render("Environment Variables:"), len(keys))
-			for _, key := range keys {
-				ctx.Printf("  %s\n", key)
-			}
-			ctx.Printf("  %s\n", labelStyle.Render(fmt.Sprintf("Run 'miren env list -a %s' to view values", opts.App)))
-		}
-	}
-
-	// Active deployment info
 	if activeDeployment != nil && activeDeployment.HasDeployment() {
 		deployment := activeDeployment.Deployment()
-		ctx.Printf("\n%s\n", labelStyle.Render("Active Deployment:"))
-
-		// Deployment ID
-		ctx.Printf("  ID: %s\n", ui.DisplayShortID(deployment.ShortId(), deployment.Id()))
-
-		// Status with color
-		status := deployment.Status()
-		var styledStatus string
-		switch status {
-		case "active":
-			styledStatus = greenStyle.Render(status)
-		case "succeeded":
-			styledStatus = blueStyle.Render(status)
-		case "failed":
-			styledStatus = redStyle.Render(status)
-		default:
-			styledStatus = yellowStyle.Render(status)
+		items = append(items,
+			ui.NewNamedValue("Deployment", ui.DisplayShortID(deployment.ShortId(), deployment.Id())),
+			ui.NewNamedValue("Status", deployment.Status()),
+		)
+		if deployment.Phase() != "" {
+			items = append(items, ui.NewNamedValue("Phase", deployment.Phase()))
 		}
-		ctx.Printf("  Status: %s\n", styledStatus)
-
-		// Phase information for in-progress deployments
-		if status == "in_progress" && deployment.HasPhase() && deployment.Phase() != "" {
-			ctx.Printf("  Phase: %s\n", deployment.Phase())
-		}
-
-		// Deployed info
-		if user := deployerOf(deployment); user != "" {
-			ctx.Printf("  Deployed By: %s\n", user)
-		}
-
-		if deployment.HasDeployedAt() && deployment.DeployedAt() != nil {
-			deployedAt := time.Unix(deployment.DeployedAt().Seconds(), 0)
-			ctx.Printf("  Deployed: %s (%s)\n",
-				deployedAt.Format("2006-01-02 15:04:05"),
-				formatRelativeTime(deployedAt))
-		}
-
-		// Git info
-		if deployment.HasGitInfo() && deployment.GitInfo() != nil {
-			git := deployment.GitInfo()
-			ctx.Printf("\n%s\n", labelStyle.Render("Git Information:"))
-
-			if git.HasSha() && git.Sha() != "" {
-				sha := git.Sha()
-				if len(sha) > 8 {
-					sha = sha[:8]
-				}
-				ctx.Printf("  Commit: %s", sha)
-
-				if git.HasBranch() && git.Branch() != "" {
-					ctx.Printf(" (%s)", git.Branch())
-				}
-
-				if git.HasIsDirty() && git.IsDirty() {
-					ctx.Printf(" %s", yellowStyle.Render("[dirty]"))
-				}
-				ctx.Printf("\n")
-			}
-
-			if git.HasCommitMessage() && git.CommitMessage() != "" {
-				msg := strings.TrimSpace(git.CommitMessage())
-				if idx := strings.Index(msg, "\n"); idx > 0 {
-					msg = msg[:idx] // First line only
-				}
-				if len(msg) > 60 {
-					msg = msg[:57] + "..."
-				}
-				ctx.Printf("  Message: %s\n", msg)
-			}
-
-			if git.HasCommitAuthorName() && git.CommitAuthorName() != "" {
-				ctx.Printf("  Author: %s", git.CommitAuthorName())
-				if git.HasCommitAuthorEmail() && git.CommitAuthorEmail() != "" {
-					ctx.Printf(" <%s>", git.CommitAuthorEmail())
-				}
-				ctx.Printf("\n")
-			}
-
-			if git.HasRepository() && git.Repository() != "" {
-				ctx.Printf("  Repository: %s\n", git.Repository())
-			}
-		}
-
-		// Error message if failed
-		if status == "failed" && deployment.HasErrorMessage() && deployment.ErrorMessage() != "" {
-			ctx.Printf("\n%s\n", labelStyle.Render("Error:"))
-			ctx.Printf("  %s\n", redStyle.Render(deployment.ErrorMessage()))
+		if deployment.ErrorMessage() != "" {
+			items = append(items, ui.NewNamedValue("Error", deployment.ErrorMessage()))
 		}
 	} else {
-		ctx.Printf("\n%s\n", yellowStyle.Render("No active deployment found"))
+		items = append(items, ui.NewNamedValue("Deployment", "No active deployment found"))
 	}
+	ctx.Printf("%s\n\n", ui.NewNamedValueList(items).Render())
 
-	ctx.Printf("\n%s\n", labelStyle.Render("Service Sandboxes:"))
 	switch {
 	case healthErr != nil:
-		ctx.Printf("  Health unavailable: %v\n", healthErr)
+		ctx.Printf("%s\n", ui.NewHint(fmt.Sprintf("Health unavailable: %v", healthErr)).Render())
 	case len(health) == 0:
-		ctx.Printf("  No service pools found\n")
+		ctx.Printf("%s\n", ui.NewHint("No service pools found").Render())
 	default:
 		ctx.Printf("%s", renderServiceHealth(health))
 	}
 
-	// Recent deployments summary
-	ctx.Printf("\n%s\n", labelStyle.Render("Recent Activity:"))
-
-	if recentResult != nil && recentResult.HasDeployments() && len(recentResult.Deployments()) > 0 {
-		for i, dep := range recentResult.Deployments() {
-			if i >= 3 { // Only show top 3
-				break
-			}
-
-			timeStr := "unknown"
-			if dep.HasDeployedAt() && dep.DeployedAt() != nil {
-				deployedAt := time.Unix(dep.DeployedAt().Seconds(), 0)
-				timeStr = formatRelativeTime(deployedAt)
-			}
-
-			status := dep.Status()
-			var statusIcon string
-			switch status {
-			case "active":
-				statusIcon = greenStyle.Render("✓")
-			case "succeeded":
-				statusIcon = blueStyle.Render("✓")
-			case "failed":
-				statusIcon = redStyle.Render("✗")
-			default:
-				statusIcon = yellowStyle.Render("○")
-			}
-
-			ctx.Printf("  %s %s - %s", statusIcon, timeStr, ui.DisplayShortID(dep.ShortId(), dep.Id()))
-
-			if dep.HasGitInfo() && dep.GitInfo() != nil && dep.GitInfo().HasSha() {
-				sha := dep.GitInfo().Sha()
-				if len(sha) > 8 {
-					sha = sha[:8]
-				}
-				ctx.Printf(" (%s)", sha)
-			}
-			ctx.Printf("\n")
+	if opts.Graph {
+		// Reuse the dashboard's one-shot graph renderer without taking over the
+		// terminal or starting a watch loop.
+		if err := appStatusGraphs(ctx, opts.AppCentric); err != nil {
+			ctx.Printf("%s\n", ui.NewHint(fmt.Sprintf("Usage unavailable: %v", err)).Render())
 		}
-
-		if len(recentResult.Deployments()) > 3 {
-			ctx.Printf("  %s\n", labelStyle.Render(fmt.Sprintf("... and %d more", len(recentResult.Deployments())-3)))
-		}
-	} else {
-		ctx.Printf("  No recent deployments\n")
 	}
-
-	ctx.Printf("\nUse 'miren app history %s' for full deployment history\n", opts.App)
+	ctx.Printf("\n%s\n", ui.NewHint(fmt.Sprintf("Use 'miren app history -a %s' for deployment history; 'miren app watch -a %s' for live usage", opts.App, opts.App)).Render())
 
 	return nil
 }

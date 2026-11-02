@@ -407,8 +407,8 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 	// Build outputs map from already-executed actions
 	outputs := make(map[string]json.RawMessage)
 	for actionName, result := range exec.ExecutedActions {
-		if result.UndoneAt != nil {
-			continue // Skip undone actions
+		if result.UndoneAt != nil || result.Error != "" {
+			continue // Failed outputs are diagnostic only.
 		}
 		node := def.Actions[actionName]
 		if node == nil {
@@ -487,8 +487,19 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				}
 			}
 
+			// Failed outputs are diagnostic only: they do not make the action
+			// eligible for undo or supply inputs to other actions.
+			var outputBytes []byte
+			if output != nil {
+				var marshalErr error
+				outputBytes, marshalErr = json.Marshal(output)
+				if marshalErr != nil {
+					log.Warn("failed to serialize diagnostic output", "action", actionName, "error", marshalErr)
+				}
+			}
 			// Record the failure
 			exec.ExecutedActions[actionName] = &ActionResult{
+				Output:     outputBytes,
 				ExecutedAt: now,
 				Error:      err.Error(),
 			}
@@ -711,6 +722,9 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	// every time, so the execution could never finish compensating.
 	outputs := make(map[string]json.RawMessage)
 	for actionName, result := range exec.ExecutedActions {
+		if result.Error != "" {
+			continue
+		}
 		node := def.Actions[actionName]
 		if node == nil {
 			continue
@@ -737,7 +751,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			continue // Already undone or never executed
 		}
 
-		// Skip actions that failed (they have an error and no output to undo)
+		// Failed actions clean up their own work, even if they returned diagnostics.
 		if result.Error != "" {
 			log.Info("skipping undo for failed action", "action", actionName, "error", result.Error)
 			continue

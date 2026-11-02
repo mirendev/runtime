@@ -14,7 +14,8 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren addon`](./command/addon.md) | Addon management commands |
 | [`miren addon create`](./command/addon-create.md) | Attach an addon to an application |
-| [`miren addon destroy`](./command/addon-destroy.md) | Remove an addon from an application |
+| [`miren addon delete`](./command/addon-delete.md) | Remove an addon from an application |
+| [`miren addon destroy`](./command/addon-destroy.md) | Deprecated: use 'miren addon delete' |
 | [`miren addon list`](./command/addon-list.md) | List addons attached to an application |
 | [`miren addon list-available`](./command/addon-list-available.md) | List available addons |
 | [`miren addon rotate`](./command/addon-rotate.md) | Rotate an addon's backing credential |
@@ -24,7 +25,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren admin`](./command/admin.md) | Call an admin method on an application |
+| [`miren admin`](./command/admin.md) | Alias for 'miren app admin run' |
 
 ## alias
 
@@ -38,23 +39,31 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren app`](./command/app.md) | Get information about an application |
-| [`miren app attach`](./command/app-attach.md) | Attach to a running task |
+| [`miren app admin`](./command/app-admin.md) | Application-defined admin methods |
+| [`miren app admin list`](./command/app-admin-list.md) | List application-defined admin methods |
+| [`miren app admin run`](./command/app-admin-run.md) | Call an admin method on an application |
+| [`miren app attach`](./command/app-attach.md) | Deprecated: use 'miren run attach' |
 | [`miren app delete`](./command/app-delete.md) | Delete an application and all its resources |
 | [`miren app history`](./command/app-history.md) | Show deployment history for an application |
+| [`miren app init`](./command/app-init.md) | Initialize a new application |
 | [`miren app list`](./command/app-list.md) | List all applications |
+| [`miren app pool-size`](./command/app-pool-size.md) | Show or set a service's active sandbox pool size |
 | [`miren app restart`](./command/app-restart.md) | Restart an application |
+| [`miren app rollback`](./command/app-rollback.md) | Roll back to a previous version |
 | [`miren app run`](./command/app-run.md) | Open interactive shell in a new sandbox |
-| [`miren app runs`](./command/app-runs.md) | List recent task runs |
-| [`miren app runs cancel`](./command/app-runs-cancel.md) | End a run early |
+| [`miren app runs`](./command/app-runs.md) | Deprecated: use 'miren run list' |
+| [`miren app runs cancel`](./command/app-runs-cancel.md) | Deprecated: use 'miren run cancel' |
 | [`miren app set-workload-role`](./command/app-set-workload-role.md) | Set the API role for an app's sandbox identity tokens |
 | [`miren app status`](./command/app-status.md) | Show current status of an application |
-| [`miren app versions`](./command/app-versions.md) | List app versions with status |
+| [`miren app top`](./command/app-top.md) | Show resource usage for an application |
+| [`miren app versions`](./command/app-versions.md) | Deprecated: use 'miren app history --versions' |
+| [`miren app watch`](./command/app-watch.md) | Watch application health and resource usage |
 
 ## apps
 
 | Command | Description |
 |---------|-------------|
-| [`miren apps`](./command/apps.md) | List all applications (alias for 'app list') |
+| [`miren apps`](./command/apps.md) | Deprecated: use 'miren app list' |
 
 ## auth
 
@@ -75,20 +84,29 @@ Complete reference for all `miren` CLI commands.
 | [`miren auth provider remove`](./command/auth-provider-remove.md) | Remove an identity provider |
 | [`miren auth provider show`](./command/auth-provider-show.md) | Show an identity provider |
 
+## cloud
+
+| Command | Description |
+|---------|-------------|
+| [`miren cloud`](./command/cloud.md) | Miren Cloud authentication |
+| [`miren cloud login`](./command/cloud-login.md) | Authenticate with miren.cloud |
+| [`miren cloud logout`](./command/cloud-logout.md) | Remove local authentication credentials |
+| [`miren cloud whoami`](./command/cloud-whoami.md) | Display information about the current authenticated user |
+
 ## cluster
 
 | Command | Description |
 |---------|-------------|
-| [`miren cluster`](./command/cluster.md) | List configured clusters |
+| [`miren cluster`](./command/cluster.md) | Manage configured clusters |
 | [`miren cluster add`](./command/cluster-add.md) | Add a new cluster configuration |
 | [`miren cluster available`](./command/cluster-available.md) | List the clusters Miren Cloud has for your account |
-| [`miren cluster current`](./command/cluster-current.md) | Show the pinned cluster for this app |
+| [`miren cluster current`](./command/cluster-current.md) | Show the globally selected cluster |
 | [`miren cluster export-address`](./command/cluster-export-address.md) | Export cluster address with TLS fingerprint for MIREN_CLUSTER |
 | [`miren cluster list`](./command/cluster-list.md) | List all configured clusters |
 | [`miren cluster remove`](./command/cluster-remove.md) | Remove a cluster from the configuration |
 | [`miren cluster restart`](./command/cluster-restart.md) | Restart the active cluster's server and wait for it to report ready |
 | [`miren cluster switch`](./command/cluster-switch.md) | Switch to a different cluster |
-| [`miren cluster upgrade`](./command/cluster-upgrade.md) | Upgrade the active cluster's server and wait for it to report ready |
+| [`miren cluster upgrade`](./command/cluster-upgrade.md) | A remote cluster: upgrade its server and wait for it to report ready |
 
 ## config
 
@@ -102,13 +120,21 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren deploy`](./command/deploy.md) | Deploy an application |
-| [`miren deploy cancel`](./command/deploy-cancel.md) | Cancel an in-progress deployment |
-| [`miren deploy target`](./command/deploy-target.md) | List deployment targets |
-| [`miren deploy target add`](./command/deploy-target-add.md) | Add a deployment target |
-| [`miren deploy target list`](./command/deploy-target-list.md) | List deployment targets |
-| [`miren deploy target remove`](./command/deploy-target-remove.md) | Remove a deployment target |
+| [`miren deploy`](./command/deploy.md) | Alias for 'miren deployment create' |
+| [`miren deploy cancel`](./command/deploy-cancel.md) | Deprecated: use 'miren deployment cancel' |
+| [`miren deploy target`](./command/deploy-target.md) | Deprecated: use 'miren target list' |
+| [`miren deploy target add`](./command/deploy-target-add.md) | Deprecated: use 'miren target add' |
+| [`miren deploy target list`](./command/deploy-target-list.md) | Deprecated: use 'miren target list' |
+| [`miren deploy target remove`](./command/deploy-target-remove.md) | Deprecated: use 'miren target remove' |
 | [`miren deploy target set-default`](./command/deploy-target-set-default.md) | Set the default deployment target |
+
+## deployment
+
+| Command | Description |
+|---------|-------------|
+| [`miren deployment`](./command/deployment.md) | Manage deployments |
+| [`miren deployment cancel`](./command/deployment-cancel.md) | Cancel an in-progress deployment |
+| [`miren deployment create`](./command/deployment-create.md) | Deploy an application |
 
 ## detective
 
@@ -141,7 +167,7 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren download`](./command/download.md) | Download management commands |
-| [`miren download release`](./command/download-release.md) | Download and extract miren release |
+| [`miren download release`](./command/download-release.md) | Deprecated: use 'miren server download-release' |
 
 ## env
 
@@ -163,19 +189,19 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren init`](./command/init.md) | Initialize a new application |
+| [`miren init`](./command/init.md) | Alias for 'miren app init' |
 
 ## login
 
 | Command | Description |
 |---------|-------------|
-| [`miren login`](./command/login.md) | Authenticate with miren.cloud |
+| [`miren login`](./command/login.md) | Alias for 'miren cloud login' |
 
 ## logout
 
 | Command | Description |
 |---------|-------------|
-| [`miren logout`](./command/logout.md) | Remove local authentication credentials |
+| [`miren logout`](./command/logout.md) | Alias for 'miren cloud logout' |
 
 ## logs
 
@@ -192,17 +218,18 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren rollback`](./command/rollback.md) | Roll back to a previous version |
+| [`miren rollback`](./command/rollback.md) | Alias for 'miren app rollback' |
 
 ## route
 
 | Command | Description |
 |---------|-------------|
-| [`miren route`](./command/route.md) | List all HTTP routes |
+| [`miren route`](./command/route.md) | Manage HTTP routes |
+| [`miren route delete`](./command/route-delete.md) | Remove an HTTP route |
 | [`miren route down`](./command/route-down.md) | Put an HTTP route into maintenance |
 | [`miren route list`](./command/route-list.md) | List all HTTP routes |
 | [`miren route protect`](./command/route-protect.md) | Protect an HTTP route with an identity provider |
-| [`miren route remove`](./command/route-remove.md) | Remove an HTTP route |
+| [`miren route remove`](./command/route-remove.md) | Deprecated: use 'miren route delete' |
 | [`miren route set`](./command/route-set.md) | Create or update an HTTP route |
 | [`miren route set-default`](./command/route-set-default.md) | Set an app as the default route |
 | [`miren route show`](./command/route-show.md) | Show details of an HTTP route |
@@ -213,12 +240,22 @@ Complete reference for all `miren` CLI commands.
 | [`miren route up`](./command/route-up.md) | Bring an HTTP route out of maintenance |
 | [`miren route waf`](./command/route-waf.md) | Manage WAF protection on an HTTP route |
 
+## run
+
+| Command | Description |
+|---------|-------------|
+| [`miren run`](./command/run.md) | Manage application task runs |
+| [`miren run attach`](./command/run-attach.md) | Attach to a running task |
+| [`miren run cancel`](./command/run-cancel.md) | End a run early |
+| [`miren run list`](./command/run-list.md) | List recent task runs |
+
 ## runner
 
 | Command | Description |
 |---------|-------------|
 | [`miren runner`](./command/runner.md) | Runner management commands |
 | [`miren runner cordon`](./command/runner-cordon.md) | Mark a runner unschedulable without stopping its sandboxes |
+| [`miren runner delete`](./command/runner-delete.md) | Remove a registered runner and clean up resources |
 | [`miren runner drain`](./command/runner-drain.md) | Cordon a runner and evict its sandboxes onto other nodes |
 | [`miren runner install`](./command/runner-install.md) | Install systemd service for miren runner |
 | [`miren runner join`](./command/runner-join.md) | Join this machine to a coordinator as a runner |
@@ -230,7 +267,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner operations show`](./command/runner-operations-show.md) | Show one restart or upgrade operation |
 | [`miren runner query`](./command/runner-query.md) | Query a runner's live host activity and print the JSON result |
 | [`miren runner reissue`](./command/runner-reissue.md) | Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity |
-| [`miren runner remove`](./command/runner-remove.md) | Remove a registered runner and clean up resources |
+| [`miren runner remove`](./command/runner-remove.md) | Deprecated: use 'miren runner delete' |
 | [`miren runner service-status`](./command/runner-service-status.md) | Show miren-runner systemd service status |
 | [`miren runner start`](./command/runner-start.md) | Start this machine as a distributed runner |
 | [`miren runner status`](./command/runner-status.md) | Show runner health and configuration |
@@ -253,21 +290,23 @@ Complete reference for all `miren` CLI commands.
 | [`miren sandbox inspect`](./command/sandbox-inspect.md) | Show one sandbox's resource usage and failure history |
 | [`miren sandbox list`](./command/sandbox-list.md) | List sandboxes (excludes dead by default) |
 | [`miren sandbox stop`](./command/sandbox-stop.md) | Stop a sandbox |
+| [`miren sandbox top`](./command/sandbox-top.md) | Show cluster-wide resource usage |
 
 ## sandbox-pool
 
 | Command | Description |
 |---------|-------------|
 | [`miren sandbox-pool`](./command/sandbox-pool.md) | Sandbox pool management commands |
-| [`miren sandbox-pool list`](./command/sandbox-pool-list.md) | List all sandbox pools |
-| [`miren sandbox-pool set-desired`](./command/sandbox-pool-set-desired.md) | Set desired instance count for a sandbox pool |
+| [`miren sandbox-pool list`](./command/sandbox-pool-list.md) | Deprecated: use 'miren debug sandbox-pool list' |
+| [`miren sandbox-pool set-desired`](./command/sandbox-pool-set-desired.md) | Deprecated: use 'miren debug sandbox-pool set-desired' |
 
 ## secret
 
 | Command | Description |
 |---------|-------------|
 | [`miren secret`](./command/secret.md) | Secret store management commands |
-| [`miren secret destroy`](./command/secret-destroy.md) | Permanently delete a version's value |
+| [`miren secret delete`](./command/secret-delete.md) | Permanently delete a version's value |
+| [`miren secret destroy`](./command/secret-destroy.md) | Deprecated: use 'miren secret delete' |
 | [`miren secret disable`](./command/secret-disable.md) | Stop a version from resolving |
 | [`miren secret enable`](./command/secret-enable.md) | Let a disabled version resolve again |
 | [`miren secret keyring`](./command/secret-keyring.md) | Show the cluster keyring and any rotation in flight |
@@ -280,7 +319,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren server`](./command/server.md) | Start the miren server |
+| [`miren server`](./command/server.md) | Alias for 'miren server start' |
 | [`miren server config`](./command/server-config.md) | Server configuration management commands |
 | [`miren server config generate`](./command/server-config-generate.md) | Generate a server configuration file from current settings |
 | [`miren server config validate`](./command/server-config-validate.md) | Validate a server configuration file |
@@ -288,6 +327,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server container install`](./command/server-container-install.md) | Install miren server in a container |
 | [`miren server container status`](./command/server-container-status.md) | Show status of miren server container |
 | [`miren server container uninstall`](./command/server-container-uninstall.md) | Uninstall miren server container |
+| [`miren server download-release`](./command/server-download-release.md) | Download and extract miren release |
 | [`miren server identity-anchor`](./command/server-identity-anchor.md) | Move where this cluster's workload identity is anchored |
 | [`miren server install`](./command/server-install.md) | Install systemd service for miren server |
 | [`miren server operations`](./command/server-operations.md) | Durable server restart and upgrade operations |
@@ -298,23 +338,33 @@ Complete reference for all `miren` CLI commands.
 | [`miren server register`](./command/server-register.md) | Register this cluster with miren.cloud |
 | [`miren server register status`](./command/server-register-status.md) | Show cluster registration status |
 | [`miren server restart`](./command/server-restart.md) | Restart the systemd-managed miren server and wait for it to report ready |
+| [`miren server start`](./command/server-start.md) | Start the miren server |
 | [`miren server status`](./command/server-status.md) | Show miren service status |
 | [`miren server uninstall`](./command/server-uninstall.md) | Remove systemd service for miren server |
 | [`miren server unregister`](./command/server-unregister.md) | Detach this cluster from miren.cloud |
 | [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'miren upgrade') |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
+## target
+
+| Command | Description |
+|---------|-------------|
+| [`miren target`](./command/target.md) | Manage deployment targets |
+| [`miren target add`](./command/target-add.md) | Add a deployment target |
+| [`miren target list`](./command/target-list.md) | List deployment targets |
+| [`miren target remove`](./command/target-remove.md) | Remove a deployment target |
+
 ## top
 
 | Command | Description |
 |---------|-------------|
-| [`miren top`](./command/top.md) | Show cluster-wide resource usage |
+| [`miren top`](./command/top.md) | Alias for 'miren sandbox top' |
 
 ## upgrade
 
 | Command | Description |
 |---------|-------------|
-| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI) |
+| [`miren upgrade`](./command/upgrade.md) | This machine: upgrade miren (server or runner and CLI on a systemd host, otherwise CLI) |
 
 ## version
 
@@ -326,7 +376,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren whoami`](./command/whoami.md) | Display information about the current authenticated user |
+| [`miren whoami`](./command/whoami.md) | Alias for 'miren cloud whoami' |
 
 ---
 
@@ -384,6 +434,9 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug saga abandon`](./command/debug-saga-abandon.md) | Give up a blocked saga execution (break-glass) |
 | [`miren debug saga list`](./command/debug-saga-list.md) | List saga executions |
 | [`miren debug saga show`](./command/debug-saga-show.md) | Show a saga execution in detail |
+| [`miren debug sandbox-pool`](./command/debug-sandbox-pool.md) | Sandbox pool diagnostics |
+| [`miren debug sandbox-pool list`](./command/debug-sandbox-pool-list.md) | List all sandbox pools |
+| [`miren debug sandbox-pool set-desired`](./command/debug-sandbox-pool-set-desired.md) | Set desired instance count for a sandbox pool |
 | [`miren debug test`](./command/debug-test.md) | Debug test commands |
 | [`miren debug test load`](./command/debug-test-load.md) | Loadtest a URL |
 

@@ -30,9 +30,12 @@ type AppCentric struct {
 	App string   `short:"a" long:"app" env:"MIREN_APP" description:"Application name"`
 	Dir string   `short:"d" long:"dir" description:"Directory to run from" default:"."`
 
-	config        *appconfig.AppConfig
-	resolvedDir   string // absolute path to the directory containing .miren/app.toml
-	foundInParent bool   // true when config was found by walking up from CWD
+	config         *appconfig.AppConfig
+	resolvedDir    string // absolute path to the directory containing .miren/app.toml
+	foundInParent  bool   // true when config was found by walking up from CWD
+	nonInteractive bool
+	noInit         bool
+	clusterPicked  bool
 }
 
 // ResolvedDir returns the directory that should be used as the app source.
@@ -43,6 +46,10 @@ func (a *AppCentric) ResolvedDir() string {
 		return a.resolvedDir
 	}
 	return a.Dir
+}
+
+func (a *AppCentric) isInteractive() bool {
+	return !a.nonInteractive && ui.IsInteractive()
 }
 
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
@@ -109,6 +116,8 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {
 			a.App = a.config.Name
+		} else if a.noInit {
+			return fmt.Errorf("app is required; pass -a <name> or run from a directory with .miren/app.toml")
 		} else {
 			// No app name from flag or config — try to help the user.
 			workDir := a.Dir
@@ -129,7 +138,7 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 
 			noAppMsg := "no app configuration found — run 'miren init' to get started, or pass -a <name>"
 
-			if !term.IsTerminal(int(os.Stdin.Fd())) {
+			if !a.isInteractive() {
 				return fmt.Errorf("%s", noAppMsg)
 			}
 
@@ -159,30 +168,15 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 	return nil
 }
 
-// LoadCluster implements per-app cluster pinning. Resolution priority:
-//  1. -C flag (explicit override) — also saves to state
-//  2. MIREN_CLUSTER env var
-//  3. Per-app cluster from ~/.config/miren/app-state.toml (handled by ConfigCentric)
-//  4. Global active_cluster from clientconfig (fallback)
+// LoadCluster restricts app commands to deploy targets when configured.
 func (a *AppCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
-	// If -C flag was passed, use ConfigCentric's logic and persist the choice.
-	if a.Cluster != "" {
-		cc, name, err := a.ConfigCentric.LoadCluster()
-		if err == nil && cc != nil {
-			a.saveClusterState(name)
-		}
-		return cc, name, err
+	name, err := a.selectAppCluster("", false)
+	if err != nil {
+		return nil, "", clusterSelectionError(err)
 	}
-
-	// Delegate to ConfigCentric which now handles per-app state.
-	return a.ConfigCentric.LoadCluster()
-}
-
-func (a *AppCentric) saveClusterState(name string) {
-	if a.App == "" {
-		return
-	}
-	_ = appconfig.SaveAppState(a.App, &appconfig.AppState{Cluster: name})
+	config := a.ConfigCentric
+	config.Cluster = name
+	return config.LoadCluster()
 }
 
 func MinuteLabeler(i int, v float64) string {
@@ -190,16 +184,41 @@ func MinuteLabeler(i int, v float64) string {
 	return t.Format("15:04")
 }
 
-func App(ctx *Context, opts struct {
+type AppDashboardOptions struct {
 	AppCentric
 	FormatOptions
 	Watch bool `short:"w" long:"watch" description:"Watch the app stats"`
 	Graph bool `short:"g" long:"graph" description:"Graph the app stats"`
-}) error {
+}
+
+func App(ctx *Context, opts AppDashboardOptions) error {
+	fmt.Fprintln(os.Stderr, "Warning: bare 'miren app' is deprecated; use 'miren app status' or 'miren app watch'.")
+	return appDashboard(ctx, opts)
+}
+
+func AppWatch(ctx *Context, opts AppDashboardOptions) error {
+	opts.Watch = true
+	return appDashboard(ctx, opts)
+}
+
+func appDashboard(ctx *Context, opts AppDashboardOptions) error {
+	// A pipe has no screen to redraw, and must not start Bubble Tea or hang.
+	if !term.IsTerminal(int(os.Stdout.Fd())) && !opts.IsJSON() {
+		return AppStatus(ctx, AppStatusOptions{AppCentric: opts.AppCentric, FormatOptions: opts.FormatOptions, Graph: opts.Graph})
+	}
+	return renderAppDashboard(ctx, opts)
+}
+
+func appStatusGraphs(ctx *Context, app AppCentric) error {
+	return renderAppDashboard(ctx, AppDashboardOptions{AppCentric: app, Graph: true})
+}
+
+func renderAppDashboard(ctx *Context, opts AppDashboardOptions) error {
 	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
 	}
+	defer crudcl.Close()
 
 	crud := app_v1alpha.NewCrudClient(crudcl)
 
@@ -213,6 +232,7 @@ func App(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
+	defer cl.Close()
 
 	ac := app_v1alpha.NewAppStatusClient(cl)
 
@@ -227,10 +247,7 @@ func App(ctx *Context, opts struct {
 		return printAppJSON(status)
 	}
 
-	//spew.Dump(status)
-	//windows := status.Pools()
-
-	p := tea.NewProgram(Model{
+	m := Model{
 		cfg:   cfgres.Configuration(),
 		cl:    ac,
 		app:   opts.App,
@@ -259,9 +276,18 @@ func App(ctx *Context, opts struct {
 
 		status: status,
 		graph:  opts.Graph,
-	})
+	}
+	if !opts.Watch {
+		width := 100
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			width = w
+		}
+		snapshot, _ := m.Update(tea.WindowSizeMsg{Width: width})
+		ctx.Printf("%s\n", snapshot.View())
+		return nil
+	}
 
-	_, err = p.Run()
+	_, err = tea.NewProgram(m).Run()
 	return err
 }
 

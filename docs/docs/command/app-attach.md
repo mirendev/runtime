@@ -1,12 +1,12 @@
 ---
 title: "miren app attach"
 sidebar_label: "app attach"
-description: "Attach to a running task"
+description: "Deprecated: use 'miren run attach'"
 ---
 
 # miren app attach
 
-Attach to a running task
+Deprecated: use 'miren run attach'
 
 Joins your terminal to a task run that is already going.
 
@@ -51,7 +51,7 @@ miren app attach <run> [flags]
 **Rejoin a run's terminal:**
 
 ```bash
-miren app attach run/myapp-session-4kq2np
+miren run attach run/myapp-session-4kq2np
 ```
 
 ## See also

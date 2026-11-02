@@ -8,8 +8,12 @@ import (
 
 func ClusterRemove(ctx *Context, opts struct {
 	Cluster string `position:"0" usage:"Name of the cluster to remove"`
+	Yes     bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
 	ConfigCentric
 }) error {
+	if opts.Cluster == "" && !ui.IsInteractive() {
+		return fmt.Errorf("missing cluster argument; use 'miren cluster remove <cluster-name>'")
+	}
 	cfg, err := opts.LoadConfig()
 	if err != nil {
 		return err
@@ -68,6 +72,15 @@ func ClusterRemove(ctx *Context, opts struct {
 	if !cfg.HasCluster(clusterName) {
 		availableClusters := cfg.GetClusterNames()
 		return fmt.Errorf("cluster %q not found. Available clusters: %v", clusterName, availableClusters)
+	}
+
+	confirmed, err := confirmDeletion(fmt.Sprintf("Remove cluster %q from local configuration? The cluster itself will not be deleted.", clusterName), opts.Yes, false, true)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ctx.Printf("Removal cancelled\n")
+		return nil
 	}
 
 	wasActive := cfg.ActiveCluster() == clusterName

@@ -1,12 +1,12 @@
 ---
 title: "miren deploy target remove"
 sidebar_label: "deploy target remove"
-description: "Remove a deployment target"
+description: "Deprecated: use 'miren target remove'"
 ---
 
 # miren deploy target remove
 
-Remove a deployment target
+Deprecated: use 'miren target remove'
 
 ## Usage
 
@@ -39,7 +39,7 @@ miren deploy target remove <name> [flags]
 **Remove a target:**
 
 ```bash
-miren deploy target remove staging
+miren target remove staging
 ```
 
 ## See also

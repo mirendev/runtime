@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -350,6 +351,20 @@ func TestSandbox(t *testing.T) {
 
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
+
+		exec, err := co.sagaStorage.Get(ctx, createSandboxSagaID(&tco))
+		r.NoError(err)
+		var boot bootContainersOut
+		r.NoError(json.Unmarshal(exec.ExecutedActions[actionBootCtrs].Output, &boot))
+		r.Len(boot.StartupTimings, 1)
+		timing := boot.StartupTimings[0]
+		r.Equal("sort", timing.Name)
+		r.Equal("mn-sort:latest", timing.Image)
+		r.Equal("hit", timing.ImageCache)
+		r.Len(timing.DurationsNS, 4)
+		for _, stage := range []string{"image_lookup", "container_create", "task_create", "task_start"} {
+			r.Positive(timing.DurationsNS[stage], stage)
+		}
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
 		r.NoError(err)
@@ -1704,6 +1719,7 @@ func TestSandbox(t *testing.T) {
 		staleTime := time.Now().Add(-3 * time.Minute)
 		staleEntity := entity.New(currentSb.Encode())
 		staleEntity.SetCreatedAt(staleTime)
+		staleEntity.Set(entity.Time(compute.SandboxLastActivityId, staleTime))
 		rpcE.SetId(id.String())
 		rpcE.SetAttrs(staleEntity.Attrs())
 		_, err = co.EAC.Put(ctx, &rpcE)
@@ -1724,8 +1740,10 @@ func TestSandbox(t *testing.T) {
 
 		// Second call to Create - this should update status to RUNNING
 		// because the sandbox containers are already running
+		beforeReady := time.Now()
 		err = co.Create(ctx, &pendingSb, meta)
 		r.NoError(err)
+		afterReady := time.Now()
 
 		// Verify status was updated to RUNNING in the entity
 		result, err = co.EAC.Get(ctx, id.String())
@@ -1734,6 +1752,7 @@ func TestSandbox(t *testing.T) {
 		var finalSb compute.Sandbox
 		finalSb.Decode(result.Entity().Entity())
 		r.Equal(compute.RUNNING, finalSb.Status, "sandbox should transition from PENDING to RUNNING when containers are healthy")
+		r.WithinRange(finalSb.LastActivity, beforeReady, afterReady, "recovered startup must receive a full idle delay")
 	})
 
 }

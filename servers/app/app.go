@@ -135,6 +135,9 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 		return err
 	}
 
+	results = slices.DeleteFunc(results, func(app *app_v1alpha.AppInfo) bool {
+		return !rpc.AllowApp(ctx, app.Name())
+	})
 	state.Results().SetApps(results)
 
 	return nil

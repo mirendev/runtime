@@ -1,14 +1,20 @@
 package commands
 
 import (
+	"fmt"
+
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
 func RouteRemove(ctx *Context, opts struct {
 	Host string `position:"0" usage:"Hostname of the route to remove"`
+	Yes  bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
 	ConfigCentric
 }) error {
+	if opts.Host == "" && !ui.IsInteractive() {
+		return fmt.Errorf("missing route argument; use 'miren route delete <route>'")
+	}
 	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
@@ -49,7 +55,7 @@ func RouteRemove(ctx *Context, opts struct {
 		// Run the picker
 		selected, err := ui.RunPicker(items,
 			ui.WithTitle("Select a route to remove:"),
-			ui.WithHeaders([]string{"HOST", "APP"}),
+			ui.WithHeaders([]string{"ROUTE", "APP"}),
 		)
 
 		if err != nil {
@@ -62,7 +68,7 @@ func RouteRemove(ctx *Context, opts struct {
 				}
 				ctx.Printf("  %s → %s\n", displayHost, r.App())
 			}
-			ctx.Printf("\nUsage: miren route remove <host>\n")
+			ctx.Printf("\nUsage: miren route delete <route>\n")
 			return nil
 		}
 
@@ -72,6 +78,19 @@ func RouteRemove(ctx *Context, opts struct {
 		}
 
 		host = selected.ID()
+	}
+
+	displayHost := host
+	if displayHost == "" {
+		displayHost = "(default)"
+	}
+	confirmed, err := confirmDeletion(fmt.Sprintf("Delete route %s?", displayHost), opts.Yes, false, true)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ctx.Printf("Deletion cancelled\n")
+		return nil
 	}
 
 	// Delete the route

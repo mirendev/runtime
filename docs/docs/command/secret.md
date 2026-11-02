@@ -16,7 +16,8 @@ miren secret [flags]
 
 ## Subcommands
 
-- [`miren secret destroy`](./secret-destroy.md) — Permanently delete a version's value
+- [`miren secret delete`](./secret-delete.md) — Permanently delete a version's value
+- [`miren secret destroy`](./secret-destroy.md) — Deprecated: use 'miren secret delete'
 - [`miren secret disable`](./secret-disable.md) — Stop a version from resolving
 - [`miren secret enable`](./secret-enable.md) — Let a disabled version resolve again
 - [`miren secret keyring`](./secret-keyring.md) — Show the cluster keyring and any rotation in flight
