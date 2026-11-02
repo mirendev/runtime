@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/activator"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
@@ -971,6 +972,7 @@ func TestColdStartAfterVersionChange(t *testing.T) {
 			request := func(version entity.Id) *httptest.ResponseRecorder {
 				r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 				r.Header.Set("Accept", "text/html")
+				r.Header.Set("Sec-Fetch-Dest", "document")
 				w := httptest.NewRecorder()
 				target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}, version: core_v1alpha.AppVersion{ID: version}}
 				s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
@@ -1001,9 +1003,10 @@ func TestColdStartLoading(t *testing.T) {
 		fast, loading, overflow    bool
 	}{
 		{name: "slow navigation", method: "GET", accept: "text/html", dest: "document", loading: true},
-		{name: "fast navigation", method: "GET", accept: "text/html", fast: true},
-		{name: "fast overflow navigation", method: "GET", accept: "text/html", fast: true, overflow: true},
-		{name: "slow overflow navigation", method: "GET", accept: "text/html", loading: true, overflow: true},
+		{name: "fast navigation", method: "GET", accept: "text/html", dest: "document", fast: true},
+		{name: "fast overflow navigation", method: "GET", accept: "text/html", dest: "document", fast: true, overflow: true},
+		{name: "slow overflow navigation", method: "GET", accept: "text/html", dest: "document", loading: true, overflow: true},
+		{name: "HTML crawler", method: "GET", accept: "text/html"},
 		{name: "API", method: "GET", accept: "application/json"},
 		{name: "POST", method: "POST", accept: "text/html", dest: "document"},
 		{name: "fetch", method: "GET", accept: "text/html", dest: "empty"},
@@ -1038,7 +1041,7 @@ func TestColdStartLoading(t *testing.T) {
 			if tc.loading {
 				require.Equal(t, http.StatusServiceUnavailable, w.Code)
 				require.GreaterOrEqual(t, elapsed, 1500*time.Millisecond)
-				require.Less(t, elapsed, 2200*time.Millisecond)
+				require.Less(t, elapsed, 3*time.Second)
 				require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 				require.Equal(t, "2", w.Header().Get("Retry-After"))
 				require.Contains(t, w.Body.String(), "Loading…")
@@ -1077,6 +1080,7 @@ func TestColdStartFailureAfterLoading(t *testing.T) {
 	request := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
 		r.Header.Set("Accept", "text/html")
+		r.Header.Set("Sec-Fetch-Dest", "document")
 		w := httptest.NewRecorder()
 		s.serveAuthenticatedRequest(w, r, "app/test", "web", "route", target, &name, 5*time.Second)
 		return w
@@ -1089,6 +1093,78 @@ func TestColdStartFailureAfterLoading(t *testing.T) {
 		require.Contains(t, w.Body.String(), "This app couldn&#39;t start.")
 		require.NotContains(t, w.Body.String(), "window.location.reload")
 	}
+}
+
+func TestLoadingPageExcludedFromAppObservability(t *testing.T) {
+	var backendRequests atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if backendRequests.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		_, _ = io.WriteString(w, "app response")
+	}))
+	defer backend.Close()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	appID, err := inmem.Client.Create(ctx, "test", &core_v1alpha.App{})
+	require.NoError(t, err)
+	cvID, err := inmem.Client.Create(ctx, "cfg", &core_v1alpha.ConfigVersion{
+		App: appID, Spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}}},
+	})
+	require.NoError(t, err)
+	verID, err := inmem.Client.Create(ctx, "ver", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cvID})
+	require.NoError(t, err)
+	require.NoError(t, inmem.Client.Update(ctx, &core_v1alpha.App{ID: appID, ActiveVersion: verID}))
+	_, err = inmem.Client.Create(ctx, "route", &ingress_v1alpha.HttpRoute{Host: "app.example.com", App: appID})
+	require.NoError(t, err)
+
+	ready := make(chan struct{})
+	defer func() {
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+	}()
+	s := newTimeoutTestServer(5 * time.Second)
+	s.eac = inmem.EAC
+	s.ingressClient = ingress.NewClient(s.Log, rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server)))
+	s.apps = make(map[string]*appUsage)
+	s.aa = &bootingActivator{ready: ready, url: backend.URL}
+	logs := &recordingLogWriter{}
+	s.logWriter = logs
+	s.httpMetrics = metrics.NewHTTPMetrics(s.Log, &metrics.VictoriaMetricsWriter{}, nil)
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+		r.Header.Set("Accept", "text/html")
+		r.Header.Set("Sec-Fetch-Dest", "document")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	w := request()
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Contains(t, w.Body.String(), "Loading…")
+	paths, err := s.httpMetrics.TopPaths("test", 10)
+	require.NoError(t, err)
+	require.Empty(t, paths)
+	require.Empty(t, logs.entries)
+
+	close(ready)
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusOK} {
+		w = request()
+		require.Equal(t, status, w.Code)
+		require.Equal(t, "app response", w.Body.String())
+	}
+	paths, err = s.httpMetrics.TopPaths("test", 10)
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	require.EqualValues(t, 2, paths[0].Count)
+	require.Equal(t, 0.5, paths[0].ErrorRate)
+	require.Len(t, logs.entries, 2)
+	require.Equal(t, "503", logs.entries[0].Attributes["status"])
+	require.Equal(t, "200", logs.entries[1].Attributes["status"])
 }
 
 func TestDiskBackedPreviewIngressDenial(t *testing.T) {

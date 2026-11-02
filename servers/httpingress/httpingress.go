@@ -642,6 +642,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h.handleRequest(w, req)
 }
 
+type loadingPageKey struct{}
+
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	// Always overwrite client/proxy values: this measures arrival at Miren,
@@ -665,6 +667,8 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 			attribute.String("server.address", req.Host),
 		))
 	defer span.End()
+	var loadingPage bool
+	ctx = context.WithValue(ctx, loadingPageKey{}, &loadingPage)
 	req = req.WithContext(ctx)
 
 	// Handle OIDC discovery — only on the issuer's own hostname to avoid
@@ -704,7 +708,8 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		attribute.String("miren.app.name", appName),
 	)
 
-	if h.httpMetrics != nil {
+	// A loading page describes ingress startup, not an app request or failure.
+	if h.httpMetrics != nil && !loadingPage {
 		if appName == "" {
 			appName = "unknown"
 		}
@@ -1113,7 +1118,7 @@ func leaseCacheKey(appID entity.Id, service string, versionID entity.Id, ephemer
 // Only browser navigations can safely receive a loading page that retries via GET.
 func isBrowserNavigation(req *http.Request) bool {
 	return req.Method == http.MethodGet && errorRepresentation(req.Header.Get("Accept")) == "text/html" &&
-		(req.Header.Get("Sec-Fetch-Dest") == "" || req.Header.Get("Sec-Fetch-Dest") == "document")
+		req.Header.Get("Sec-Fetch-Dest") == "document"
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
@@ -1226,6 +1231,9 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		if isBrowserNavigation(req) {
 			localLease, err = h.waitForNavigationLease(ctx, leaseKey, &av, service)
 			if errors.Is(err, errAppLoading) {
+				if loadingPage, ok := ctx.Value(loadingPageKey{}).(*bool); ok {
+					*loadingPage = true
+				}
 				serveLoading(w)
 				return
 			}
