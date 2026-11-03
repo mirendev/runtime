@@ -38,21 +38,28 @@ answers, the entry is saved and it tells you which route worked. A
 cluster that neither you nor cloud can reach still fails, because that is a real
 problem rather than a routing choice.
 
-Each subsequent connection tries the saved direct addresses first, then falls
-back to cloud. Failed direct attempts are cached for 30 seconds, so repeated
-commands off-network do not each wait for a timeout. After that, direct routing
-is tried again. Moving between networks does not permanently change your config.
+Subsequent connections reuse the last route that successfully established an RPC
+client, without probing first. The cache is local to your machine and shared by
+commands; moving between networks does not permanently change your config. A
+failed connection discards the cached route, discovers a route again, and retries
+connection setup. Application calls are never replayed. A server rejecting a
+capability or your permissions does not trigger route rediscovery.
+
+A successful cloud route is cached for 30 seconds without extending its lifetime
+on every use, so returning to the direct network is noticed. If the cached cloud
+route fails, direct discovery runs immediately rather than waiting for expiry.
+Unsuccessful routes are never cached. When both routes fail, the error includes
+the direct failures and the cloud failure, along with the usual diagnostic and
+`miren doctor` guidance.
+
 Advertised addresses and the cluster CA fingerprint are retained even when you
 add the cluster remotely, so a later direct connection can verify the cluster.
-When only the fingerprint is saved, the first TLS handshake fails verification
-and supplies the certificate chain. The CLI checks the CA fingerprint, then
-retries with that CA trusted and normal TLS verification enabled. This adds a
-handshake attempt to the direct probe; entries with a saved CA do not need it.
-
-The cache records a failed direct attempt, not proof that cloud is available.
-If the cluster has no working cloud link, commands can fail through cloud until
-the hint expires. Use `miren -vv app list` to see why direct routing failed;
-debug output includes the attempted addresses and errors, even on cache hits.
+When only the fingerprint is saved and there is no cached direct route, the first
+TLS handshake fails verification and supplies the certificate chain. The CLI
+checks the CA fingerprint, then retries with that CA trusted and normal TLS
+verification enabled. The recovered CA is cached with the successful direct route,
+so later connections need only their own RPC handshake. Entries with a saved CA
+and address can connect without a preliminary probe even on the first use.
 
 It tries the route rather than asking whether one exists, because those are
 different questions. Cloud can hold a link to a cluster whose runtime is older

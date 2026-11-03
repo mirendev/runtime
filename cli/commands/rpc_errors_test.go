@@ -1,11 +1,15 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +21,47 @@ import (
 
 func diagnosticContext() *Context {
 	return &Context{ClusterName: "local", CommandName: "route list"}
+}
+
+func TestRPCClientDiagnosesBothRoutesFailing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer cloud.Close()
+	cfg := clientconfig.NewConfig()
+	cfg.SetIdentity("cloud", &clientconfig.IdentityConfig{
+		Type: clientconfig.IdentityToken, Issuer: cloud.URL, Token: freshLoginJWT(t),
+	})
+	cluster := &clientconfig.ClusterConfig{XID: "cluster-down", Identity: "cloud", CloudURL: cloud.URL,
+		AllAddresses: []string{silent.LocalAddr().String()}, Insecure: true}
+	ctx := &Context{Context: t.Context(), ClientConfig: cfg, ClusterConfig: cluster,
+		ClusterName: "wilderness", CommandName: "app list", Stderr: io.Discard,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	defer ctx.Close()
+	for range 2 {
+		_, err := ctx.RPCClient("entities")
+		d, ok := errors.AsType[*ui.Diagnostic](err)
+		if !ok {
+			t.Fatalf("expected a diagnostic for both failed routes, got %T: %v", err, err)
+		}
+		var rendered bytes.Buffer
+		d.WriteForTerminal(&rendered)
+		for _, want := range []string{`couldn't reach cluster "wilderness" directly or through Miren Cloud`,
+			silent.LocalAddr().String(), "Nothing answered after", "404", "miren doctor"} {
+			if !strings.Contains(rendered.String(), want) {
+				t.Errorf("diagnostic lacks %q:\n%s", want, rendered.String())
+			}
+		}
+		if _, ok := errors.AsType[*rpc.ResolveError](err); !ok {
+			t.Error("the direct timeout must remain available to callers")
+		}
+	}
 }
 
 // Each kind has to produce its own diagnosis. The bug this replaces collapsed

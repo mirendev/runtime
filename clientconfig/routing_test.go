@@ -3,18 +3,24 @@ package clientconfig
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/qlogwriter"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/pkg/caauth"
@@ -84,7 +90,7 @@ func TestAutomaticClusterRouting(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "cluster CA fingerprint mismatch")
 	diagnostics.Reset()
 	require.ErrorContains(t, connect(), "503")
-	require.Contains(t, diagnostics.String(), "Using cached direct-route failure")
+	require.Contains(t, diagnostics.String(), "Direct cluster route failed")
 	require.Contains(t, diagnostics.String(), server.ListenAddr())
 	require.Contains(t, diagnostics.String(), "cluster CA fingerprint mismatch")
 	cluster.CACertFingerprint = ca.Fingerprint()
@@ -167,21 +173,12 @@ insecure: true
 		require.ErrorContains(t, connect(), "503")
 	})
 
-	// Cache expiry must restore the direct attempt with unchanged config.
+	// A failed relay is never cached: recovery is noticed immediately.
 	address := server.ListenAddr()
 	require.NoError(t, server.Close())
 	require.ErrorContains(t, connect(), "503")
 	server, err = rpc.NewState(t.Context(), rpc.WithBindAddr(address), rpc.WithCertPEMs(cert.CertPEM, cert.KeyPEM))
 	require.NoError(t, err)
-	require.ErrorContains(t, connect(), "503", "cloud hint skips probing until it expires")
-	cacheDir, err := getCacheDir()
-	require.NoError(t, err)
-	paths, err := filepath.Glob(filepath.Join(cacheDir, "cloud_route_*"))
-	require.NoError(t, err)
-	for _, path := range paths {
-		old := time.Now().Add(-time.Minute)
-		require.NoError(t, os.Chtimes(path, old, old))
-	}
 	assertDirect()
 
 	canceledCtx, cancel := context.WithCancel(t.Context())
@@ -220,7 +217,10 @@ func TestAutomaticClusterRoutingCancelsDNS(t *testing.T) {
 	go func() {
 		state, err := cluster.State(ctx, config)
 		if state != nil {
-			_ = state.Close()
+			defer state.Close()
+		}
+		if err == nil {
+			_, err = state.Client("missing")
 		}
 		result <- err
 	}()
@@ -238,4 +238,129 @@ func TestAutomaticClusterRoutingCancelsDNS(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return active.Load() == 0 }, time.Second, time.Millisecond,
 		"cancellation must stop the outstanding DNS work, not just abandon its result")
+}
+
+func TestSuccessfulClusterRoutes(t *testing.T) {
+	for _, savedCA := range []bool{false, true} {
+		t.Run(fmt.Sprintf("saved_CA_%v", savedCA), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			var handshakes, calls, cloudCalls atomic.Int64
+			tracer := rpc.DefaultQUICConfig.Tracer
+			rpc.DefaultQUICConfig.Tracer = func(_ context.Context, isClient bool, _ quic.ConnectionID) qlogwriter.Trace {
+				if !isClient {
+					handshakes.Add(1)
+				}
+				return nil
+			}
+			defer func() { rpc.DefaultQUICConfig.Tracer = tracer }()
+			ca := testAuthority(t)
+			cert, err := ca.IssueCertificate(caauth.Options{CommonName: APIServerName, DNSNames: []string{APIServerName}, ValidFor: time.Hour})
+			require.NoError(t, err)
+			iface := rpc.NewInterface([]rpc.Method{{Name: "Fail", InterfaceName: "routing", Public: true,
+				Handler: func(context.Context, rpc.Call) error {
+					calls.Add(1)
+					return errors.New("application failed after writing")
+				},
+			}}, nil)
+			start := func(address string) *rpc.State {
+				server, err := rpc.NewState(t.Context(), rpc.WithBindAddr(address), rpc.WithCertPEMs(cert.CertPEM, cert.KeyPEM))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = server.Close() })
+				server.Server().ExposeValue("routing", iface)
+				return server
+			}
+			server := start("127.0.0.1:0")
+			relay, err := rpc.NewState(t.Context(), rpc.WithBindAddr("127.0.0.1:0"), rpc.WithWSBindAddr("127.0.0.1:0"), rpc.WithCertPEMs(cert.CertPEM, cert.KeyPEM))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = relay.Close() })
+			relay.Server().ExposeValue("routing", iface)
+			target, err := url.Parse("https://" + relay.WSListenAddr())
+			require.NoError(t, err)
+			roots := x509.NewCertPool()
+			require.True(t, roots.AppendCertsFromPEM(ca.GetCACertificate()))
+			proxy := httputil.NewSingleHostReverseProxy(target)
+			proxy.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: APIServerName}}
+			var cloudDown atomic.Bool
+			cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cloudCalls.Add(1)
+				if cloudDown.Load() {
+					http.Error(w, "no link to the cluster", http.StatusServiceUnavailable)
+					return
+				}
+				r.URL.Path = "/_rpc/message"
+				proxy.ServeHTTP(w, r)
+			}))
+			t.Cleanup(cloud.Close)
+			cluster := &ClusterConfig{XID: "cluster-cache", Identity: "cloud", CloudURL: cloud.URL,
+				AllAddresses: []string{server.ListenAddr()}, CACertFingerprint: ca.Fingerprint(), Insecure: true}
+			if savedCA {
+				cluster.Hostname, cluster.CACert, cluster.TLSServerName = server.ListenAddr(), string(ca.GetCACertificate()), APIServerName
+			}
+			connect := func() *rpc.NetworkClient {
+				// Recreate Config too: the successful route must survive separate CLI invocations.
+				state, err := cluster.State(t.Context(), viaCloudConfig(t, cluster))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = state.Close() })
+				client, err := state.Client("routing")
+				require.NoError(t, err)
+				return client
+			}
+			first := connect()
+			initial := int64(3)
+			if savedCA {
+				initial = 1
+			}
+			require.Equal(t, initial, handshakes.Load(), "saved trust needs no probe; fingerprint recovery is paid once")
+			connect()
+			connect()
+			require.Equal(t, initial+2, handshakes.Load(), "each steady-state RPC client needs only its own handshake")
+			require.ErrorContains(t, first.Call(t.Context(), "Fail", nil, nil), "application failed after writing")
+			require.EqualValues(t, 1, calls.Load(), "routing must never replay an application call")
+			require.Zero(t, cloudCalls.Load())
+			missing, err := cluster.State(t.Context(), viaCloudConfig(t, cluster))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = missing.Close() })
+			_, err = missing.Client("missing")
+			var lookup *rpc.ResolveError
+			require.ErrorAs(t, err, &lookup)
+			require.Equal(t, rpc.ResolveLookupError, lookup.Kind)
+			require.Equal(t, initial+3, handshakes.Load(), "a lookup rejection must not rediscover a working route")
+			require.Zero(t, cloudCalls.Load())
+			if savedCA {
+				return
+			}
+
+			address := server.ListenAddr()
+			require.NoError(t, server.Close())
+			connect() // The cached direct route fails; rediscovery falls back to the working relay.
+			require.EqualValues(t, 1, cloudCalls.Load())
+			cacheDir, err := getCacheDir()
+			require.NoError(t, err)
+			paths, err := filepath.Glob(filepath.Join(cacheDir, "cluster_route_*.json"))
+			require.NoError(t, err)
+			require.Len(t, paths, 1)
+			firstCloud, err := os.Stat(paths[0])
+			require.NoError(t, err)
+			server = start(address)
+			before := handshakes.Load()
+			connect()
+			require.EqualValues(t, 2, cloudCalls.Load(), "a working cloud route is reused until expiry")
+			require.Equal(t, before, handshakes.Load(), "a cached cloud route must not probe")
+			info, err := os.Stat(paths[0])
+			require.NoError(t, err)
+			require.Equal(t, firstCloud.ModTime(), info.ModTime(), "using a cloud route must not postpone rediscovery")
+			require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+			old := time.Now().Add(-time.Minute)
+			require.NoError(t, os.Chtimes(paths[0], old, old))
+			connect()
+			require.EqualValues(t, 2, cloudCalls.Load(), "cloud expiry notices the direct network again")
+			require.NoError(t, server.Close())
+			connect()
+			require.EqualValues(t, 3, cloudCalls.Load())
+			start(address)
+			cloudDown.Store(true)
+			connect()
+			require.EqualValues(t, 4, cloudCalls.Load(), "a failed cached cloud route triggers direct rediscovery without waiting for expiry")
+		})
+	}
 }

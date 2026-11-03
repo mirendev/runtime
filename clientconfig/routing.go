@@ -25,8 +25,43 @@ import (
 
 const cloudRouteCacheTTL = 30 * time.Second
 
-// Only failed direct attempts are cached. A working direct route is checked
-// again on the next connection, so leaving its network never pins us to it.
+// ClusterRouteError preserves both connection failures when neither route works.
+type ClusterRouteError struct {
+	Direct error
+	Cloud  error
+}
+
+func (e *ClusterRouteError) Error() string {
+	return fmt.Sprintf("couldn't connect directly (%v) or through Miren Cloud (%v)", e.Direct, e.Cloud)
+}
+
+func (e *ClusterRouteError) Unwrap() []error { return []error{e.Direct, e.Cloud} }
+
+type clusterRoute struct {
+	Address       string `json:"address,omitempty"`
+	CACert        string `json:"ca_cert,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	Cloud         bool   `json:"cloud,omitempty"`
+}
+
+func (r clusterRoute) save(path string) {
+	if path == "" {
+		return
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".cluster-route-*")
+	if err != nil {
+		return
+	}
+	defer os.Remove(f.Name())
+	err = json.NewEncoder(f).Encode(r)
+	closeErr := f.Close()
+	if err == nil && closeErr == nil {
+		_ = os.Rename(f.Name(), path)
+	}
+}
+
+// Successful routes avoid discovery on the next connection. Failed connections
+// invalidate the route before rediscovery; no application call is retried.
 func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rpc.StateOption, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -43,60 +78,153 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 	}{c, cloudURL})
 	key := sha256.Sum256(data)
 	cacheDir, _ := getCacheDir()
-	cachePath := filepath.Join(cacheDir, fmt.Sprintf("cloud_route_%x", key))
+	var cachePath string
 	if cacheDir != "" {
-		if info, err := os.Stat(cachePath); err == nil && time.Since(info.ModTime()) < cloudRouteCacheTTL {
-			reason, _ := os.ReadFile(cachePath)
-			log.G(ctx).WithField("cluster", c.XID).WithField("direct_errors", string(reason)).Debug("Using cached direct-route failure; trying cloud")
-			return c.viaCloudOptions(ctx, config)
-		}
+		cachePath = filepath.Join(cacheDir, fmt.Sprintf("cluster_route_%x.json", key))
 	}
 
+	return []rpc.StateOption{
+		rpc.WithBindAddr("[::]:0"),
+		rpc.WithClientRouting(func(ctx context.Context, connect func(...rpc.StateOption) (*rpc.NetworkClient, error)) (*rpc.NetworkClient, error) {
+			attempt := func(route clusterRoute) (*rpc.NetworkClient, error) {
+				var opts []rpc.StateOption
+				var err error
+				if route.Cloud {
+					opts, err = c.viaCloudOptions(ctx, config)
+				} else {
+					direct := *c
+					direct.Hostname, direct.AllAddresses = route.Address, nil
+					direct.CACert, direct.TLSServerName = route.CACert, route.TLSServerName
+					opts, err = direct.directRPCOptions(ctx, config, "")
+				}
+				if err != nil {
+					return nil, err
+				}
+				return connect(opts...)
+			}
+			var cached clusterRoute
+			data, _ := os.ReadFile(cachePath)
+			info, statErr := os.Stat(cachePath)
+			valid := json.Unmarshal(data, &cached) == nil &&
+				((cached.Cloud && statErr == nil && time.Since(info.ModTime()) < cloudRouteCacheTTL) || (!cached.Cloud && cached.Address != ""))
+			// An address with saved trust can be dialed without a preliminary probe.
+			if !valid && c.Hostname != "" && (c.CACert != "" || c.CACertFingerprint == "") {
+				cached = clusterRoute{Address: c.Hostname, CACert: c.CACert, TLSServerName: c.TLSServerName}
+				valid = true
+			}
+			var directErr error
+			if valid {
+				client, err := attempt(cached)
+				if err == nil {
+					// Do not slide a cloud route's expiry on every successful use.
+					if !cached.Cloud {
+						cached.save(cachePath)
+					}
+					return client, nil
+				}
+				if !routeConnectionFailed(err) {
+					return nil, err
+				}
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				_ = os.Remove(cachePath)
+				if !cached.Cloud {
+					directErr = fmt.Errorf("%s: %w", cached.Address, err)
+				}
+				log.G(ctx).WithError(err).Debug("Remembered cluster route failed; rediscovering")
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			direct, probeErr := c.discoverDirectRoute(ctx)
+			directErr = errors.Join(directErr, probeErr)
+			if direct != nil {
+				route := clusterRoute{Address: direct.Hostname, CACert: direct.CACert, TLSServerName: direct.TLSServerName}
+				client, err := attempt(route)
+				if err == nil {
+					route.save(cachePath)
+					return client, nil
+				}
+				if !routeConnectionFailed(err) {
+					return nil, err
+				}
+				directErr = errors.Join(directErr, fmt.Errorf("%s: %w", route.Address, err))
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			route := clusterRoute{Cloud: true}
+			client, err := attempt(route)
+			if err == nil {
+				route.save(cachePath)
+				return client, nil
+			}
+			return nil, &ClusterRouteError{Direct: directErr, Cloud: err}
+		}),
+	}, nil
+}
+
+// A server rejecting a capability or credential is not a broken network route.
+func routeConnectionFailed(err error) bool {
+	var re *rpc.ResolveError
+	if errors.As(err, &re) {
+		switch re.Kind {
+		case rpc.ResolveLookupError, rpc.ResolveStatusError, rpc.ResolveDecodeError:
+			return false
+		case rpc.ResolveHTTPError, rpc.ResolveUnreachableError, rpc.ResolveWentSilentError, rpc.ResolveNoAnswerError:
+			return true
+		}
+	}
+	return true
+}
+
+func (c *ClusterConfig) discoverDirectRoute(ctx context.Context) (*ClusterConfig, error) {
 	addresses := slices.Clone(c.AllAddresses)
 	if c.Hostname != "" && !slices.Contains(addresses, c.Hostname) {
 		addresses = append(addresses, c.Hostname)
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("no direct addresses advertised")
 	}
 	type result struct {
 		cluster *ClusterConfig
 		err     error
 		address string
+		elapsed time.Duration
 	}
 	results := make(chan result, len(addresses))
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	started := time.Now()
 	for _, address := range addresses {
 		go func() {
 			cluster, err := c.probeDirectRoute(probeCtx, address)
-			results <- result{cluster, err, address}
+			results <- result{cluster, err, address, time.Since(started)}
 		}()
 	}
-	var failures []string
+	var failures []error
 	for range addresses {
 		select {
 		case res := <-results:
 			if res.err == nil {
 				cancel()
-				return res.cluster.directRPCOptions(ctx, config, "")
+				return res.cluster, nil
 			}
-			failure := fmt.Sprintf("%s: %v", res.address, res.err)
+			failure := fmt.Errorf("%s: %w", res.address, res.err)
+			var timeout net.Error
+			var dns *net.DNSError
+			if errors.As(res.err, &timeout) && timeout.Timeout() && !errors.As(res.err, &dns) {
+				failure = rpc.NewResolveUnreachableError("", res.address, res.elapsed, res.err)
+			}
 			failures = append(failures, failure)
 			log.G(ctx).WithField("cluster", c.XID).WithField("direct_error", failure).Debug("Direct cluster route failed")
 		case <-probeCtx.Done():
-			failures = append(failures, fmt.Sprintf("probing %v: %v", addresses, probeCtx.Err()))
-			goto relay
+			failures = append(failures, fmt.Errorf("probing %v: %w", addresses, probeCtx.Err()))
+			return nil, errors.Join(failures...)
 		}
 	}
-
-relay:
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	log.G(ctx).WithField("cluster", c.XID).WithField("direct_errors", strings.Join(failures, "; ")).Debug("No verified direct route; trying cloud")
-	opts, err := c.viaCloudOptions(ctx, config)
-	if err == nil && cacheDir != "" {
-		_ = os.WriteFile(cachePath, []byte(strings.Join(failures, "; ")), 0600)
-	}
-	return opts, err
+	return nil, errors.Join(failures...)
 }
 
 // Probe without sending credentials. If add ran off-network, cloud's CA
