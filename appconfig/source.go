@@ -11,9 +11,6 @@ func (ac *AppConfig) SourceDir(configDir string) string {
 	if ac == nil || ac.Build == nil || ac.Build.SourceRoot == "" {
 		return configDir
 	}
-	if filepath.IsAbs(ac.Build.SourceRoot) {
-		return filepath.Clean(ac.Build.SourceRoot)
-	}
 	return filepath.Join(configDir, ac.Build.SourceRoot)
 }
 

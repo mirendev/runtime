@@ -104,7 +104,7 @@ version = "3.12"
 onbuild = ["npm run build"]
 ```
 
-For a monorepo app, `build.source_root` selects a shared upload root and build context. The path is relative to the config root (the directory containing `.miren`), not to `.miren` itself:
+For a monorepo app, `build.source_root` selects a shared upload root and build context. The path must be relative to the config root (the directory containing `.miren`), not to `.miren` itself; absolute paths are rejected:
 
 ```toml title="services/api/.miren/app.toml"
 name = "my-api"

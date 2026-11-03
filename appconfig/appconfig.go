@@ -477,8 +477,11 @@ func (ac *AppConfig) Validate() error {
 		}
 	}
 
-	// Validate build secrets
+	// Validate build configuration
 	if ac.Build != nil {
+		if filepath.IsAbs(ac.Build.SourceRoot) {
+			return &ValidationError{KeyPath: "build.source_root", Message: "build.source_root must be a relative path"}
+		}
 		seen := make(map[string]bool, len(ac.Build.Secrets))
 		for i, bs := range ac.Build.Secrets {
 			if err := bs.validate(fmt.Sprintf("build.secrets[%d]", i)); err != nil {

@@ -50,7 +50,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "source_root": {"type": "string", "description": "Upload root and build context, relative to the config root (the directory containing .miren). Defaults to the config root when omitted."},
+        "source_root": {"type": "string", "description": "Upload root and build context. Must be relative to the config root (the directory containing .miren); absolute paths are rejected. Defaults to the config root when omitted."},
         "version": {"type": "string", "description": "Language or runtime version."},
         "dockerfile": {"type": "string", "description": "Path to a custom Dockerfile, relative to the source root."},
         "onbuild": {"type": "array", "description": "Commands run in /app after the main build steps.", "items": {"type": "string"}},

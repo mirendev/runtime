@@ -29,7 +29,6 @@ func TestSourceRoot(t *testing.T) {
 		{".", configDir},
 		{"../..", dir},
 		{"src", filepath.Join(configDir, "src")},
-		{dir, dir},
 	} {
 		t.Run(tc.root, func(t *testing.T) {
 			ac, err := Parse([]byte("[build]\nsource_root = " + strconv.Quote(tc.root)))
@@ -43,6 +42,8 @@ func TestSourceRoot(t *testing.T) {
 	var absent *AppConfig
 	require.Equal(t, configDir, absent.SourceDir(configDir))
 	require.Empty(t, absent.UploadFiles(configDir))
+	_, err := Parse([]byte("[build]\nsource_root = " + strconv.Quote(dir)))
+	require.ErrorContains(t, err, "build.source_root must be a relative path")
 }
 
 func TestSourceRootUploads(t *testing.T) {
