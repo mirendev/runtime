@@ -74,6 +74,16 @@ In a monorepo, give each independently deployed service its own `.miren` directo
 
 Set `build.source_root` when an app needs source outside its own directory. Miren resolves it relative to the **config root**, the directory containing `.miren`, and uses the resulting **source root** as the upload root and build context. Dockerfile and top-level `include` paths are relative to the source root. Without `source_root`, the config root and source root are the same, as before.
 
+:::warning[Review the upload root]
+`source_root` must be relative; absolute paths are rejected. Relative paths such as `../../..` can still reach outside your repository: this is not a repository-containment check. Review the configured path and the directory it selects before deploying an unfamiliar repository.
+:::
+
+Without an explicit `build.dockerfile`, build detection runs at the source root, not the service directory. Many monorepos need only `source_root`: Go can select `cmd/<app-name>`, Rust virtual workspaces use the app name to select the binary, and Elixir prefers a release matching the app name with hyphens converted to underscores.
+
+:::warning[Root Dockerfiles take precedence]
+A `Dockerfile.miren` at the source root takes precedence over stack detection and even an explicit `[services.web] image`. A service sharing that root will use that Dockerfile rather than infer its own build. Set `build.dockerfile` to select the service's Dockerfile explicitly and avoid this ambiguity.
+:::
+
 For example, keep the API and background worker configurations alongside their shared source tree:
 
 ```text

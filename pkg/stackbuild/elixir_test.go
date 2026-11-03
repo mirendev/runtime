@@ -131,6 +131,12 @@ end`,
 			want:    "shop",
 		},
 		{
+			name:    "hyphenated app selects the underscored release",
+			mixExs:  `def project, do: [apps_path: "apps", releases: [worker: [], my_shop_web: []]]`,
+			appName: "my-shop-web",
+			want:    "my_shop_web",
+		},
+		{
 			name: "nested application is not a release",
 			mixExs: `def project, do: [apps_path: "apps", releases: [
   worker: [applications: [shop: :permanent]],

@@ -120,6 +120,7 @@ func (s *ElixirStack) Init(opts BuildOptions) {
 		s.releaseName = string(s.mixExs[m[2]:m[3]])
 		s.namedRelease = true
 		if opts.Name != "" {
+			appRelease := strings.ReplaceAll(opts.Name, "-", "_")
 			// Prefer the app's declared release, not an application nested in
 			// another release's options. Keep the first release as the fallback.
 			start := m[0] + bytes.IndexByte(s.mixExs[m[0]:m[1]], '[') + 1
@@ -131,8 +132,8 @@ func (s *ElixirStack) Init(opts BuildOptions) {
 				case "]":
 					depth--
 				default:
-					if depth == 1 && string(token[1]) == opts.Name {
-						s.releaseName = opts.Name
+					if depth == 1 && string(token[1]) == appRelease {
+						s.releaseName = appRelease
 					}
 				}
 				if depth == 0 {
