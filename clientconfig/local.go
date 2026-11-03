@@ -278,6 +278,10 @@ func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]
 		return nil, err
 	}
 
+	return c.cloudDialOptions(endpoint, token), nil
+}
+
+func (c *ClusterConfig) cloudDialOptions(endpoint, token string) []rpc.StateOption {
 	// No cluster CA here: the certificate presented is cloud's, verified against
 	// the system roots. The cluster's own identity is not what is on the wire.
 	opts := []rpc.StateOption{
@@ -298,7 +302,7 @@ func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]
 		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
 	}
 
-	return opts, nil
+	return opts
 }
 
 // CloudEndpoint returns the cloud a via-cloud cluster is reached through.

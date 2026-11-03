@@ -10,10 +10,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
@@ -21,6 +25,59 @@ import (
 
 func diagnosticContext() *Context {
 	return &Context{ClusterName: "local", CommandName: "route list"}
+}
+
+func TestRPCClientRoutingCredentialErrors(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			t.Setenv(clientconfig.EnvConfigPath, dir)
+			var signIns atomic.Int32
+			cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/auth/refresh", r.URL.Path)
+				signIns.Add(1)
+				w.Header().Set("Retry-After", "20")
+				http.Error(w, http.StatusText(status), status)
+			}))
+			defer cloud.Close()
+			writeTokenIdentity(t, dir, cloud.URL)
+			cfg, err := clientconfig.LoadConfig()
+			require.NoError(t, err)
+			identity, err := cfg.GetIdentity("cloud")
+			require.NoError(t, err)
+			identity.Token = "" // Force a refresh, both in memory and under the refresh lock.
+			data, err := yaml.Marshal(clientconfig.ConfigData{Identities: map[string]*clientconfig.IdentityConfig{"cloud": identity}})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(cfg.GetIdentitySource("cloud"), data, 0600))
+			silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer silent.Close()
+			cluster := &clientconfig.ClusterConfig{XID: "cluster-auth", Identity: "cloud", CloudURL: cloud.URL,
+				Hostname: silent.LocalAddr().String(), AllAddresses: []string{silent.LocalAddr().String()}}
+			ctx := &Context{Context: t.Context(), ClientConfig: cfg, ClusterConfig: cluster,
+				ClusterName: "wilderness", Stderr: io.Discard, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			defer ctx.Close()
+			_, err = ctx.RPCClient("entities")
+			require.EqualValues(t, 1, signIns.Load(), "credential failures must not retry sign-in on another route")
+			var diagnostic *ui.Diagnostic
+			require.ErrorAs(t, err, &diagnostic)
+			var rendered bytes.Buffer
+			diagnostic.WriteForTerminal(&rendered)
+			require.NotContains(t, rendered.String(), "miren doctor")
+			if status == http.StatusTooManyRequests {
+				require.Contains(t, rendered.String(), "too many sign-ins")
+				require.Contains(t, rendered.String(), "waiting will")
+				require.Contains(t, rendered.String(), "Retry in")
+				require.NotContains(t, rendered.String(), "miren login")
+				var limited *clientconfig.CloudRateLimitError
+				require.ErrorAs(t, err, &limited)
+			} else {
+				require.Contains(t, rendered.String(), "miren login")
+				require.ErrorIs(t, err, clientconfig.ErrLoginRequired)
+			}
+		})
+	}
 }
 
 func TestRPCClientDiagnosesBothRoutesFailing(t *testing.T) {

@@ -326,6 +326,18 @@ func TestSuccessfulClusterRoutes(t *testing.T) {
 			require.Equal(t, rpc.ResolveLookupError, lookup.Kind)
 			require.Equal(t, initial+3, handshakes.Load(), "a lookup rejection must not rediscover a working route")
 			require.Zero(t, cloudCalls.Load())
+			unauthenticated := viaCloudConfig(t, cluster)
+			identity, err := unauthenticated.GetIdentity("cloud")
+			require.NoError(t, err)
+			identity.Token = ""
+			state, err := cluster.State(t.Context(), unauthenticated)
+			if state != nil {
+				t.Cleanup(func() { _ = state.Close() })
+			}
+			require.ErrorContains(t, err, "failed to authenticate with cloud")
+			connect()
+			require.Equal(t, initial+4, handshakes.Load(), "credential failures must preserve the cached direct route and recovered CA")
+			require.Zero(t, cloudCalls.Load())
 			if savedCA {
 				return
 			}

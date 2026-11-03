@@ -70,6 +70,16 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 	if err != nil {
 		return nil, err
 	}
+	identity, err := config.GetIdentity(c.Identity)
+	if err != nil {
+		return nil, err
+	}
+	// Authentication is independent of the route. Resolve it before discovery
+	// so an expired or rate-limited login cannot invalidate a working route.
+	token, err := config.TokenForIdentity(ctx, c.Identity, identity, cloudURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate with cloud: %w", err)
+	}
 	// Scope the hint to the cloud and connection configuration, not a local
 	// alias that may be reused for another cluster.
 	data, _ := json.Marshal(struct {
@@ -88,17 +98,17 @@ func (c *ClusterConfig) routedOptions(ctx context.Context, config *Config) ([]rp
 		rpc.WithClientRouting(func(ctx context.Context, connect func(...rpc.StateOption) (*rpc.NetworkClient, error)) (*rpc.NetworkClient, error) {
 			attempt := func(route clusterRoute) (*rpc.NetworkClient, error) {
 				var opts []rpc.StateOption
-				var err error
 				if route.Cloud {
-					opts, err = c.viaCloudOptions(ctx, config)
+					endpoint, err := cloudRPCEndpoint(cloudURL, c.XID, c.Insecure)
+					if err != nil {
+						return nil, err
+					}
+					opts = c.cloudDialOptions(endpoint, token)
 				} else {
 					direct := *c
 					direct.Hostname, direct.AllAddresses = route.Address, nil
 					direct.CACert, direct.TLSServerName = route.CACert, route.TLSServerName
-					opts, err = direct.directRPCOptions(ctx, config, "")
-				}
-				if err != nil {
-					return nil, err
+					opts = append(direct.dialOptions(route.Address), rpc.WithBearerToken(token))
 				}
 				return connect(opts...)
 			}

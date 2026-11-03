@@ -45,6 +45,10 @@ failed connection discards the cached route, discovers a route again, and retrie
 connection setup. Application calls are never replayed. A server rejecting a
 capability or your permissions does not trigger route rediscovery.
 
+Credentials are resolved before routing starts. An expired or rate-limited login
+stops there, without probing, retrying sign-in on another route, or discarding a
+working route. The error points you toward logging in or waiting, as appropriate.
+
 A successful cloud route is cached for 30 seconds without extending its lifetime
 on every use, so returning to the direct network is noticed. If the cached cloud
 route fails, direct discovery runs immediately rather than waiting for expiry.
@@ -222,12 +226,12 @@ rather than going looking for a fault.
 **It is slower than a direct connection.** Every frame takes an extra hop, and
 the relay is not the path to choose when you have a direct one available.
 
-:::note[Route selection precedes RPC]
+:::note[Only connection setup is retried]
 
-Automatic routing checks direct connectivity with a verified TLS handshake.
-Once that succeeds, the command uses a separate direct RPC connection. If that
-connection subsequently fails, the command fails rather than replaying it
-through cloud. In-flight operations are never automatically replayed.
+Automatic routing can rediscover a route and fall back to cloud if direct RPC
+connection setup fails. This happens before any application call. Once a call
+starts, a failure is returned to the caller; in-flight operations are never
+automatically replayed on another route.
 
 :::
 
