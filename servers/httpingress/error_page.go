@@ -115,6 +115,7 @@ type errorPageData struct {
 	Reason      string
 	BackAt      string
 	Maintenance bool
+	Loading     bool
 }
 
 // A bundled copy of docs/static/img/logo-light.svg keeps the real wordmark
@@ -124,6 +125,21 @@ type errorPageData struct {
 var logoSVG string
 
 var brandLogo = template.HTML(strings.ReplaceAll(logoSVG, `fill="#0059FF"`, `fill="currentColor"`))
+
+func serveLoading(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Retry-After", "2")
+	w.Header().Add("Vary", "Accept, Sec-Fetch-Dest")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	// Always use the internal page: custom error templates need not support
+	// the automatic refresh that makes this a temporary loading screen.
+	_, _ = w.Write(renderErrorPage(errorPage, nil, errorPageData{
+		Loading:     true,
+		Title:       "Loading…",
+		Description: "This app is waking up. We’ll take you there automatically.",
+	}))
+}
 
 // serveIngressError negotiates public error responses without exposing internal
 // identifiers or failure details in HTML or JSON.
@@ -250,7 +266,11 @@ var errorPage = template.Must(template.New("ingress-error").Funcs(template.FuncM
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .Maintenance}}Down for maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Miren</title>
+{{if .Loading}}
+<script>setTimeout(function () { window.location.reload(); }, 2000);</script>
+<noscript><meta http-equiv="refresh" content="2"></noscript>
+{{end}}
+<title>{{if .Loading}}Loading…{{else if .Maintenance}}Down for maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Miren</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -297,13 +317,13 @@ var errorPage = template.Must(template.New("ingress-error").Funcs(template.FuncM
 <div class="shell">
   <header><div class="brand" role="img" aria-label="Miren">{{brandLogo}}</div></header>
   <main><div class="content{{if .Maintenance}} maintenance{{end}}">
-    <div class="eyebrow">{{if .Maintenance}}Scheduled maintenance{{else}}Error {{.Status}}{{end}}</div>
+    <div class="eyebrow">{{if .Loading}}Starting up{{else if .Maintenance}}Scheduled maintenance{{else}}Error {{.Status}}{{end}}</div>
     <h1>{{if .Maintenance}}{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}{{else}}{{.Title}}{{end}}</h1>
     {{if .Maintenance}}
       {{if .Reason}}<p class="reason">{{.Reason}}</p>{{else}}<p>This site is taking a short break for maintenance.</p>{{end}}
       {{if .BackAt}}<p>Expected back at {{.BackAt}}.</p>{{else}}<p>Please check back shortly.</p>{{end}}
     {{else}}<p>{{.Description}}</p>{{end}}
-    {{if not (or .Maintenance (eq .Status 404) (eq .Status 408) (eq .Status 423))}}<a class="action" href="">Try again &rarr;</a>{{end}}
+    {{if not (or .Maintenance (eq .Status 404) (eq .Status 408) (eq .Status 423))}}<a class="action" href=""{{if .Loading}} onclick="window.location.reload(); return false;"{{end}}>Try again &rarr;</a>{{end}}
   </div></main>
   <footer>Powered by Miren</footer>
 </div>
