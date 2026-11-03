@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +10,18 @@ import (
 	"miren.dev/mflags"
 	"miren.dev/runtime/appconfig"
 )
+
+func TestRunUsesNestedAppAliases(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "services", "api")
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".miren"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(appDir, ".miren"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".miren", "app.toml"), []byte("[aliases]\nwho = 'unknown-command'\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(appDir, ".miren", "app.toml"), []byte("[build]\nsource_root = '../..'\n[aliases]\nwho = 'version'\n"), 0644))
+	t.Chdir(appDir)
+	require.Equal(t, 0, Run([]string{"miren", "who"}))
+}
 
 func TestTokenizeCommand(t *testing.T) {
 	tests := []struct {

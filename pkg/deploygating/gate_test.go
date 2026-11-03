@@ -10,6 +10,33 @@ import (
 )
 
 func TestCheckDeployAllowed(t *testing.T) {
+	t.Run("checks the app config and source-root Procfile", func(t *testing.T) {
+		dir := t.TempDir()
+		configDir := filepath.Join(dir, "services", "api")
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".miren"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(configDir, ".miren"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".miren", "app.toml"), []byte("[[["), 0644))
+		path := filepath.Join(configDir, ".miren", "app.toml")
+		require.NoError(t, os.WriteFile(path, []byte("name = 'api'\n[build]\nsource_root = '../..'\n"), 0644))
+		_, err := CheckDeployAllowed(configDir)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Procfile"), []byte("invalid line without colon"), 0644))
+		_, err = CheckDeployAllowed(configDir)
+		require.ErrorContains(t, err, "failed to parse Procfile")
+		require.NoError(t, os.Remove(filepath.Join(dir, "Procfile")))
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "file"), []byte("not a directory"), 0644))
+		for _, root := range []string{"missing", "file"} {
+			require.NoError(t, os.WriteFile(path, []byte("[build]\nsource_root = '"+root+"'\n"), 0644))
+			remedy, err := CheckDeployAllowed(configDir)
+			require.ErrorContains(t, err, "source root")
+			require.Contains(t, remedy, "build.source_root")
+		}
+		require.NoError(t, os.WriteFile(path, []byte("[[["), 0644))
+		remedy, err := CheckDeployAllowed(configDir)
+		require.Error(t, err)
+		require.Contains(t, remedy, ".miren/app.toml")
+	})
+
 	t.Run("fails when directory does not exist", func(t *testing.T) {
 		remedy, err := CheckDeployAllowed("/non/existent/path")
 		assert.Error(t, err)
