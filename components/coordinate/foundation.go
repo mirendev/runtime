@@ -16,12 +16,14 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/certrevocation/certrevocation_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	deploymentattemptsctrl "miren.dev/runtime/controllers/deploymentattempts"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/certrevocation"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/clusternetwork"
 	"miren.dev/runtime/pkg/entity"
@@ -30,6 +32,7 @@ import (
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/workloadidentity"
+	certrevocationsrv "miren.dev/runtime/servers/certrevocation"
 	"miren.dev/runtime/servers/entityserver"
 	"miren.dev/runtime/servers/metricspush"
 	"miren.dev/runtime/servers/runnertelemetry"
@@ -59,6 +62,9 @@ type Foundation struct {
 	etcdStore  *entity.EtcdStore
 
 	authority *caauth.Authority
+
+	// certRevocations is enforced by the listener from the moment it opens.
+	certRevocations *rpc.CertRevocations
 
 	apiCert []byte
 	apiKey  []byte
@@ -523,6 +529,8 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 		return err
 	}
 
+	c.certRevocations = rpc.NewCertRevocations()
+
 	// Prepare RPC options
 	rpcOpts := []rpc.StateOption{
 		rpc.WithCertPEMs(c.apiCert, c.apiKey),
@@ -533,6 +541,7 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 		// on the port the cluster already advertises.
 		rpc.WithRESTBindAddr(c.Address),
 		rpc.WithLogger(c.Log),
+		rpc.WithCertRevocations(c.certRevocations),
 	}
 
 	// Add cloud authenticator if enabled
@@ -692,6 +701,16 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 		return err
 	}
 
+	// The listener is already open and refuses certificates until this load
+	// finishes. It reads the store directly because the loopback client below
+	// would go through that same listener. Unlike the maintenance that follows
+	// this is not best-effort: starting without the set could readmit a
+	// revoked certificate.
+	if err := certrevocation.Load(ctx, c.Log, etcdStore, c.certRevocations); err != nil {
+		c.Log.Error("failed to load certificate revocations", "error", err)
+		return err
+	}
+
 	// Best-effort startup maintenance (format migration and short-id backfill)
 	// scans the entity store. Bound it with a timeout so that a large or
 	// not-recently-compacted store fails fast and lets startup continue, rather
@@ -752,6 +771,14 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	}
 
 	ec := aes.NewClient(c.Log, eac)
+
+	// From here on the set only needs to stay current. If the watch is down the
+	// server keeps enforcing what it has: a new revocation needs the same store,
+	// and locking out operators and runners during an outage would gain nothing.
+	go certrevocation.Watch(ctx, c.Log, eac, c.certRevocations)
+	server.ExposeValue(rpc.ServiceCertRevocations, certrevocation_v1alpha.AdaptCertRevocations(
+		certrevocationsrv.NewServer(c.Log, ec, c.certRevocations),
+	))
 
 	defaultProject := &core_v1alpha.Project{
 		ID:    entity.Id("default"),
