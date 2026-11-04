@@ -83,6 +83,9 @@ Complete reference for all `miren` CLI commands.
 | [`miren auth provider list`](./command/auth-provider-list.md) | List identity providers |
 | [`miren auth provider remove`](./command/auth-provider-remove.md) | Remove an identity provider |
 | [`miren auth provider show`](./command/auth-provider-show.md) | Show an identity provider |
+| [`miren auth revocation`](./command/auth-revocation.md) | Inspect revoked client certificates |
+| [`miren auth revocation list`](./command/auth-revocation-list.md) | List revoked client certificates |
+| [`miren auth revoke`](./command/auth-revoke.md) | Revoke a client certificate so the cluster refuses it |
 
 ## cloud
 

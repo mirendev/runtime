@@ -1231,6 +1231,14 @@ miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren auth generate",
 		}),
 	))
+	d.Dispatch("auth revoke", Infer("auth revoke", "Revoke a client certificate so the cluster refuses it", AuthRevoke,
+		WithExample(mflags.Example{
+			Name: "Revoke a leaked certificate",
+			Body: "miren auth revoke 4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64 --reason \"leaked\"",
+		}),
+	))
+	d.Dispatch("auth revocation", Section("auth revocation", "Inspect revoked client certificates", ""))
+	d.Dispatch("auth revocation list", Infer("auth revocation list", "List revoked client certificates", AuthRevocationList))
 	d.Dispatch("auth ci", Section("auth ci", "CI authentication binding management", ""))
 	d.Dispatch("auth ci add", Infer("auth ci add", "Add a CI authentication binding to an application", AuthCIAdd))
 	d.Dispatch("auth ci list", Infer("auth ci list", "List CI authentication bindings for an application", AuthCIList))

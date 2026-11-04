@@ -82,7 +82,10 @@
       "command/auth-provider-add-password",
       "command/auth-provider-list",
       "command/auth-provider-remove",
-      "command/auth-provider-show"
+      "command/auth-provider-show",
+      "command/auth-revocation",
+      "command/auth-revocation-list",
+      "command/auth-revoke"
     ]
   },
   {
