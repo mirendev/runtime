@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *release/0.17*
 
+**Bug Fixes**
+- **Busy autoscaled services keep serving at capacity instead of hanging** - When every sandbox hit its `requests_per_instance` target, requests parked in the activator waiting for a new sandbox, and failed with "no sandbox became available within 120 seconds" even when the sandboxes had room. Once a service reached its maximum of 20 instances, no new sandbox could come, so requests hung until they timed out. Requests now go to the least-loaded sandbox and the pool grows in the background. At the maximum, requests keep spreading across the sandboxes a service has. A response cut off partway, by a client hanging up or a silent stream timing out, also no longer leaks capacity for the life of the sandbox, and a scale-down can no longer overwrite a scale-up that happened at the same moment. ([#1387](https://github.com/mirendev/runtime/pull/1387))
+
 ---
 
 ## v0.17.2
