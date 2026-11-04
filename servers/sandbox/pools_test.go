@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -370,4 +371,67 @@ func TestPoolScalingConcurrentReadPatch(t *testing.T) {
 	var pool compute_v1alpha.SandboxPool
 	require.NoError(t, inmem.Client.GetById(ctx, poolID, &pool))
 	require.EqualValues(t, 5, pool.DesiredInstances)
+}
+
+func TestPoolInventorySharedVersion(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := inmem.Client
+	client := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(ec))))
+	appID, err := ec.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	versionID, err := ec.Create(ctx, "shop-v1", &core_v1alpha.AppVersion{App: appID, Config: core_v1alpha.Config{
+		Services: []core_v1alpha.Services{
+			{Name: "web"},
+			{Name: "worker", ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "fixed"}},
+		},
+	}})
+	require.NoError(t, err)
+	for _, service := range []string{"web", "worker"} {
+		_, err = ec.Create(ctx, "shop-"+service, &compute_v1alpha.SandboxPool{App: appID, Service: service, SandboxSpec: compute_v1alpha.SandboxSpec{Version: versionID}})
+		require.NoError(t, err)
+	}
+
+	res, err := client.List(ctx, "")
+	require.NoError(t, err)
+	modes := map[string]string{}
+	for _, pool := range res.Pools() {
+		require.NotEmpty(t, pool.VersionShortId())
+		modes[pool.Service()] = pool.ScalingMode()
+	}
+	require.Equal(t, map[string]string{"web": "auto", "worker": "fixed"}, modes)
+}
+
+func TestPoolInventoryAddonPoolApp(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := inmem.Client
+	client := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(ec))))
+	_, err := ec.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "shop-db", &compute_v1alpha.SandboxPool{}, entityserver.WithLabels(types.LabelSet("addon", "miren-postgresql", "app", "shop")))
+	require.NoError(t, err)
+
+	res, err := client.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, res.Pools(), 1)
+	require.Equal(t, "shop", res.Pools()[0].App())
+
+	res, err = client.List(ctx, "shop")
+	require.NoError(t, err)
+	require.Len(t, res.Pools(), 1, "the app filter matches the reported app")
+	res, err = client.List(ctx, "blog")
+	require.NoError(t, err)
+	require.Empty(t, res.Pools())
+
+	// The label names the app. It grants nothing, so app-bound callers still
+	// cannot see a pool with no real owner.
+	own := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "shop", "bound_app": "shop"}})
+	for _, filter := range []string{"", "shop"} {
+		res, err = client.List(own, filter)
+		require.NoError(t, err)
+		require.Empty(t, res.Pools())
+	}
 }

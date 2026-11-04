@@ -16,10 +16,12 @@ miren sandbox-pool list [flags]
 
 ## Flags
 
+- `--app` — Only show pools belonging to this app
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
+- `--service` — Only show pools of this service (e.g. web, worker)
 
 ## Global Options
 
