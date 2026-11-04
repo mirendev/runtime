@@ -197,7 +197,7 @@ func TestWaitForIdleNamesConnectionsItWaitsOn(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := waitForIdle(ctx, log, "HTTP/3", ln); err != nil {
+		if err := waitForIdle(ctx, log, "HTTP/3", ln, nil); err != nil {
 			t.Fatalf("wait that finished inside its deadline returned %v", err)
 		}
 		if got := strings.Count(logs.String(), `msg="drain still waiting on open connections" surface=HTTP/3`); got != 1 {
@@ -219,11 +219,68 @@ func TestWaitForIdleStaysQuietOnAPromptDrain(t *testing.T) {
 			ln.open.Store(0)
 		}()
 
-		if err := waitForIdle(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)), "HTTP/3", ln); err != nil {
+		if err := waitForIdle(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)), "HTTP/3", ln, nil); err != nil {
 			t.Fatalf("prompt drain returned %v", err)
 		}
 		if logs.Len() != 0 {
 			t.Fatalf("prompt drain logged:\n%s", logs.String())
+		}
+	})
+}
+
+func TestWaitForIdleStopsWaitingOnDeadPeersOnceHandlersSettle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		ln := &countingListener{}
+		ln.accepted.Store(2)
+		// A CLI that exited without closing its connection: the server holds
+		// it until the QUIC idle timeout, and nothing is running on it.
+		ln.open.Store(2)
+
+		var requests requestCounter
+		requests.begin()
+		go func() {
+			time.Sleep(time.Second)
+			requests.end()
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		start := time.Now()
+		if err := waitForIdle(ctx, slog.New(slog.NewTextHandler(&logs, nil)), "HTTP/3", ln, &requests); err != nil {
+			t.Fatalf("drain with settled handlers returned %v", err)
+		}
+		if got, want := time.Since(start), time.Second+drainSettle; got < want || got > want+drainPollInterval {
+			t.Fatalf("drain took %v, want the running handler plus the settle (%v)", got, want)
+		}
+		if logs.Len() != 0 {
+			t.Fatalf("prompt drain logged:\n%s", logs.String())
+		}
+	})
+}
+
+func TestRequestCounterSettled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var nilCounter *requestCounter
+		if nilCounter.settled(time.Now()) {
+			t.Fatal("nil counter settled; a drain without one must wait for its connections")
+		}
+
+		var c requestCounter
+		if !c.settled(time.Now()) {
+			t.Fatal("counter that never saw a request is not settled")
+		}
+		c.begin()
+		if c.settled(time.Now()) {
+			t.Fatal("settled with a handler running")
+		}
+		c.end()
+		if c.settled(time.Now()) {
+			t.Fatal("settled the instant the last handler returned")
+		}
+		time.Sleep(drainSettle)
+		if !c.settled(time.Now()) {
+			t.Fatal("not settled drainSettle after the last handler returned")
 		}
 	})
 }
