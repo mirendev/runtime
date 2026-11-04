@@ -10,7 +10,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-const leaked = "17cafa9b5c6fe138f6e0113e5686a658"
+const leaked = "4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64"
 
 func newTestServer(t *testing.T) (*certrevocation_v1alpha.CertRevocationsClient, *rpc.CertRevocations) {
 	t.Helper()
@@ -31,7 +31,7 @@ func TestRevoke(t *testing.T) {
 	c, set := newTestServer(t)
 	ctx := operator()
 
-	first, err := c.Revoke(ctx, "17CAFA9B5C6FE138F6E0113E5686A658", "leaked into a transcript")
+	first, err := c.Revoke(ctx, "4F1A9C3E7B2D8A6F0C5E1D3B9A7F2E64", "leaked into a transcript")
 	require.NoError(t, err)
 	require.False(t, first.AlreadyRevoked())
 	require.Equal(t, leaked, first.Revocation().Serial())

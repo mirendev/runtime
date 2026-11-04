@@ -295,9 +295,9 @@ func TestCertSerialIsCanonical(t *testing.T) {
 }
 
 func TestParseCertSerial(t *testing.T) {
-	serial, err := rpc.ParseCertSerial("17CAFA9B5C6FE138F6E0113E5686A658")
+	serial, err := rpc.ParseCertSerial("4F1A9C3E7B2D8A6F0C5E1D3B9A7F2E64")
 	require.NoError(t, err)
-	require.Equal(t, "17cafa9b5c6fe138f6e0113e5686a658", serial)
+	require.Equal(t, "4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64", serial)
 
 	for _, bad := range []string{"", "0", "-1", "+1", "zz", "1:2", strings.Repeat("f", 41)} {
 		_, err := rpc.ParseCertSerial(bad)

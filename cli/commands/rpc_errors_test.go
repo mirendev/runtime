@@ -64,6 +64,12 @@ func TestDiagnoseResolveDistinguishesKinds(t *testing.T) {
 			wantDetail:  []string{"permission"},
 		},
 		{
+			name:        "revoked certificate",
+			err:         rpc.NewResolveStatusErrorWithReason("entities", "localhost:8443", 401, rpc.AuthErrorCertRevoked, "client certificate abc has been revoked"),
+			wantSummary: `this client certificate was revoked on cluster "local"`,
+			wantDetail:  []string{"new one"},
+		},
+		{
 			name:        "unexpected status",
 			err:         rpc.NewResolveStatusError("entities", "localhost:8443", 404),
 			wantSummary: `cluster "local" returned an unexpected response (HTTP 404)`,
