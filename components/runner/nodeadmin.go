@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/lbdmod"
@@ -82,6 +83,29 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 	res.SetKernelRelease(status.Host.KernelRelease)
 	res.SetLbdVersion(lbdmod.SourceVersion())
 	return nil
+}
+
+// coordinatorOnlyExec confines a runner's exec service to the coordinator, whose
+// exec proxy is how every legitimate call arrives. Any certificate from the
+// cluster CA reaches this listener and it has no authorizer, so otherwise every
+// client certificate could exec into any sandbox on a runner it can reach,
+// bypassing the checks the coordinator's proxy applies.
+type coordinatorOnlyExec struct {
+	exec_v1alpha.SandboxExec
+}
+
+func (e coordinatorOnlyExec) Exec(ctx context.Context, state *exec_v1alpha.SandboxExecExec) error {
+	if err := requireCoordinator(ctx); err != nil {
+		return err
+	}
+	return e.SandboxExec.Exec(ctx, state)
+}
+
+func (e coordinatorOnlyExec) Attach(ctx context.Context, state *exec_v1alpha.SandboxExecAttach) error {
+	if err := requireCoordinator(ctx); err != nil {
+		return err
+	}
+	return e.SandboxExec.Attach(ctx, state)
 }
 
 // requireCoordinator refuses anyone but the coordinator.

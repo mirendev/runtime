@@ -33,6 +33,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/certrevocation"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -175,9 +176,10 @@ func NewClusterAccess(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Clu
 	}
 
 	return &ClusterAccess{
-		RunnerConfig: cfg,
-		Log:          log.With("module", "runner"),
-		deps:         deps,
+		certRevocations: rpc.NewCertRevocations(),
+		RunnerConfig:    cfg,
+		Log:             log.With("module", "runner"),
+		deps:            deps,
 	}, nil
 }
 
@@ -252,6 +254,12 @@ type ClusterAccess struct {
 	entityBase  *entityserver.Client
 	sqliteDisks *sqlitedisk.Manager
 	closers     []io.Closer
+
+	// certRevocations is enforced by this listener, which trusts the same CA as
+	// the coordinator's. It refuses certificates until the watch first syncs;
+	// nothing legitimate can reach a runner sooner, since its callers need the
+	// coordinator that sync depends on.
+	certRevocations *rpc.CertRevocations
 }
 
 // SandboxHost owns the node-local execution substrate.
@@ -473,6 +481,7 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	r.state = rs
 	r.eac = es.NewEntityAccessClient(client)
 	r.entityBase = entityserver.NewClient(r.Log, r.eac)
+	go certrevocation.Watch(ctx, r.Log, r.eac, r.certRevocations)
 	if err := r.setupRemoteCoordinatorInfo(ctx, rs); err != nil {
 		return fmt.Errorf("setting up coordinator registry and workload identity: %w", err)
 	}
@@ -497,6 +506,7 @@ func (r *ClusterAccess) newRPCState(ctx context.Context) (*rpc.State, error) {
 	opts := []rpc.StateOption{
 		rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress),
 		rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}),
+		rpc.WithCertRevocations(r.certRevocations),
 	}
 	if r.Config == nil {
 		return nil, fmt.Errorf("runner cluster config is required to authenticate coordinator requests")
@@ -558,7 +568,7 @@ func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	// Create exec server with explicit dependencies
 	execServer := exec.NewServer(r.Log, r.deps.CC, r.access.eac, r.deps.Namespace, r.hubs)
 
-	r.access.state.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
+	r.access.state.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(coordinatorOnlyExec{execServer}))
 
 	r.Log.Info("Registered exec server")
 
