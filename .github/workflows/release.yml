@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Version tag to rebuild, e.g. v1.2.3. Leave empty to build the ref this run was dispatched on.'
+        description: 'Version tag to rebuild, e.g. v1.2.3. Leave empty to build the ref this run was dispatched on. Only runs dispatched from main or a version tag can publish; to repack, dispatch from main.'
         required: false
         default: ''
       update_latest:
@@ -90,7 +90,7 @@ jobs:
           # Bash's =~ anchors against the whole string, so a value carrying a
           # newline cannot satisfy this and go on to inject extra step outputs.
           if [[ ! "$DISPATCH_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-            echo "::error::Dispatch ref must be a version tag such as v1.2.3 or v1.2.3-rc1, got '$DISPATCH_REF'. To build a branch, dispatch the workflow on that branch and leave this input empty."
+            echo "::error::Dispatch ref must be a version tag such as v1.2.3 or v1.2.3-rc1, got '$DISPATCH_REF'."
             exit 1
           fi
 
@@ -536,13 +536,17 @@ jobs:
 
           REF_NAME="${{ needs.init.outputs.ref }}"
 
+          # The assets API expects tokens minted for this audience, from this
+          # workflow, on main or a version tag.
+          #
           # Every attempt mints its own OIDC token. One token minted up front
           # expires partway through a slow run's retries, and from then on every
           # retry fails 401 however healthy the API is.
           mint_token() {
             local token
-            token=$(curl -sSf --retry 3 \
+            token=$(curl -sSf --retry 3 -G \
               -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --data-urlencode "audience=https://api.miren.cloud/assets" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r '.value')
             [[ -n "$token" && "$token" != null ]] || return 1
             printf '%s' "$token"
