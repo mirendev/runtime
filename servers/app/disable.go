@@ -100,49 +100,65 @@ func (r *AppInfo) Enable(ctx context.Context, state *app_v1alpha.CrudEnable) err
 		return fmt.Errorf("enabling app %q: %w", name, err)
 	}
 
-	// The launcher's resync would restore fixed counts within a minute; doing
-	// it here makes enable take effect now.
-	var restoredPools int32
-	if appRec.ActiveVersion != "" {
-		var ver core_v1alpha.AppVersion
-		if err := r.EC.GetById(ctx, appRec.ActiveVersion, &ver); err != nil {
-			return fmt.Errorf("getting active version: %w", err)
-		}
-		spec, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &ver)
-		if err != nil {
-			return fmt.Errorf("resolving config: %w", err)
-		}
-
-		poolList, err := r.EC.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appRec.ID))
-		if err != nil {
-			return fmt.Errorf("listing pools: %w", err)
-		}
-		for poolList.Next() {
-			var pool compute_v1alpha.SandboxPool
-			if err := poolList.Read(&pool); err != nil {
-				continue
-			}
-			if !slices.Contains(pool.ReferencedByVersions, appRec.ActiveVersion) {
-				continue
-			}
-			svcConc, err := coreutil.GetServiceConcurrency(spec, pool.Service)
-			if err != nil || svcConc.Mode != "fixed" || svcConc.NumInstances == 0 {
-				continue
-			}
-			if pool.DesiredInstances == svcConc.NumInstances {
-				continue
-			}
-			if err := r.EC.Patch(ctx, pool.ID, 0,
-				entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, svcConc.NumInstances),
-			); err != nil {
-				return fmt.Errorf("restoring pool %s: %w", pool.ID, err)
-			}
-			restoredPools++
-		}
+	// The app is enabled from here on, so a failure below is not a failed
+	// enable: retrying would only report that the app isn't disabled, and the
+	// launcher's resync restores fixed counts within a minute anyway.
+	restoredPools, err := r.restoreFixedPools(ctx, &appRec)
+	if err != nil {
+		r.Log.Warn("app enabled, but restoring its fixed pools failed; the launcher will restore them",
+			"app", name, "error", err)
 	}
 
 	r.Log.Info("app enabled", "app", name, "pools_restored", restoredPools)
 
 	state.Results().SetRestoredPools(restoredPools)
 	return nil
+}
+
+// restoreFixedPools returns the active version's fixed services to their
+// configured counts, so enable takes effect now rather than at the next resync.
+// It reports how many pools it restored, including when it stops on an error.
+func (r *AppInfo) restoreFixedPools(ctx context.Context, appRec *core_v1alpha.App) (int32, error) {
+	if appRec.ActiveVersion == "" {
+		return 0, nil
+	}
+
+	var ver core_v1alpha.AppVersion
+	if err := r.EC.GetById(ctx, appRec.ActiveVersion, &ver); err != nil {
+		return 0, fmt.Errorf("getting active version: %w", err)
+	}
+	spec, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &ver)
+	if err != nil {
+		return 0, fmt.Errorf("resolving config: %w", err)
+	}
+
+	poolList, err := r.EC.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appRec.ID))
+	if err != nil {
+		return 0, fmt.Errorf("listing pools: %w", err)
+	}
+
+	var restored int32
+	for poolList.Next() {
+		var pool compute_v1alpha.SandboxPool
+		if err := poolList.Read(&pool); err != nil {
+			continue
+		}
+		if !slices.Contains(pool.ReferencedByVersions, appRec.ActiveVersion) {
+			continue
+		}
+		svcConc, err := coreutil.GetServiceConcurrency(spec, pool.Service)
+		if err != nil || svcConc.Mode != "fixed" || svcConc.NumInstances == 0 {
+			continue
+		}
+		if pool.DesiredInstances == svcConc.NumInstances {
+			continue
+		}
+		if err := r.EC.Patch(ctx, pool.ID, 0,
+			entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, svcConc.NumInstances),
+		); err != nil {
+			return restored, fmt.Errorf("restoring pool %s: %w", pool.ID, err)
+		}
+		restored++
+	}
+	return restored, nil
 }

@@ -4979,6 +4979,65 @@ func TestNewAutoPoolSeededFromCurrentPoolSize(t *testing.T) {
 	assert.Equal(t, int64(7), newPool.DesiredInstances, "the new pool should start at the current pool's size")
 }
 
+// A sibling pool can still have instances while Disable is mid-way through
+// scaling down. A new pool for the disabled app must not copy that size.
+func TestNewPoolForDisabledAppIgnoresCurrentPoolSize(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	deploy := func(name, image string) {
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: image,
+			Config: core_v1alpha.Config{
+				Port: 3000,
+				Services: []core_v1alpha.Services{{
+					Name:               "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 10},
+				}},
+			},
+		}
+		verID, err := server.Client.Create(ctx, "test-"+name, ver)
+		require.NoError(t, err)
+		app.ActiveVersion = verID
+		require.NoError(t, server.Client.Update(ctx, app))
+	}
+
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+
+	deploy("v1", "oci.miren.cloud/web:1")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	oldPoolID := pools[0].ID
+
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, oldPoolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 7),
+	}, 0)
+	require.NoError(t, err)
+
+	app.Disabled.At = time.Now()
+	deploy("v2", "oci.miren.cloud/web:2")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	var newPool *compute_v1alpha.SandboxPool
+	for _, p := range listAllPools(t, ctx, server) {
+		if p.ID != oldPoolID {
+			newPool = &p
+		}
+	}
+	require.NotNil(t, newPool)
+	assert.Equal(t, int64(0), newPool.DesiredInstances)
+}
+
 // The old pool is only retired once the new one is fully up, so readiness
 // means every desired sandbox is running, not just the first.
 func TestWaitForPoolReadyWaitsForDesiredCount(t *testing.T) {

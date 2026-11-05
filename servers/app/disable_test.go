@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,34 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 )
+
+// Once the flag is clear the app is enabled, whatever happens next, so a failed
+// pool restore must not report a failure that a retry can only contradict.
+func TestEnableSucceedsWhenRestoringPoolsFails(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	client := &app_v1alpha.CrudClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: ec})),
+	}
+
+	appID, err := ec.Create(ctx, "restore-app", &core_v1alpha.App{
+		ActiveVersion: entity.Id("app_version/missing"),
+		Disabled:      core_v1alpha.Disabled{At: time.Now()},
+	})
+	require.NoError(t, err)
+
+	res, err := client.Enable(ctx, "restore-app")
+	require.NoError(t, err)
+	assert.Zero(t, res.RestoredPools())
+
+	var app core_v1alpha.App
+	require.NoError(t, ec.GetById(ctx, appID, &app))
+	assert.True(t, app.Disabled.Empty())
+}
 
 // TestAppDisableEnable walks an app with a fixed worker and an autoscaled web
 // service through disable, a refused restart, and enable.

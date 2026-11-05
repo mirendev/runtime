@@ -588,7 +588,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		l.Log.Info("strategy-enforced minimum, starting with desired instances",
 			"service", serviceName,
 			"desired_instances", desiredInstances)
-	} else if ver.EphemeralLabel == "" {
+	} else if !disabled && ver.EphemeralLabel == "" {
 		// An autoscaled service's load doesn't change because its spec did.
 		// Start the replacement at the size the current pool reached, so the
 		// cutover doesn't hand that load to a single sandbox.
