@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/addon/addon_v1alpha"
@@ -199,6 +200,25 @@ func TestPoolInventoryAndScaling(t *testing.T) {
 	var other compute_v1alpha.SandboxPool
 	require.NoError(t, ec.GetById(ctx, otherPool, &other))
 	require.EqualValues(t, 8, other.DesiredInstances)
+}
+
+func TestPoolScalingRefusesDisabledApp(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := inmem.Client
+	client := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(ec))))
+	appID, err := ec.Create(ctx, "shop", &core_v1alpha.App{DisabledAt: time.Now()})
+	require.NoError(t, err)
+	poolID, err := ec.Create(ctx, "shop-web", &compute_v1alpha.SandboxPool{App: appID, Service: "web", DesiredInstances: 1})
+	require.NoError(t, err)
+
+	_, err = client.SetDesired(ctx, poolID.String(), 2, false, 0, false)
+	require.ErrorContains(t, err, "is disabled")
+
+	res, err := client.SetDesired(ctx, poolID.String(), 0, false, 0, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, res.Desired())
 }
 
 func TestPoolScalingLimits(t *testing.T) {

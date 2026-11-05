@@ -213,6 +213,17 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 	if count > concurrency.MaxPoolSize {
 		return fmt.Errorf("count exceeds maximum pool size %d: %d", concurrency.MaxPoolSize, count)
 	}
+	// Lowering stays allowed. Raising would boot sandboxes the flag says
+	// shouldn't exist, and nothing else would stop them from serving work.
+	if owner != "" && count > pool.DesiredInstances {
+		var app core_v1alpha.App
+		if err := s.ec.GetById(ctx, pool.App, &app); err != nil {
+			return err
+		}
+		if !app.DisabledAt.IsZero() {
+			return fmt.Errorf("app %s is disabled; run `miren app enable -a %s` to start it", owner, owner)
+		}
+	}
 	revision := ent.Revision()
 	changed := count != pool.DesiredInstances
 	if changed {
