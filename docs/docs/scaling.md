@@ -136,7 +136,7 @@ To turn an app off without deleting it, disable it:
 miren app disable -a myapp --reason "Moved to the new cluster"
 ```
 
-Every service, autoscaled or fixed, is held at zero until you run `miren app enable`. Running instances shut down, `miren deploy` is refused, visitors get a 503 holding page, and `miren app restart` refuses until the app is enabled. The app keeps its versions, routes, environment, disks, and addons. Scheduled tasks pause, but `miren app run` still works for a backup or migration while the app is off. Task runs already in progress finish, and addons keep running.
+Every service, autoscaled or fixed, is held at zero until you run `miren app enable`. Running instances shut down and visitors get a 503 holding page. A disabled app is frozen, so deploys, rollbacks, config changes such as `miren env set`, and `miren app restart` are all refused until it's enabled. That's what lets `miren app enable` bring it back as it was. The app keeps its versions, routes, environment, disks, and addons. Scheduled tasks pause, but `miren app run` still works for a backup or migration while the app is off. Task runs already in progress finish, and addons keep running.
 
 Enabling resumes scheduled tasks from the enable time. Any pending scheduled ticks at or before that time are discarded, including ticks that became due before the app was disabled but had not yet been picked up.
 
@@ -145,6 +145,23 @@ To take traffic down while the app keeps running and can still be deployed, use 
 Unlike an autoscaled service that has scaled to zero, a disabled app doesn't wake on traffic. `miren app list` shows it as `disabled`, and `miren app status` shows when and why.
 
 `miren app enable` returns fixed services to their configured count right away; autoscaled services start on the next request.
+
+### Updating a Disabled App
+
+To update an app that should stay off, such as a fallback copy on another cluster, turn it on behind maintenance mode, deploy, check it, and turn it off again:
+
+```bash
+miren route down app.example.com --reason "Updating"
+miren app enable -a myapp
+miren deploy
+miren app status -a myapp
+miren app disable -a myapp --reason "Fallback copy"
+miren route up app.example.com
+```
+
+Run `route down` for each hostname that points at the app, since anything you miss serves visitors while it's on. Bring the routes back up at the end, or they'll still be down the next time you enable the app.
+
+Enabling turns the whole app on, and maintenance mode only stops traffic on its routes. For that window workers run, scheduled tasks fire, and deploy tasks run during the deploy. If the copy shares a database or sends mail, give it a setting of its own that keeps those side effects quiet, such as `miren env set -e FALLBACK_MODE=1`, and set it while the app is on.
 
 ## Examples
 

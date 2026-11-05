@@ -91,6 +91,38 @@ type BeginParams struct {
 	ParentDeploymentID string
 }
 
+// ErrAppDisabled means the app is frozen by `miren app disable`. Enable promises
+// to bring the app back as it was, so nothing may change what it runs until
+// then: not a build, a redeploy, a rollback, or a config change. An app that
+// should keep taking changes while it's out of service belongs in maintenance
+// mode instead.
+var ErrAppDisabled = errors.New("app is disabled")
+
+// CheckEnabled returns ErrAppDisabled, with what to do about it, if app is
+// disabled.
+func CheckEnabled(name string, app *core_v1alpha.App) error {
+	if !app.Disabled.Empty() {
+		return fmt.Errorf("%w: run `miren app enable -a %s` first", ErrAppDisabled, name)
+	}
+	return nil
+}
+
+// refuseDisabled reads the app when the caller passed an AppID and Begin had no
+// reason to look it up.
+func (t *Tracker) refuseDisabled(ctx context.Context, name string, app *core_v1alpha.App) error {
+	if app == nil {
+		resolved, _, err := t.store.AppByName(ctx, name)
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to resolve deployment app: %w", err)
+		}
+		app = resolved
+	}
+	return CheckEnabled(name, app)
+}
+
 // Begin acquires the deploy lock and publishes a deployment record.
 //
 // If another live deployment holds the lock, Begin returns a *LockHeldError
@@ -143,6 +175,9 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 			return nil, cond.ValidationFailure("deployment-app-mismatch", "deployment app reference does not match app name")
 		}
 		app = resolved
+	}
+	if err := t.refuseDisabled(ctx, params.AppName, app); err != nil {
+		return nil, err
 	}
 	if params.ParentDeploymentID == "" && app != nil && app.ActiveDeployment != "" {
 		params.ParentDeploymentID = string(app.ActiveDeployment)

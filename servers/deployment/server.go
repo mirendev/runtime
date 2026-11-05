@@ -676,13 +676,20 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if err := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); err != nil {
 		return err
 	}
-	if _, _, err := d.tracker.Store().AppByName(ctx, appName); err != nil {
+	targetApp, _, err := d.tracker.Store().AppByName(ctx, appName)
+	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
 			results.SetError(fmt.Sprintf("app %q not found", appName))
 			return nil
 		}
 		d.Log.Error("Failed to look up app", "app", appName, "error", err)
 		results.SetError("failed to look up app")
+		return nil
+	}
+	// Begin refuses a disabled app too, but a preview never gets that far and
+	// creates its version first.
+	if err := deploylifecycle.CheckEnabled(appName, targetApp); err != nil {
+		results.SetError(err.Error())
 		return nil
 	}
 	isEphemeral := args.HasEphemeralLabel() && args.EphemeralLabel() != ""
@@ -858,6 +865,10 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if err != nil {
 		if holder, ok := deploylifecycle.HolderFrom(err); ok {
 			d.reportLockBlocked(ctx, results, holder)
+			return nil
+		}
+		if errors.Is(err, deploylifecycle.ErrAppDisabled) {
+			results.SetError(err.Error())
 			return nil
 		}
 		d.Log.Error("Failed to create deployment", "error", err)

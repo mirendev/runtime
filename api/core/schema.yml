@@ -113,8 +113,9 @@ kinds:
       type: component
       doc: >-
         Operator-initiated disabled state, set by `miren app disable`. When
-        present, every service is held at zero instances, builds are refused, and
-        requests get a 503. Absent means the app runs normally.
+        present, every service is held at zero instances, anything that would
+        change the active version is refused, and requests get a 503. Absent
+        means the app runs normally.
       attrs:
         at:
           type: time
