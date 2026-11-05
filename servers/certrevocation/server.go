@@ -22,12 +22,17 @@ type Server struct {
 	log         *slog.Logger
 	ec          *aes.Client
 	revocations *rpc.CertRevocations
+	apiSerial   string
 }
 
 var _ certrevocation_v1alpha.CertRevocations = (*Server)(nil)
 
-func NewServer(log *slog.Logger, ec *aes.Client, revocations *rpc.CertRevocations) *Server {
-	return &Server{log: log.With("module", "cert-revocations"), ec: ec, revocations: revocations}
+// NewServer takes the serial of the coordinator's API certificate because the
+// coordinator dials itself with that certificate, so revoking it would cut the
+// coordinator off from its own entity store, and the set only grows, so a restart
+// would not bring it back.
+func NewServer(log *slog.Logger, ec *aes.Client, revocations *rpc.CertRevocations, apiSerial string) *Server {
+	return &Server{log: log.With("module", "cert-revocations"), ec: ec, revocations: revocations, apiSerial: apiSerial}
 }
 
 // allowOperator gates this service on identity, because the authorizer waves
@@ -57,6 +62,9 @@ func (s *Server) Revoke(ctx context.Context, state *certrevocation_v1alpha.CertR
 	}
 	if serial == rpc.CallerCertSerial(ctx) {
 		return fmt.Errorf("refusing to revoke certificate %s: this command is running with it; reissue first, then revoke from the new certificate", serial)
+	}
+	if serial == s.apiSerial {
+		return fmt.Errorf("refusing to revoke certificate %s: it is the coordinator's own API certificate, and the coordinator cannot run without it", serial)
 	}
 
 	results := state.Results()

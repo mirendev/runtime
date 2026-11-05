@@ -2,6 +2,7 @@ package certrevocation
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,7 +11,10 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-const leaked = "4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64"
+const (
+	leaked    = "4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64"
+	apiSerial = "8d3e6a1f4c7b9e20d5f1a3c6b8e2470f"
+)
 
 func newTestServer(t *testing.T) (*certrevocation_v1alpha.CertRevocationsClient, *rpc.CertRevocations) {
 	t.Helper()
@@ -19,7 +23,7 @@ func newTestServer(t *testing.T) (*certrevocation_v1alpha.CertRevocationsClient,
 
 	set := rpc.NewCertRevocations()
 	set.Load(nil)
-	server := NewServer(testutils.TestLogger(t), inmem.Client, set)
+	server := NewServer(testutils.TestLogger(t), inmem.Client, set, apiSerial)
 	return certrevocation_v1alpha.NewCertRevocationsClient(rpc.LocalClient(certrevocation_v1alpha.AdaptCertRevocations(server))), set
 }
 
@@ -71,6 +75,18 @@ func TestRevokeRefusesCallersOwnCertificate(t *testing.T) {
 
 	_, err = c.Revoke(ctx, "abc", "")
 	require.NoError(t, err, "a different certificate is fine")
+}
+
+func TestRevokeRefusesCoordinatorAPICertificate(t *testing.T) {
+	c, set := newTestServer(t)
+
+	_, err := c.Revoke(operator(), strings.ToUpper(apiSerial), "")
+	require.ErrorContains(t, err, "coordinator's own API certificate")
+	require.False(t, set.Contains(apiSerial))
+
+	listed, err := c.List(operator())
+	require.NoError(t, err)
+	require.Empty(t, listed.Revocations(), "nothing stored for a restart to load")
 }
 
 func TestOperatorsOnly(t *testing.T) {
