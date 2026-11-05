@@ -66,6 +66,8 @@ func TestCrudResourceAuthorizationBeforeMutation(t *testing.T) {
 		}},
 		{"deleteenvvar", "configure", func(ctx context.Context) error { _, err := client.DeleteEnvVar(ctx, "shop", "KEY", ""); return err }},
 		{"restart", "deploy", func(ctx context.Context) error { _, err := client.Restart(ctx, "shop", ""); return err }},
+		{"disable", "deploy", func(ctx context.Context) error { _, err := client.Disable(ctx, "shop", ""); return err }},
+		{"enable", "deploy", func(ctx context.Context) error { _, err := client.Enable(ctx, "shop"); return err }},
 		{"getconfiguration", "read", func(ctx context.Context) error { _, err := client.GetConfiguration(ctx, "shop"); return err }},
 		{"listversions", "read", func(ctx context.Context) error {
 			_, err := client.ListVersions(ctx, appID.String(), false, 0)

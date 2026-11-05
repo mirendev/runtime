@@ -6,12 +6,12 @@ import (
 	"slices"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/rpc"
 )
 
 // Disable holds every service of an app at zero instances until Enable. The
@@ -24,8 +24,8 @@ func (r *AppInfo) Disable(ctx context.Context, state *app_v1alpha.CrudDisable) e
 	args := state.Args()
 	name := args.App()
 
-	if !rpc.AllowApp(ctx, name) {
-		return rpc.AppAccessError(ctx, name)
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "deploy"); err != nil {
+		return err
 	}
 
 	var appRec core_v1alpha.App
@@ -80,8 +80,8 @@ func (r *AppInfo) Disable(ctx context.Context, state *app_v1alpha.CrudDisable) e
 func (r *AppInfo) Enable(ctx context.Context, state *app_v1alpha.CrudEnable) error {
 	name := state.Args().App()
 
-	if !rpc.AllowApp(ctx, name) {
-		return rpc.AppAccessError(ctx, name)
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "deploy"); err != nil {
+		return err
 	}
 
 	var appRec core_v1alpha.App
