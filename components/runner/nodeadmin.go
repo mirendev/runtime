@@ -116,13 +116,13 @@ func (e coordinatorOnlyExec) Attach(ctx context.Context, state *exec_v1alpha.San
 func requireCoordinator(ctx context.Context) error {
 	identity := rpc.IdentityFromContext(ctx)
 	if identity == nil || identity.Method == rpc.AuthMethodAnonymous {
-		return fmt.Errorf("node administration requires the coordinator's certificate, and this caller presented none")
+		return fmt.Errorf("this call requires the coordinator's certificate, and this caller presented none")
 	}
 	if identity.Method != rpc.AuthMethodCert {
-		return fmt.Errorf("node administration requires a certificate, got %q", identity.Method)
+		return fmt.Errorf("this call requires a certificate, got %q", identity.Method)
 	}
 	if identity.Subject != rpc.CoordinatorCertSubject {
-		return fmt.Errorf("only the coordinator may administer this node, not %q", identity.Subject)
+		return fmt.Errorf("only the coordinator may call this on a runner, not %q", identity.Subject)
 	}
 	return nil
 }
