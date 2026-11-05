@@ -394,7 +394,8 @@ func WithHTTPHandler(pattern string, handler http.Handler) StateOption {
 
 // WithCertRevocations enforces a revocation set on every request that presents a
 // verified client certificate. Until the set is loaded, such requests are refused
-// with a retryable 503.
+// with a retryable 503. Enforcement lives in Server.ServeHTTP, so the listeners
+// from WithTCPBindAddr and WithWSBindAddr are not covered.
 func WithCertRevocations(revocations *CertRevocations) StateOption {
 	return func(o *stateOptions) {
 		o.certRevocations = revocations
