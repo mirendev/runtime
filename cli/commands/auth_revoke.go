@@ -116,6 +116,7 @@ func AuthRevoke(ctx *Context, opts struct {
 	// The cluster has no record of what it issued, so success proves only that
 	// this serial is now refused, not that it was the certificate you meant.
 	fmt.Fprintln(ctx.Stderr, "Warning: the cluster keeps no record of issued certificates, so it cannot confirm this serial belongs to a real one. Check it against the certificate or audit log.")
+	fmt.Fprintln(ctx.Stderr, "Warning: a runner's certificate may already have renewed itself under a new serial. If this was one, also run `miren runner delete` and check the audit log for other serials with that runner's subject.")
 	return nil
 }
 

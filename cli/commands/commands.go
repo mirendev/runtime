@@ -1232,6 +1232,7 @@ miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("auth revoke", Infer("auth revoke", "Revoke a client certificate so the cluster refuses it", AuthRevoke,
+		WithDescription(authRevokeDescription),
 		WithExample(mflags.Example{
 			Name: "Revoke a leaked certificate",
 			Body: "miren auth revoke 4f1a9c3e7b2d8a6f0c5e1d3b9a7f2e64 --reason \"leaked\"",
@@ -1490,6 +1491,16 @@ Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + 
 const debugDeployEventsDescription = `A deploy run with ` + "`" + `--format jsonl` + "`" + ` writes one JSON object per line and nothing a person would want to read. This command turns that stream back into the output the deploy would have printed: the phase summaries, build steps, health verdict, routes, and final status. Point it at a saved file, or pipe a live deploy through it.
 
 Build step log lines are hidden unless ` + "`" + `--build-logs` + "`" + ` is set; ` + "`" + `--timestamps` + "`" + ` prefixes every line with the time since the first event, which is the quickest way to see where a slow deploy spent its time. Lines that are not JSON (stderr text mixed into the same file, say) are shown as they are.`
+
+const authRevokeDescription = `Serials can be given in either base. Digits alone are read as decimal, which is how audit logs print them. A letter, a colon, or a ` + "`0x`" + ` prefix means hex, which is how openssl prints them. The confirmation prompt shows both forms so you can catch a wrong guess.
+
+The cluster keeps no record of the certificates it issued, so it cannot tell a typo from a real serial. Check the serial against the certificate or the audit log first.
+
+A revocation cannot be undone from the CLI. To restore someone's access, issue them a new certificate with ` + "`miren auth generate`" + `.
+
+The command refuses to revoke the certificate it is running with, and the coordinator's own API certificate.
+
+A leaked runner certificate needs more than this command. It can renew itself into a new certificate with a new serial, and revoking the old serial does not touch the new one. Also run ` + "`miren runner delete`" + ` to stop further renewals, then check the audit log for other serials with that runner's subject and revoke those too.`
 
 const rollbackDescription = `Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
