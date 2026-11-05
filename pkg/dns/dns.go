@@ -193,13 +193,16 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		// Handle TXT query for app.miren (service discovery)
 		if qname == "app.miren." && question.Qtype == dns.TypeTXT {
-			s.handleServiceListQuery(w, r)
+			s.handleServiceListQuery(w, r, qname)
 			return
 		}
 
 		// Handle queries for *.app.miren pattern
 		if strings.HasSuffix(qname, ".app.miren.") {
 			switch question.Qtype {
+			case dns.TypeTXT:
+				s.handleServiceListQuery(w, r, qname)
+				return
 			case dns.TypeA:
 				s.handleAppMirenQuery(w, r, qname)
 				return
@@ -232,11 +235,20 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	s.forwardToUpstream(w, r)
 }
 
-func (s *Server) handleServiceListQuery(w dns.ResponseWriter, r *dns.Msg) {
+func (s *Server) handleServiceListQuery(w dns.ResponseWriter, r *dns.Msg, qname string) {
 	response := new(dns.Msg)
 	response.SetReply(r)
 	response.RecursionAvailable = true
 	response.Authoritative = true
+
+	var targetApp string
+	if qname != "app.miren." {
+		targetApp = strings.TrimSuffix(qname, ".app.miren.")
+		if targetApp == "" || strings.Contains(targetApp, ".") {
+			w.WriteMsg(response)
+			return
+		}
+	}
 
 	// Get source IP from request
 	remoteAddr := w.RemoteAddr()
@@ -269,6 +281,10 @@ func (s *Server) handleServiceListQuery(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	} else {
 		s.mu.RUnlock()
+	}
+
+	if targetApp != "" {
+		appName = targetApp
 	}
 
 	// Get all services for this app
@@ -573,11 +589,10 @@ func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname str
 	response.RecursionAvailable = true
 	response.Authoritative = true
 
-	// Extract service name from query (e.g., "web" from "web.app.miren.")
-	// qname format: "service-name.app.miren."
-	parts := strings.Split(qname, ".")
-	if len(parts) < 3 {
-		// Invalid format, return empty response
+	// Accept service.app.miren or service.app-name.app.miren, never
+	// silently treating extra or empty labels as a same-app lookup.
+	parts := strings.Split(strings.TrimSuffix(qname, ".app.miren."), ".")
+	if len(parts) > 2 || slices.Contains(parts, "") {
 		w.WriteMsg(response)
 		return
 	}
@@ -614,6 +629,12 @@ func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname str
 		}
 	} else {
 		s.mu.RUnlock()
+	}
+
+	// Explicit targets do not bypass caller recognition above. Discovery names
+	// select an app's sandbox addresses; they do not grant workload permissions.
+	if len(parts) == 2 {
+		appName = parts[1]
 	}
 
 	// Get IPs for this app+service

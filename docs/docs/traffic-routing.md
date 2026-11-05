@@ -311,8 +311,18 @@ num_instances = 1
 
 Internal traffic goes directly between containers — it doesn't pass through Miren's routing layer. Services connect on their standard ports (5432 for PostgreSQL, 6379 for Redis) without any Miren port configuration needed.
 
+To reach a service in another app in the same cluster, use `<service>.<app>.app.miren`. For example, `postgres.data.app.miren:5432` connects to the `postgres` service in the `data` app, and `web.api.app.miren:8000` connects to the `web` service in the `api` app if its process listens on port 8000. The shorter `<service>.app.miren` name always selects the caller's own app.
+
+DNS returns A records for the service's active sandbox IPv4 addresses, not an ingress or service-routing endpoint. Connect to the process's actual listening port, on the sandbox network interface (not just loopback). DNS does not translate ports, proxy HTTP, or activate a service scaled to zero. AAAA queries return no addresses. Unknown apps, services without active sandboxes, and malformed names return no addresses rather than falling back to the caller's app.
+
+To discover available services, query TXT records at `app.miren` for your own app or `<app>.app.miren` for another app. For example, a TXT query for `data.app.miren` might return `"postgres redis"`: a sorted, space-separated list of services with active sandboxes. You can then resolve `postgres.data.app.miren` to connect. Unknown apps and malformed names return no TXT answers.
+
+:::warning[DNS-compatible names]
+Explicit app discovery requires the stored app name to be a single lowercase DNS label, such as `data` or `my-app`. App creation does not enforce this restriction: names containing uppercase letters or dots cannot be targeted by these forms. DNS queries are case-insensitive, so capitalizing a query cannot distinguish apps named `MyApp` and `myapp`; it targets the lowercase name. Use lowercase DNS-label service names as well.
+:::
+
 :::note[Internal DNS scope]
-Internal DNS only works between services in the same app. Cross-app communication is not currently supported.
+Internal discovery, including TXT service listings, requires a recognized sandbox caller. Explicit app names intentionally allow discovery across apps in the same cluster; app-local names are a convenience, not a network isolation boundary. Applications should authenticate sensitive internal endpoints. This does not grant RPC or workload-identity permissions. Reverse DNS remains scoped to the caller's app.
 :::
 
 ## Simple Port Configuration
