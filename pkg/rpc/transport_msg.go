@@ -186,11 +186,15 @@ func nowStamp() string {
 // rejects it, so the caller's retry picks up a token that has since been
 // refreshed. Failing hard here would deny that retry the chance.
 func (c *NetworkClient) bearer() string {
-	if c.State == nil || c.State.opts == nil {
+	opts := c.opts
+	if opts == nil && c.State != nil {
+		opts = c.State.opts
+	}
+	if opts == nil {
 		return ""
 	}
 
-	if fn := c.State.opts.bearerTokenFunc; fn != nil {
+	if fn := opts.bearerTokenFunc; fn != nil {
 		token, err := fn()
 		if err != nil {
 			return ""
@@ -198,7 +202,7 @@ func (c *NetworkClient) bearer() string {
 		return token
 	}
 
-	return c.State.opts.bearerToken
+	return opts.bearerToken
 }
 
 func traceMap(ctx context.Context) map[string]string {

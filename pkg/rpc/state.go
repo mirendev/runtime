@@ -210,7 +210,8 @@ type stateOptions struct {
 
 	memServerName string
 
-	endpoint string
+	endpoint      string
+	clientRouting func(context.Context, func(...StateOption) (*NetworkClient, error)) (*NetworkClient, error)
 
 	skipVerify bool
 	caCert     []byte
@@ -353,6 +354,16 @@ func WithEndpoint(endpoint string) StateOption {
 	}
 }
 
+// WithClientRouting wraps only State.Client's connection setup, before any
+// application call. Each attempt applies options independently on the owning
+// State's transport. Explicit State.Connect calls bypass routing; application
+// calls are never routed or retried by this handler.
+func WithClientRouting(fn func(context.Context, func(...StateOption) (*NetworkClient, error)) (*NetworkClient, error)) StateOption {
+	return func(o *stateOptions) {
+		o.clientRouting = fn
+	}
+}
+
 func WithAuthenticator(auth Authenticator) StateOption {
 	return func(o *stateOptions) {
 		o.authenticator = auth
@@ -418,6 +429,51 @@ func WithTLSServerName(name string) StateOption {
 	}
 }
 
+func clientTLSConfig(so *stateOptions) (*tls.Config, error) {
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: so.skipVerify,
+		NextProtos:         []string{http3.NextProtoH3},
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			return nil
+		},
+	}
+
+	if so.tlsServerName != "" {
+		tlsCfg.ServerName = so.tlsServerName
+	}
+
+	if so.caCert != nil {
+		tlsCfg.RootCAs = x509.NewCertPool()
+		tlsCfg.RootCAs.AppendCertsFromPEM(so.caCert)
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			return nil
+		}
+	}
+
+	var (
+		cert tls.Certificate
+		err  error
+	)
+
+	if so.certData != nil && so.keyData != nil {
+		cert, err = tls.X509KeyPair(so.certData, so.keyData)
+		if err != nil {
+			return nil, err
+		}
+
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	} else if so.certPath != "" && so.keyPath != "" {
+		cert, err = tls.LoadX509KeyPair(so.certPath, so.keyPath)
+		if err != nil {
+			return nil, err
+		}
+
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsCfg, nil
+}
+
 func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	var so stateOptions
 
@@ -443,42 +499,10 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		return nil, err
 	}
 
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: so.skipVerify,
-		NextProtos:         []string{http3.NextProtoH3},
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			return nil
-		},
-	}
-
-	if so.tlsServerName != "" {
-		tlsCfg.ServerName = so.tlsServerName
-	}
-
-	if so.caCert != nil {
-		tlsCfg.RootCAs = x509.NewCertPool()
-		tlsCfg.RootCAs.AppendCertsFromPEM(so.caCert)
-		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			return nil
-		}
-	}
-
-	var cert tls.Certificate
-
-	if so.certData != nil && so.keyData != nil {
-		cert, err = tls.X509KeyPair(so.certData, so.keyData)
-		if err != nil {
-			return nil, err
-		}
-
-		tlsCfg.Certificates = []tls.Certificate{cert}
-	} else if so.certPath != "" && so.keyPath != "" {
-		cert, err = tls.LoadX509KeyPair(so.certPath, so.keyPath)
-		if err != nil {
-			return nil, err
-		}
-
-		tlsCfg.Certificates = []tls.Certificate{cert}
+	tlsCfg, err := clientTLSConfig(&so)
+	if err != nil {
+		_ = udpConn.Close()
+		return nil, err
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -1063,6 +1087,22 @@ func (s *State) contextOwnsShutdown(ctx context.Context) bool {
 }
 
 func (s *State) Client(name string) (*NetworkClient, error) {
+	if s.opts != nil && s.opts.clientRouting != nil {
+		return s.opts.clientRouting(s.top, func(options ...StateOption) (*NetworkClient, error) {
+			opts := *s.opts
+			for _, option := range options {
+				option(&opts)
+			}
+			if opts.endpoint == "" {
+				return nil, fmt.Errorf("no remote address specified")
+			}
+			tlsCfg, err := clientTLSConfig(&opts)
+			if err != nil {
+				return nil, err
+			}
+			return s.connect(opts.endpoint, name, &opts, tlsCfg)
+		})
+	}
 	if s.defaultEndpoint == "" {
 		return nil, fmt.Errorf("no remote address specified")
 	}
@@ -1071,6 +1111,10 @@ func (s *State) Client(name string) (*NetworkClient, error) {
 }
 
 func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
+	return s.connect(remote, name, s.opts, s.clientTlsCfg)
+}
+
+func (s *State) connect(remote, name string, opts *stateOptions, tlsCfg *tls.Config) (*NetworkClient, error) {
 	var (
 		client *NetworkClient
 		err    error
@@ -1086,7 +1130,7 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 		client = &NetworkClient{
 			State:         s,
 			transportKind: transportMsg,
-			tlsCfg:        s.clientTlsCfg,
+			tlsCfg:        tlsCfg,
 			remote:        remote,
 		}
 
@@ -1110,12 +1154,21 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 		client = &NetworkClient{
 			State:     s,
 			transport: s.transport,
-			tlsCfg:    s.clientTlsCfg,
+			tlsCfg:    tlsCfg,
 			remote:    remote,
 		}
 
 		client.setupTransport()
 	}
+
+	client.opts = opts
+	client.tlsCfg = tlsCfg
+	initialized := false
+	defer func() {
+		if !initialized {
+			client.closeSetupTransport()
+		}
+	}()
 
 	err = client.resolveCapability(name)
 	if err != nil {
@@ -1129,6 +1182,7 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 		return nil, err
 	}
 
+	initialized = true
 	return client, nil
 }
 
@@ -1159,11 +1213,17 @@ func (c *NetworkClient) newClientUnder(capa *Capability) *NetworkClient {
 		tk = transportMsg
 	}
 
+	tlsCfg := c.tlsCfg
+	if tlsCfg == nil {
+		tlsCfg = c.State.clientTlsCfg
+	}
+
 	newClient := &NetworkClient{
 		State:         c.State,
+		opts:          c.opts,
 		transportKind: tk,
 		transport:     transport,
-		tlsCfg:        c.State.clientTlsCfg.Clone(),
+		tlsCfg:        tlsCfg.Clone(),
 		capa:          capa,
 		oid:           capa.OID,
 		remote:        addr,

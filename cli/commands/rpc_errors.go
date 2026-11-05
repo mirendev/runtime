@@ -21,6 +21,30 @@ import (
 // user actually typed — "miren route list" is a far better thing to put in an
 // error than the capability "entities" it happens to resolve.
 func (c *Context) wrapRPCError(err error) error {
+	if routes, ok := errors.AsType[*clientconfig.ClusterRouteError](err); ok {
+		var d *ui.Diagnostic
+		if direct, ok := errors.AsType[*rpc.ResolveError](routes.Direct); ok {
+			d = c.diagnoseResolve(direct)
+		}
+		if d == nil {
+			d = &ui.Diagnostic{
+				Detail: "Neither the direct addresses nor the cloud relay could establish a connection.",
+				Actions: []ui.Action{
+					{Command: "miren doctor", Note: "check what's reachable"},
+					{Command: "miren cluster list", Note: "confirm the addresses"},
+				},
+			}
+		}
+		d.Summary = fmt.Sprintf("couldn't reach %s directly or through Miren Cloud", clusterLabel(c.ClusterName))
+		d.Facts = append(d.Facts,
+			ui.Fact{Label: "Direct", Value: routes.Direct.Error()},
+			ui.Fact{Label: "Miren Cloud", Value: routes.Cloud.Error()},
+		)
+		d.Cause = routes
+		d.ShowCause = c.Verbose()
+		return d
+	}
+
 	re, ok := errors.AsType[*rpc.ResolveError](err)
 	if !ok {
 		return err

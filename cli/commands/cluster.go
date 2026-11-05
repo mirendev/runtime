@@ -101,6 +101,8 @@ func ClusterList(ctx *Context, opts struct {
 			address := ccfg.Hostname
 			if ccfg.ViaCloud {
 				address = lipgloss.NewStyle().Foreground(theme.Muted).Render("via miren cloud")
+			} else if address == "" && ccfg.XID != "" && ccfg.Identity != "" {
+				address = lipgloss.NewStyle().Foreground(theme.Muted).Render("direct when reachable, otherwise via cloud")
 			} else if host, port, err := net.SplitHostPort(address); err == nil {
 				// Color the port portion gray for table display
 				grayPort := lipgloss.NewStyle().Foreground(theme.Muted).Render(":" + port)
