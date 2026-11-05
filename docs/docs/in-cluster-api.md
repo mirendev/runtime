@@ -66,11 +66,11 @@ The default is **`app-readonly`** — a fresh app's workloads can read their own
 | --- | --- | --- |
 | `none` | — | Authenticates but authorizes nothing |
 | `app-readonly` *(default)* | own app | Read own app status, logs, and deployment history |
-| `app-deployer` | own app | `app-readonly` + build and (re)deploy its own app |
+| `app-deployer` | own app | `app-readonly` + build and (re)deploy its own app, and disable/enable it |
 | `app-debugger` | own app | `app-readonly` + open a shell / run commands in its own sandboxes |
-| `app-admin` | own app | `app-deployer` + edit config/env, exec, and disable/enable — everything for its own app except deleting it |
+| `app-admin` | own app | `app-deployer` + edit config/env and exec — everything for its own app except deleting it |
 | `cluster-readonly` | cluster | Read status, logs, and infrastructure state across all apps |
-| `cluster-deployer` | cluster | `cluster-readonly` + build, deploy, and configure any app (but not create, destroy, disable, or enable apps) |
+| `cluster-deployer` | cluster | `cluster-readonly` + build, deploy, configure, disable, and enable any app (but not create or destroy apps) |
 | `cluster-debugger` | cluster | `cluster-readonly` + exec and inspect any app |
 | `cluster-admin` | cluster | Broad control across the cluster (see the limits below) |
 

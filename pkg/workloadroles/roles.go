@@ -82,6 +82,9 @@ var (
 			"updatedeploymentappversion", "canceldeployment",
 		),
 		"builder": set("buildfromtar", "prepareupload", "buildfromprepared"),
+		// A deployer can already ship code that refuses every connection, so
+		// turning the app off and back on grants no new power.
+		"crud": set("disable", "enable"),
 	}
 
 	// appConfig: mutate one app's configuration. These handlers gain their
@@ -95,13 +98,6 @@ var (
 		"deployment": set("setenvvars", "deleteenvvars"),
 		"routes":     set("set", "remove", "protect", "unprotect", "waf", "timeout", "tlscheck"),
 		"sandboxes":  set("stop", "delete"),
-	}
-
-	// appLifecycle: turn one app off and back on. Reversible, unlike
-	// crud.destroy, but it takes the app down, so it goes to the admin roles
-	// and not to deployers.
-	appLifecycle = perms{
-		"crud": set("disable", "enable"),
 	}
 
 	// exec: open a shell / run a command in a sandbox. Guarded in this change.
@@ -149,7 +145,7 @@ var Roles = map[string]Role{
 	RoleAppReadonly: {Perms: appRead},
 	RoleAppDeployer: {Perms: merge(appRead, appDeploy)},
 	RoleAppDebugger: {Perms: merge(appRead, execBlock)},
-	RoleAppAdmin:    {Perms: merge(appRead, appDeploy, appConfig, appLifecycle, execBlock)},
+	RoleAppAdmin:    {Perms: merge(appRead, appDeploy, appConfig, execBlock)},
 
 	RoleClusterReadonly: {Perms: merge(appRead, clusterRead), ClusterScoped: true},
 	// cluster-deployer deploys and configures any app, but does NOT create or
@@ -179,7 +175,7 @@ var Roles = map[string]Role{
 // identities, corrupt the entity store, or reconfigure the cluster fabric.
 func clusterAdminPerms() perms {
 	return merge(
-		appRead, appDeploy, appConfig, appLifecycle, execBlock, clusterRead,
+		appRead, appDeploy, appConfig, execBlock, clusterRead,
 		perms{
 			"crud":         set("new", "destroy"),
 			"admin":        set("invoke", "listmethods", "describemethods"),
