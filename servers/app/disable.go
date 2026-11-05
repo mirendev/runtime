@@ -16,7 +16,7 @@ import (
 
 // Disable holds every service of an app at zero instances until Enable. The
 // app keeps its versions, routes, env, disks and addons; nothing boots for it,
-// including on a deploy, and requests get a 503.
+// builds are refused, and requests get a 503.
 //
 // The flag on the App is what keeps it disabled: the launcher, activator and
 // pool manager all read it, so the pools scaled down here stay down.

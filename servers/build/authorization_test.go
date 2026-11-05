@@ -5,10 +5,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -65,6 +68,26 @@ func TestPrepareUploadAuthorizesBeforeWriting(t *testing.T) {
 			require.Error(t, err, "authorization must never create the app")
 		})
 	}
+}
+
+func TestPrepareUploadRefusesDisabledApp(t *testing.T) {
+	b := newDeployTestBuilder(t)
+	ctx := context.Background()
+	rec, _, err := app.EnsureApp(ctx, b.EAS, "off", "owner")
+	require.NoError(t, err)
+	client := &build_v1alpha.BuilderClient{Client: rpc.LocalClient(build_v1alpha.AdaptBuilder(&SagaBuilder{inner: b}))}
+
+	require.NoError(t, b.ec.Patch(ctx, rec.ID, 0, entity.Component(core_v1alpha.AppDisabledId,
+		(&core_v1alpha.Disabled{At: time.Now()}).Encode())))
+	_, err = client.PrepareUpload(ctx, "off", nil)
+	require.ErrorContains(t, err, "is disabled")
+
+	require.NoError(t, b.ec.Patch(ctx, rec.ID, 0, entity.Component(core_v1alpha.AppDisabledId, nil)))
+	_, err = client.PrepareUpload(ctx, "off", nil)
+	require.ErrorContains(t, err, "data path not configured", "an enabled app reaches the upload")
+
+	_, err = client.PrepareUpload(ctx, "brand-new", nil)
+	require.ErrorContains(t, err, "data path not configured", "a first deploy has nothing to refuse")
 }
 
 func TestPreparedUploadDenialDoesNotConsumeSession(t *testing.T) {

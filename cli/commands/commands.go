@@ -1512,7 +1512,7 @@ Use restart to:
 You do not need to restart after ` + "`" + `miren env set` + "`" + `, ` + "`" + `miren env delete` + "`" + `, ` + "`" + `miren addon create` + "`" + `, or ` + "`" + `miren addon delete` + "`" + `. Each of those already creates a new version and rolls out new sandboxes automatically. A manual restart on top only adds a redundant rollout.
 :::`
 
-const appDisableDescription = `Disable turns an app off. Every service is held at zero instances: running sandboxes shut down, nothing boots on a deploy, scheduled tasks pause, and visitors get a 503 holding page. The app keeps its versions, routes, environment, disks, and addons, so ` + "`" + `miren app enable` + "`" + ` brings it back as it was.
+const appDisableDescription = `Disable turns an app off. Every service is held at zero instances: running sandboxes shut down, deploys are refused, scheduled tasks pause, and visitors get a 503 holding page. The app keeps its versions, routes, environment, disks, and addons, so ` + "`" + `miren app enable` + "`" + ` brings it back as it was.
 
 Disabled is an explicit state, so ` + "`" + `miren app list` + "`" + ` and ` + "`" + `miren app status` + "`" + ` report it as such rather than as an app that failed to start.
 

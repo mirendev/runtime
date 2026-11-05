@@ -136,6 +136,9 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 	if err := validateDeploymentMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
 		return err
 	}
+	if err := s.inner.refuseDisabled(ctx, name); err != nil {
+		return err
+	}
 	work := newDeploymentContext(ctx)
 	defer work.Close()
 	defer func() { retErr = work.result(retErr) }()
@@ -196,6 +199,9 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 		return rpc.ErrUnauthorized
 	}
 	if err := s.inner.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
+	if err := s.inner.refuseDisabled(ctx, name); err != nil {
 		return err
 	}
 	if !s.inner.sessions.CompareAndDelete(sessionID, val) {

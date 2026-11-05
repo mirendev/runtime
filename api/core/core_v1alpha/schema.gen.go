@@ -1404,7 +1404,7 @@ func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"))
 	sb.Component("deployment_lock", "dev.miren.core/app.deployment_lock", schema.Doc("The expiring lock held by the deployment currently mutating this app"))
 	(&DeploymentLock{}).InitSchema(sb.Builder("app.deployment_lock"))
-	sb.Component("disabled", "dev.miren.core/app.disabled", schema.Doc("Operator-initiated disabled state, set by `miren app disable`. When present, every service is held at zero instances, nothing boots for a deploy, and requests get a 503. Absent means the app runs normally."))
+	sb.Component("disabled", "dev.miren.core/app.disabled", schema.Doc("Operator-initiated disabled state, set by `miren app disable`. When present, every service is held at zero instances, builds are refused, and requests get a 503. Absent means the app runs normally."))
 	(&Disabled{}).InitSchema(sb.Builder("app.disabled"))
 	sb.Ref("initial_config", "dev.miren.core/app.initial_config", schema.Doc("Reference to the initial ConfigVersion entity created before the first deploy"))
 	sb.String("owned_by", "dev.miren.core/app.owned_by", schema.Doc("Cloud principal subject that owns the app; empty for legacy apps and non-Cloud creators"))

@@ -1152,6 +1152,9 @@ func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 	if err := b.authorizeBuild(ctx, name); err != nil {
 		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 	}
+	if err := b.refuseDisabled(ctx, name); err != nil {
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
+	}
 	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, creator)
 	if err != nil {
 		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
@@ -1208,6 +1211,9 @@ func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 // create-on-first-deploy behavior.
 func (b *Builder) ensureApp(ctx context.Context, name string) (*core_v1alpha.App, error) {
 	if err := b.authorizeBuild(ctx, name); err != nil {
+		return nil, err
+	}
+	if err := b.refuseDisabled(ctx, name); err != nil {
 		return nil, err
 	}
 	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, app.CreationSubject(ctx))
@@ -1383,6 +1389,9 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 		return rpc.AppAccessError(ctx, name)
 	}
 	if err := b.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
+	if err := b.refuseDisabled(ctx, name); err != nil {
 		return err
 	}
 
