@@ -933,7 +933,7 @@ func (m *Manager) appDisabled(ctx context.Context, pool *compute_v1alpha.Sandbox
 	}
 	var app core_v1alpha.App
 	app.Decode(resp.Entity().Entity())
-	return !app.DisabledAt.IsZero()
+	return !app.Disabled.Empty()
 }
 
 // backoffDuration calculates the exponential backoff duration based on consecutive crash count

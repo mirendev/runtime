@@ -252,7 +252,7 @@ func (s *appHealthSource) healthOf(entry appEntry) apphealth.State {
 	out := s.poolHealthOf(entry)
 	// A disabled app is held at zero on purpose; whatever its pools read as
 	// on the way down, that is the state worth reporting.
-	if !entry.app.DisabledAt.IsZero() {
+	if !entry.app.Disabled.Empty() {
 		out.Health = apphealth.Disabled
 	}
 	return out
@@ -757,9 +757,9 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		state.Results().SetMaintenanceRoutes(down)
 	}
 
-	if !appRec.DisabledAt.IsZero() {
-		state.Results().SetDisabledAt(standard.ToTimestamp(appRec.DisabledAt))
-		state.Results().SetDisabledReason(appRec.DisabledReason)
+	if !appRec.Disabled.Empty() {
+		state.Results().SetDisabledAt(standard.ToTimestamp(appRec.Disabled.At))
+		state.Results().SetDisabledReason(appRec.Disabled.Reason)
 	}
 
 	return nil
@@ -976,7 +976,7 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 
 	// Restart restores fixed-mode counts, which would quietly undo a disable
 	// until the next launcher resync put it back.
-	if !appRec.DisabledAt.IsZero() {
+	if !appRec.Disabled.Empty() {
 		return fmt.Errorf("app %q is disabled; run `miren app enable` to start it", name)
 	}
 

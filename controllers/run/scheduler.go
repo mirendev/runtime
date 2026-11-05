@@ -137,7 +137,7 @@ func (s *Scheduler) Sweep(ctx context.Context, now time.Time) error {
 			continue
 		}
 
-		if !app.DisabledAt.IsZero() {
+		if !app.Disabled.Empty() {
 			continue
 		}
 
@@ -211,8 +211,8 @@ func (s *Scheduler) sweepTask(
 	// Enable discards all pending ticks up to its timestamp, including ones
 	// due before disable. Only the latest enable matters, even when several
 	// disable/enable cycles happen between sweeps.
-	if app.LastEnabledAt.After(from) {
-		from = app.LastEnabledAt
+	if app.SchedulesResumedAt.After(from) {
+		from = app.SchedulesResumedAt
 		s.frontier[key] = from
 	}
 	s.mu.Unlock()

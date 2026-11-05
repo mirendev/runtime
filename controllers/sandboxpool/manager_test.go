@@ -1562,7 +1562,7 @@ func TestManagerDisabledApp_NoCrashCooldown(t *testing.T) {
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	appID, err := server.Client.Create(ctx, "disabled-app", &core_v1alpha.App{DisabledAt: time.Now()})
+	appID, err := server.Client.Create(ctx, "disabled-app", &core_v1alpha.App{Disabled: core_v1alpha.Disabled{At: time.Now()}})
 	require.NoError(t, err)
 
 	pool := &compute_v1alpha.SandboxPool{

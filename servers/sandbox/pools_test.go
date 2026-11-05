@@ -208,7 +208,7 @@ func TestPoolScalingRefusesDisabledApp(t *testing.T) {
 	t.Cleanup(cleanup)
 	ec := inmem.Client
 	client := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(ec))))
-	appID, err := ec.Create(ctx, "shop", &core_v1alpha.App{DisabledAt: time.Now()})
+	appID, err := ec.Create(ctx, "shop", &core_v1alpha.App{Disabled: core_v1alpha.Disabled{At: time.Now()}})
 	require.NoError(t, err)
 	poolID, err := ec.Create(ctx, "shop-web", &compute_v1alpha.SandboxPool{App: appID, Service: "web", DesiredInstances: 1})
 	require.NoError(t, err)

@@ -484,7 +484,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 
 	// A disabled app's pools are held at zero: they exist so the version is
 	// complete, but nothing boots, not even for deploy verification.
-	disabled := !app.DisabledAt.IsZero()
+	disabled := !app.Disabled.Empty()
 	if disabled {
 		desiredInstances = 0
 	}

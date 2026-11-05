@@ -238,7 +238,7 @@ func TestSchedulerPausesWhileTheAppIsDisabled(t *testing.T) {
 		t.Helper()
 		_, err := h.inm.EAC.Patch(ctx, entity.New(
 			entity.Ref(entity.DBId, appID),
-			entity.Time(core_v1alpha.AppDisabledAtId, at),
+			entity.Component(core_v1alpha.AppDisabledId, (&core_v1alpha.Disabled{At: at}).Encode()),
 		).Attrs(), 0)
 		require.NoError(t, err)
 	}
@@ -252,8 +252,8 @@ func TestSchedulerPausesWhileTheAppIsDisabled(t *testing.T) {
 
 	_, err := h.inm.EAC.Patch(ctx, entity.New(
 		entity.Ref(entity.DBId, appID),
-		entity.Time(core_v1alpha.AppDisabledAtId, time.Time{}),
-		entity.Time(core_v1alpha.AppLastEnabledAtId, atUTC("2026-08-04T14:10:00Z")),
+		entity.Component(core_v1alpha.AppDisabledId, nil),
+		entity.Time(core_v1alpha.AppSchedulesResumedAtId, atUTC("2026-08-04T14:10:00Z")),
 	).Attrs(), 0)
 	require.NoError(t, err)
 
@@ -281,7 +281,7 @@ func TestSchedulerResumesFromLatestEnable(t *testing.T) {
 			for _, enabledAt := range tc.enables {
 				_, err := h.inm.EAC.Patch(ctx, entity.New(
 					entity.Ref(entity.DBId, entity.Id("app/demo")),
-					entity.Time(core_v1alpha.AppLastEnabledAtId, atUTC(enabledAt)),
+					entity.Time(core_v1alpha.AppSchedulesResumedAtId, atUTC(enabledAt)),
 				).Attrs(), 0)
 				require.NoError(t, err)
 			}

@@ -887,7 +887,7 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 	// A disabled app answers with its holding page before auth, for the same
 	// reason maintenance does, and before the lease cache, so a warm app stops
 	// serving the moment it's disabled rather than when its sandboxes exit.
-	if !target.app.DisabledAt.IsZero() {
+	if !target.app.Disabled.Empty() {
 		if appName != nil && *appName == "" {
 			*appName = target.appMetadata.Name
 		}
@@ -1648,7 +1648,7 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	appEntity.Decode(gr.Entity().Entity())
 
 	// Checked before the lease cache, as on the HTTP path.
-	if !appEntity.DisabledAt.IsZero() {
+	if !appEntity.Disabled.Empty() {
 		resp.SetError("app is disabled")
 		return resp, nil
 	}

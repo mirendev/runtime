@@ -65,8 +65,7 @@ func TestDisabledAppStopsServingFromCachedLease(t *testing.T) {
 
 	_, err = inmem.EAC.Patch(ctx, entity.New(
 		entity.Ref(entity.DBId, appID),
-		entity.Time(core_v1alpha.AppDisabledAtId, time.Now()),
-		entity.String(core_v1alpha.AppDisabledReasonId, "moved to the new cluster"),
+		entity.Component(core_v1alpha.AppDisabledId, (&core_v1alpha.Disabled{At: time.Now(), Reason: "moved to the new cluster"}).Encode()),
 	).Attrs(), 0)
 	require.NoError(t, err)
 

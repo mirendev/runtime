@@ -220,7 +220,7 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 		if err := s.ec.GetById(ctx, pool.App, &app); err != nil {
 			return err
 		}
-		if !app.DisabledAt.IsZero() {
+		if !app.Disabled.Empty() {
 			return fmt.Errorf("app %s is disabled; run `miren app enable -a %s` to start it", owner, owner)
 		}
 	}

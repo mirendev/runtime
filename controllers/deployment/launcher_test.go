@@ -4899,7 +4899,7 @@ func TestDisabledAppStaysAtZero(t *testing.T) {
 	}
 
 	app.ActiveVersion = newVersion("v1").ID
-	app.DisabledAt = time.Now()
+	app.Disabled.At = time.Now()
 	require.NoError(t, server.Client.Update(ctx, app))
 	require.NoError(t, newTestLauncher(log, server.EAC).Reconcile(ctx, app, nil))
 

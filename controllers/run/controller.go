@@ -122,7 +122,7 @@ func (c *Controller) start(ctx context.Context, r *run_v1alpha.Run) error {
 		if err := c.EC.GetById(ctx, r.App, &app); err != nil {
 			return fmt.Errorf("checking scheduled run app: %w", err)
 		}
-		if !app.DisabledAt.IsZero() {
+		if !app.Disabled.Empty() {
 			return c.finish(ctx, r, run_v1alpha.SKIPPED, nil)
 		}
 	}

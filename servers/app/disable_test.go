@@ -88,9 +88,9 @@ func TestAppDisableEnable(t *testing.T) {
 	assert.Equal(t, int64(0), desired(webPool))
 	assert.Equal(t, int64(0), desired(workerPool))
 	app := getApp()
-	assert.False(t, app.DisabledAt.IsZero())
-	assert.Equal(t, "moved to the new box", app.DisabledReason)
-	disabledAt := app.DisabledAt
+	assert.False(t, app.Disabled.Empty())
+	assert.Equal(t, "moved to the new box", app.Disabled.Reason)
+	disabledAt := app.Disabled.At
 
 	src, err := appInfo.collectAppHealth(ctx)
 	require.NoError(t, err)
@@ -109,9 +109,9 @@ func TestAppDisableEnable(t *testing.T) {
 	assert.Equal(t, int64(2), desired(workerPool), "fixed service returns to its configured count")
 	assert.Equal(t, int64(0), desired(webPool), "autoscaled service starts on the next request")
 	app = getApp()
-	assert.True(t, app.DisabledAt.IsZero())
-	assert.Empty(t, app.DisabledReason)
-	assert.False(t, app.LastEnabledAt.Before(disabledAt))
+	assert.True(t, app.Disabled.Empty())
+	assert.Empty(t, app.Disabled.Reason)
+	assert.False(t, app.SchedulesResumedAt.Before(disabledAt))
 }
 
 // An app can be disabled before it's ever deployed. Status has to say so

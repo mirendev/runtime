@@ -259,7 +259,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 	// Disabled is an explicit operator decision, so it wins over whatever the
 	// pools say, including when there's no active version or the pool lookup
 	// failed. List and the cloud health feed report it the same way.
-	if !appRec.DisabledAt.IsZero() {
+	if !appRec.Disabled.Empty() {
 		rai.SetHealth(apphealth.Disabled)
 		for _, svc := range rai.Services() {
 			svc.SetHealth(apphealth.Disabled)

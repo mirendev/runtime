@@ -35,13 +35,12 @@ func (r *AppInfo) Disable(ctx context.Context, state *app_v1alpha.CrudDisable) e
 
 	// Set the flag before touching pools, so nothing that reads it scales a
 	// pool back up in between. Disabling again only updates the reason.
-	disabledAt := appRec.DisabledAt
-	if disabledAt.IsZero() {
-		disabledAt = time.Now()
+	disabled := core_v1alpha.Disabled{At: appRec.Disabled.At, Reason: args.Reason()}
+	if disabled.At.IsZero() {
+		disabled.At = time.Now()
 	}
 	if err := r.EC.Patch(ctx, appRec.ID, 0,
-		entity.Time(core_v1alpha.AppDisabledAtId, disabledAt),
-		entity.String(core_v1alpha.AppDisabledReasonId, args.Reason()),
+		entity.Component(core_v1alpha.AppDisabledId, disabled.Encode()),
 	); err != nil {
 		return fmt.Errorf("marking app %q disabled: %w", name, err)
 	}
@@ -88,16 +87,15 @@ func (r *AppInfo) Enable(ctx context.Context, state *app_v1alpha.CrudEnable) err
 	if err := r.EC.Get(ctx, name, &appRec); err != nil {
 		return fmt.Errorf("app %q not found: %w", name, err)
 	}
-	if appRec.DisabledAt.IsZero() {
+	if appRec.Disabled.Empty() {
 		return fmt.Errorf("app %q is not disabled", name)
 	}
 
 	// The scheduler resumes from this timestamp rather than replaying pending
 	// ticks, even if it never observed the app disabled between sweeps.
 	if err := r.EC.Patch(ctx, appRec.ID, 0,
-		entity.Time(core_v1alpha.AppDisabledAtId, time.Time{}),
-		entity.String(core_v1alpha.AppDisabledReasonId, ""),
-		entity.Time(core_v1alpha.AppLastEnabledAtId, time.Now()),
+		entity.Component(core_v1alpha.AppDisabledId, nil),
+		entity.Time(core_v1alpha.AppSchedulesResumedAtId, time.Now()),
 	); err != nil {
 		return fmt.Errorf("enabling app %q: %w", name, err)
 	}

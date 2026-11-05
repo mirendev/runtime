@@ -215,7 +215,7 @@ func TestPendingRunRespectsAppDisabledState(t *testing.T) {
 			id := h.createRun(ctx, r)
 			if tc.disabled {
 				require.NoError(t, h.inm.Client.Patch(ctx, appID, 0,
-					entity.Time(core_v1alpha.AppDisabledAtId, time.Now())))
+					entity.Component(core_v1alpha.AppDisabledId, (&core_v1alpha.Disabled{At: time.Now()}).Encode())))
 			}
 
 			require.NoError(t, h.reconcile(ctx, id))
@@ -225,7 +225,7 @@ func TestPendingRunRespectsAppDisabledState(t *testing.T) {
 				assert.Empty(t, after.Sandbox)
 				assert.False(t, after.EndedAt.IsZero())
 				require.NoError(t, h.inm.Client.Patch(ctx, appID, 0,
-					entity.Time(core_v1alpha.AppDisabledAtId, time.Time{})))
+					entity.Component(core_v1alpha.AppDisabledId, nil)))
 				require.NoError(t, h.reconcile(ctx, id))
 				assert.Equal(t, run_v1alpha.SKIPPED, h.getRun(ctx, id).Status,
 					"enable must not replay the skipped run")

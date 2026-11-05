@@ -868,7 +868,7 @@ func (a *localActivator) appDisabled(ctx context.Context, appID entity.Id) bool 
 	}
 	var app core_v1alpha.App
 	app.Decode(resp.Entity().Entity())
-	return !app.DisabledAt.IsZero()
+	return !app.Disabled.Empty()
 }
 
 // requestPoolCapacity finds the SandboxPool created by DeploymentLauncher and increments DesiredInstances.
