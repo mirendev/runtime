@@ -778,8 +778,12 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	// server keeps enforcing what it has: a new revocation needs the same store,
 	// and locking out operators and runners during an outage would gain nothing.
 	go certrevocation.Watch(ctx, c.Log, eac, c.certRevocations)
+	apiCert, err := caauth.LoadCertificate(c.apiCert)
+	if err != nil {
+		return fmt.Errorf("reading API cert: %w", err)
+	}
 	server.ExposeValue(rpc.ServiceCertRevocations, certrevocation_v1alpha.AdaptCertRevocations(
-		certrevocationsrv.NewServer(c.Log, ec, c.certRevocations),
+		certrevocationsrv.NewServer(c.Log, ec, c.certRevocations, rpc.CertSerial(apiCert.SerialNumber)),
 	))
 
 	if err := c.prepareRunnerEtcdAccess(ctx, ec); err != nil {
