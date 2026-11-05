@@ -8,9 +8,9 @@ description: "Debug with Workbench and read-only local source tools"
 
 Debug with Workbench and read-only local source tools
 
-Ask Workbench is a Miren Labs feature. Ask for access on Discord: https://miren.dev/discord
+Workbench is in beta and available to all Miren Cloud users.
 
-Ask the same cluster-scoped Workbench available in Miren Cloud. Requires a Cloud-registered cluster, a Cloud login, and Workbench enabled for the cluster's organization. Cluster selection follows the usual --cluster, MIREN_CLUSTER, per-app state, and active-cluster rules.
+Ask the same cluster-scoped Workbench available in Miren Cloud. Requires a Cloud-registered cluster and a Cloud login. Cluster selection follows the usual --cluster, MIREN_CLUSTER, per-app state, and active-cluster rules.
 
 With no question, starts an interactive conversation; piped input is treated as one question. Defaults to the app in the current directory or a parent directory, or in -d when specified. Pass -a or MIREN_APP to override the app. Outside an app directory, asks about the cluster. Terminal responses render Markdown with a waiting indicator; redirected responses stream as plain text. Local tool calls are shown as they happen. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
 
