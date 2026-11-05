@@ -5,21 +5,79 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
+	appserver "miren.dev/runtime/servers/app"
 	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
+
+func TestAppPoolSizeSelectsOnlyActiveService(t *testing.T) {
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	appID, err := store.Client.Create(t.Context(), "shop", &core_v1alpha.App{ActiveVersion: "app_version/current"})
+	require.NoError(t, err)
+	for _, name := range []string{"current", "old"} {
+		store.AddEntity(entity.New(entity.DBId, entity.Id("app_version/"+name), (&core_v1alpha.AppVersion{App: appID}).Encode))
+	}
+	for _, item := range []struct{ id, service, version string }{
+		{"pool/web", "web", "current"}, {"pool/worker", "worker", "current"}, {"pool/old", "web", "old"},
+	} {
+		require.NoError(t, store.Client.UpdateAttrs(t.Context(), entity.Id(item.id), (&compute_v1alpha.SandboxPool{
+			App: appID, Service: item.service, DesiredInstances: 2, CurrentInstances: 1, ReadyInstances: 1,
+			SandboxSpec: compute_v1alpha.SandboxSpec{Version: entity.Id("app_version/" + item.version)},
+		}).Encode(), entity.Ref(entity.DBId, entity.Id(item.id))))
+	}
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(&appserver.AppInfo{Log: slog.Default(), EC: store.Client}))
+	server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(store.Client)))
+	var stdout bytes.Buffer
+	base := []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server-address", server.ListenAddr(), "--app", "shop"}
+	run := func(size, service string, json bool) error {
+		args := append(slices.Clone(base), "--service", service)
+		if json {
+			args = append(args, "--json")
+		}
+		if size != "" {
+			args = append(args, "--", size)
+		}
+		out, err := RunCommand(AppPoolSize, args...)
+		stdout = out.Stdout
+		return err
+	}
+	require.NoError(t, run("5", "web", true))
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	require.Equal(t, "pool/web", result["id"])
+	require.EqualValues(t, 5, result["desired_instances"])
+	for id, want := range map[string]int64{"pool/web": 5, "pool/worker": 2, "pool/old": 2} {
+		var pool compute_v1alpha.SandboxPool
+		require.NoError(t, store.Client.GetById(t.Context(), entity.Id(id), &pool))
+		require.Equal(t, want, pool.DesiredInstances)
+	}
+	require.NoError(t, run("", "web", false))
+	for _, text := range []string{"ID", "APP", "SERVICE", "DESIRED", "CURRENT", "READY", "shop", "web", "5"} {
+		require.Contains(t, stdout.String(), text)
+	}
+	require.ErrorContains(t, run("3", "missing", true), "no active pool")
+	require.ErrorContains(t, run("-1", "web", true), "non-negative")
+	require.Error(t, run("999999999999999999999999", "web", true))
+}
 
 func TestSandboxPoolCommandsLegacyEntities(t *testing.T) {
 	for _, oldService := range []bool{false, true} {
@@ -87,30 +145,27 @@ func TestSandboxPoolCommandsWithoutEntityAccess(t *testing.T) {
 	// exclusively through the safe operation-specific boundary.
 	server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(ec)))
 	var stdout bytes.Buffer
-	ctx := &Context{Context: t.Context(), Log: slog.Default(), Stdout: &stdout, Stderr: io.Discard}
-	ctx.Config.ServerAddress = server.ListenAddr()
-	list := func(format FormatOptions) error {
-		stdout.Reset()
-		return SandboxPoolList(ctx, struct {
-			FormatOptions
-			ConfigCentric
-		}{FormatOptions: format})
+	base := []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server-address", server.ListenAddr()}
+	list := func(format ...string) error {
+		out, err := RunCommand(SandboxPoolList, append(slices.Clone(base), format...)...)
+		stdout = out.Stdout
+		return err
 	}
 	setDesired := func(id, desired string, raw bool) error {
-		stdout.Reset()
-		return SandboxPoolSetDesired(ctx, struct {
-			RawID   bool   `long:"raw-id" description:"Use the provided ID as-is without adding the pool/ prefix"`
-			PoolID  string `position:"0" usage:"Pool ID (e.g., pool-CUSkT8J58BmgkDeGyPP2e or pool/pool-CUSkT8J58BmgkDeGyPP2e)" required:"true"`
-			Desired string `position:"1" usage:"Desired instance count (absolute number, +N to increase, or -N to decrease)" required:"true"`
-			ConfigCentric
-		}{PoolID: id, Desired: desired, RawID: raw})
+		args := slices.Clone(base)
+		if raw {
+			args = append(args, "--raw-id")
+		}
+		out, err := RunCommand(SandboxPoolSetDesired, append(args, "--", id, desired)...)
+		stdout = out.Stdout
+		return err
 	}
-	require.NoError(t, list(FormatOptions{}))
-	for _, text := range []string{"ID", "VERSION", "SERVICE", "MODE", "DESIRED", "CURRENT", "READY", "CREATED", "UPDATED", ent.Entity().ShortId(), verEnt.Entity().ShortId(), "web", "fixed"} {
+	require.NoError(t, list())
+	for _, text := range []string{"ID", "APP", "VERSION", "SERVICE", "MODE", "DESIRED", "CURRENT", "READY", "CREATED", "UPDATED", ent.Entity().ShortId(), "shop", verEnt.Entity().ShortId(), "web", "fixed"} {
 		require.Contains(t, stdout.String(), text)
 	}
-	for _, format := range []FormatOptions{{JSON: true}, {Format: "json"}} {
-		require.NoError(t, list(format))
+	for _, format := range [][]string{{"--json"}, {"--format", "json"}} {
+		require.NoError(t, list(format...))
 		var items []map[string]any
 		require.NoError(t, json.Unmarshal(stdout.Bytes(), &items))
 		require.Len(t, items, 1)
@@ -169,10 +224,62 @@ func TestSandboxPoolCommandsWithoutEntityAccess(t *testing.T) {
 	require.EqualValues(t, 1, pool.DesiredInstances)
 	require.NoError(t, ec.Delete(t.Context(), rawID))
 	require.NoError(t, ec.Delete(t.Context(), poolID))
-	require.NoError(t, list(FormatOptions{}))
+	require.NoError(t, list())
 	require.Equal(t, "No sandbox pools found\n", stdout.String())
-	require.NoError(t, list(FormatOptions{JSON: true}))
+	require.NoError(t, list("--json"))
 	require.Equal(t, "[]\n", stdout.String())
+}
+
+func TestSandboxPoolListFilters(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := inmem.Client
+	for _, app := range []string{"shop", "blog"} {
+		appID, err := ec.Create(t.Context(), app, &core_v1alpha.App{})
+		require.NoError(t, err)
+		versionID, err := ec.Create(t.Context(), app+"-v1", &core_v1alpha.AppVersion{App: appID})
+		require.NoError(t, err)
+		for _, service := range []string{"web", "worker"} {
+			poolID := entity.Id("pool/" + app + "-" + service)
+			require.NoError(t, ec.UpdateAttrs(t.Context(), poolID, (&compute_v1alpha.SandboxPool{
+				App: appID, Service: service, SandboxSpec: compute_v1alpha.SandboxSpec{Version: versionID},
+			}).Encode(), entity.Ref(entity.DBId, poolID)))
+		}
+	}
+	// Addon pools name their app only in a label, with no owner or service.
+	addonID, err := ec.Create(t.Context(), "shop-db", &compute_v1alpha.SandboxPool{}, entityserver.WithLabels(types.LabelSet("addon", "miren-postgresql", "app", "shop")))
+	require.NoError(t, err)
+	addon := addonID.String()
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(ec)))
+	args := []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server-address", server.ListenAddr(), "--format", "json"}
+	list := func(extra ...string) []string {
+		out, err := RunCommand(SandboxPoolList, append(args, extra...)...)
+		require.NoError(t, err)
+		var items []sandboxPoolListEntry
+		require.NoError(t, json.Unmarshal(out.Stdout.Bytes(), &items))
+		ids := make([]string, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		return ids
+	}
+	require.ElementsMatch(t, []string{"pool/shop-web", "pool/shop-worker", "pool/blog-web", "pool/blog-worker", addon}, list())
+	require.ElementsMatch(t, []string{"pool/shop-web", "pool/shop-worker", addon}, list("--app", "shop"))
+	require.ElementsMatch(t, []string{"pool/shop-worker", "pool/blog-worker"}, list("--service", "worker"))
+	require.Equal(t, []string{"pool/blog-web"}, list("--app", "blog", "--service", "web"))
+	require.Empty(t, list("--app", "missing"))
+
+	table := args[:len(args)-2]
+	out, err := RunCommand(SandboxPoolList, table...)
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout.String(), "APP")
+	require.Contains(t, out.Stdout.String(), "blog")
+	out, err = RunCommand(SandboxPoolList, append(slices.Clone(table), "--app", "missing")...)
+	require.NoError(t, err)
+	require.Equal(t, "No sandbox pools found for app \"missing\"\n", out.Stdout.String())
 }
 
 type deniedPoolServer struct{}
@@ -194,33 +301,18 @@ func TestSandboxPoolCommandsDoNotFallback(t *testing.T) {
 			if available {
 				server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(deniedPoolServer{}))
 			}
-			var stdout bytes.Buffer
-			ctx := &Context{Context: t.Context(), Log: slog.Default(), Stdout: &stdout, Stderr: io.Discard}
-			ctx.Config.ServerAddress = server.ListenAddr()
-			err = SandboxPoolList(ctx, struct {
-				FormatOptions
-				ConfigCentric
-			}{})
-			require.Error(t, err)
-			if available {
-				require.ErrorContains(t, err, "unauthorized")
-			} else {
-				require.ErrorContains(t, err, "entities")
+			base := []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server-address", server.ListenAddr()}
+			check := func(out *CommandOutput, err error) {
+				require.Error(t, err)
+				if available {
+					require.ErrorContains(t, err, "unauthorized")
+				} else {
+					require.ErrorContains(t, err, "entities")
+				}
+				require.Empty(t, out.Stdout.String())
 			}
-			require.Empty(t, stdout.String())
-			err = SandboxPoolSetDesired(ctx, struct {
-				RawID   bool   `long:"raw-id" description:"Use the provided ID as-is without adding the pool/ prefix"`
-				PoolID  string `position:"0" usage:"Pool ID (e.g., pool-CUSkT8J58BmgkDeGyPP2e or pool/pool-CUSkT8J58BmgkDeGyPP2e)" required:"true"`
-				Desired string `position:"1" usage:"Desired instance count (absolute number, +N to increase, or -N to decrease)" required:"true"`
-				ConfigCentric
-			}{PoolID: "pool-1", Desired: "+2"})
-			require.Error(t, err)
-			if available {
-				require.ErrorContains(t, err, "unauthorized")
-			} else {
-				require.ErrorContains(t, err, "entities")
-			}
-			require.Empty(t, stdout.String())
+			check(RunCommand(SandboxPoolList, base...))
+			check(RunCommand(SandboxPoolSetDesired, append(base, "pool-1", "+2")...))
 		})
 	}
 }

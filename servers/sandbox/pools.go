@@ -43,33 +43,16 @@ func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoo
 	if err != nil {
 		return err
 	}
-	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool)
-	if appName != "" {
-		var appID entity.Id
-		for id, owner := range apps {
-			if owner.Instance == appName {
-				appID = id
-				break
-			}
-		}
-		if entity.Empty(appID) {
-			state.Results().SetPools([]*compute_v1alpha.SandboxPoolInfo{})
-			return nil
-		}
-		allowed, err := filterInventoryApp(ctx, apps[appID])
-		if err != nil {
-			return err
-		}
-		if !allowed {
-			state.Results().SetPools([]*compute_v1alpha.SandboxPoolInfo{})
-			return nil
-		}
-		index = entity.Ref(compute_v1alpha.SandboxPoolAppId, appID)
-	}
-	pools, err := s.ec.List(ctx, index)
+	// Labels are not indexed, so an app's addon pools can only be found by
+	// walking every pool. The filter runs before version lookups, so excluded
+	// pools cost no store calls.
+	pools, err := s.ec.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
 		return err
 	}
+	// Pools for one version (web, worker, ...) share a version and its config,
+	// so resolve each version once rather than once per pool.
+	versions := make(map[entity.Id]*poolVersion)
 	items := make([]*compute_v1alpha.SandboxPoolInfo, 0, pools.Length())
 	for pools.Next() {
 		var pool compute_v1alpha.SandboxPool
@@ -85,23 +68,33 @@ func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoo
 			continue
 		}
 		ent := pools.Entity()
+		app := owner.Instance
+		if app == "" {
+			// Addon pools name their app only in a label. It identifies the
+			// pool but grants nothing, so read it after authorization.
+			var md core_v1alpha.Metadata
+			md.Decode(ent)
+			app, _ = md.Labels.Get("app")
+		}
+		if appName != "" && app != appName {
+			continue
+		}
 		item := new(compute_v1alpha.SandboxPoolInfo)
 		item.SetId(pool.ID.String())
 		item.SetShortId(ent.ShortId())
-		item.SetApp(owner.Instance)
+		item.SetApp(app)
 		item.SetVersion(pool.SandboxSpec.Version.String())
 		item.SetService(pool.Service)
 		item.SetScalingMode("auto")
-		var version core_v1alpha.AppVersion
-		if verEnt, err := s.ec.GetByIdWithEntity(ctx, pool.SandboxSpec.Version, &version); err == nil && version.App == pool.App {
-			item.SetVersionShortId(verEnt.Entity().ShortId())
-			if cfg, err := coreutil.ResolveRuntimeConfig(ctx, s.ec.EAC(), &version); err == nil {
-				for _, svc := range cfg.Services {
-					if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
-						item.SetScalingMode("fixed")
-						break
-					}
-				}
+		ver, ok := versions[pool.SandboxSpec.Version]
+		if !ok {
+			ver = s.poolVersion(ctx, pool.SandboxSpec.Version)
+			versions[pool.SandboxSpec.Version] = ver
+		}
+		if ver != nil && ver.app == pool.App {
+			item.SetVersionShortId(ver.shortID)
+			if ver.fixed[pool.Service] {
+				item.SetScalingMode("fixed")
 			}
 		}
 		item.SetDesiredInstances(pool.DesiredInstances)
@@ -114,6 +107,39 @@ func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoo
 	}
 	state.Results().SetPools(items)
 	return nil
+}
+
+// poolVersion is what inventory needs from a pool's version: its owner, short
+// ID, and which services run at a fixed scale.
+type poolVersion struct {
+	app     entity.Id
+	shortID string
+	fixed   map[string]bool
+}
+
+// poolVersion returns nil when the version cannot be read; inventory then
+// shows the pool without version details rather than failing the listing.
+// Concurrency comes from the stored config alone. Addon bindings only supply
+// variables and disks, so resolving them would cost a store round trip and
+// load credentials without changing the result.
+func (s *PoolServer) poolVersion(ctx context.Context, id entity.Id) *poolVersion {
+	if entity.Empty(id) {
+		return nil
+	}
+	var version core_v1alpha.AppVersion
+	verEnt, err := s.ec.GetByIdWithEntity(ctx, id, &version)
+	if err != nil {
+		return nil
+	}
+	ver := &poolVersion{app: version.App, shortID: verEnt.Entity().ShortId(), fixed: map[string]bool{}}
+	if cfg, err := coreutil.ResolveConfig(ctx, s.ec.EAC(), &version); err == nil {
+		for _, svc := range cfg.Services {
+			if svc.Concurrency.Mode == "fixed" {
+				ver.fixed[svc.Name] = true
+			}
+		}
+	}
+	return ver
 }
 
 // An empty owner denotes an orphan: operators may manage it, but app-bound

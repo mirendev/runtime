@@ -7,7 +7,7 @@ const adminDescription = `The admin interface allows you to execute custom admin
 Use the ` + "`" + `--list` + "`" + ` flag to discover what admin methods your application exposes:
 
 ` + "```" + `bash
-$ miren admin --list
+$ miren app admin run --list
 
 Admin methods for go-admin
 
@@ -30,17 +30,17 @@ Admin methods for go-admin
   ├ limit number
   └ offset number
 
-Usage: miren admin -a go-admin <method> [key=value ...]
+Usage: miren app admin run -a go-admin <method> [key=value ...]
 ` + "```" + `
 
 ## Parameter Validation
 
-By default, ` + "`" + `miren admin` + "`" + ` validates method names and parameters against the application's introspection data before making the call. This catches typos and missing required parameters early.
+By default, ` + "`" + `miren app admin run` + "`" + ` validates method names and parameters against the application's introspection data before making the call. This catches typos and missing required parameters early.
 
 To skip validation (e.g., if your app doesn't support introspection), use ` + "`" + `--no-validate` + "`" + `:
 
 ` + "```" + `bash
-miren admin --no-validate some-method
+miren app admin run --no-validate some-method
 ` + "```" + `
 
 ## Output Formats
@@ -54,10 +54,10 @@ You can override this behavior:
 
 ` + "```" + `bash
 # Force JSON output for scripting
-miren admin --json get-stats | jq '.total_users'
+miren app admin run --json get-stats | jq '.total_users'
 
 # Force pretty output even when piping
-miren admin --pretty get-user user_id=123
+miren app admin run --pretty get-user user_id=123
 ` + "```" + `
 
 ## Error Handling
@@ -65,7 +65,7 @@ miren admin --pretty get-user user_id=123
 If the admin call fails, the command exits with a non-zero status and displays the error:
 
 ` + "```" + `bash
-$ miren admin get-user user_id=nonexistent
+$ miren app admin run get-user user_id=nonexistent
 admin call failed (code -32001): user not found
 ` + "```" + `
 

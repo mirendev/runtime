@@ -1,12 +1,12 @@
 ---
 title: "miren apps"
 sidebar_label: "apps"
-description: "List all applications (alias for 'app list')"
+description: "Deprecated: use 'miren app list'"
 ---
 
 # miren apps
 
-List all applications (alias for 'app list')
+Deprecated: use 'miren app list'
 
 ## Usage
 
@@ -32,5 +32,11 @@ miren apps [flags]
 **List all apps:**
 
 ```bash
-miren apps
+miren app list
+```
+
+**List apps as JSON:**
+
+```bash
+miren app list --format json
 ```

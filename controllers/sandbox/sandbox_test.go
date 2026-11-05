@@ -1719,6 +1719,7 @@ func TestSandbox(t *testing.T) {
 		staleTime := time.Now().Add(-3 * time.Minute)
 		staleEntity := entity.New(currentSb.Encode())
 		staleEntity.SetCreatedAt(staleTime)
+		staleEntity.Set(entity.Time(compute.SandboxLastActivityId, staleTime))
 		rpcE.SetId(id.String())
 		rpcE.SetAttrs(staleEntity.Attrs())
 		_, err = co.EAC.Put(ctx, &rpcE)
@@ -1739,8 +1740,10 @@ func TestSandbox(t *testing.T) {
 
 		// Second call to Create - this should update status to RUNNING
 		// because the sandbox containers are already running
+		beforeReady := time.Now()
 		err = co.Create(ctx, &pendingSb, meta)
 		r.NoError(err)
+		afterReady := time.Now()
 
 		// Verify status was updated to RUNNING in the entity
 		result, err = co.EAC.Get(ctx, id.String())
@@ -1749,6 +1752,7 @@ func TestSandbox(t *testing.T) {
 		var finalSb compute.Sandbox
 		finalSb.Decode(result.Entity().Entity())
 		r.Equal(compute.RUNNING, finalSb.Status, "sandbox should transition from PENDING to RUNNING when containers are healthy")
+		r.WithinRange(finalSb.LastActivity, beforeReady, afterReady, "recovered startup must receive a full idle delay")
 	})
 
 }

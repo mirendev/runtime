@@ -1,12 +1,12 @@
 ---
 title: "miren sandbox-pool set-desired"
 sidebar_label: "sandbox-pool set-desired"
-description: "Set desired instance count for a sandbox pool"
+description: "Deprecated: use 'miren debug sandbox-pool set-desired'"
 ---
 
 # miren sandbox-pool set-desired
 
-Set desired instance count for a sandbox pool
+Deprecated: use 'miren debug sandbox-pool set-desired'
 
 ## Usage
 
@@ -36,7 +36,7 @@ miren sandbox-pool set-desired <poolid> <desired> [flags]
 **Scale a pool to 3 instances:**
 
 ```bash
-miren sandbox-pool set-desired web 3
+miren debug sandbox-pool set-desired web 3
 ```
 
 ## See also

@@ -38,6 +38,9 @@ func (c *Context) wrapRPCError(err error) error {
 // resolved at all. -C accepts either a configured cluster name or an ad-hoc
 // address, so this covers a typo in either form.
 func (c *Context) unknownClusterError() error {
+	if diagnostic, ok := errors.AsType[*ui.Diagnostic](c.clusterErr); ok {
+		return diagnostic
+	}
 	named := c.requestedCluster
 	if named == "" {
 		// No -C, so the broken name came from the config's active cluster.

@@ -1,12 +1,12 @@
 ---
 title: "miren upgrade"
 sidebar_label: "upgrade"
-description: "Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)"
+description: "This machine: upgrade miren (server or runner and CLI on a systemd host, otherwise CLI)"
 ---
 
 # miren upgrade
 
-Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)
+This machine: upgrade miren (server or runner and CLI on a systemd host, otherwise CLI)
 
 ## Usage
 

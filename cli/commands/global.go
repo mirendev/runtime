@@ -26,6 +26,8 @@ type GlobalFlags struct {
 	ServerAddress string `long:"server-address" description:"Server address to connect to" default:"127.0.0.1:8443"`
 	// We actually process this manually, but we include it here so that it validates.
 	Options string `long:"options" description:"Path to file containing options"`
+
+	serverAddressExplicit bool
 }
 
 type Context struct {
@@ -102,7 +104,7 @@ func baseLogLevel(daemon bool) slog.Level {
 	return slog.LevelWarn
 }
 
-func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string, daemon bool) *Context {
+func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string, daemon, localOnly bool) *Context {
 	s := &Context{
 		verbose:     len(flags.Verbose),
 		Stdout:      os.Stdout,
@@ -167,8 +169,15 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 	if lc, ok := opts.(interface {
 		LoadCluster() (*clientconfig.ClusterConfig, string, error)
-	}); ok {
+	}); ok && !localOnly {
 		cfg, name, err := lc.LoadCluster()
+		// Keep direct-address development working without a client config, but
+		// never use it to bypass an invalid or ambiguous cluster selection.
+		if errors.Is(err, ErrNoConfig) && flags.serverAddressExplicit {
+			if rc, ok := opts.(interface{ RequestedCluster() string }); !ok || rc.RequestedCluster() == "" {
+				err = nil
+			}
+		}
 		if cfg != nil {
 			s.ClusterConfig = cfg
 			s.ClusterName = name

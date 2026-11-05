@@ -23,21 +23,21 @@ func TestNotServingLines(t *testing.T) {
 		{
 			name:      "maintenance only",
 			routes:    []string{"shop.example.com"},
-			wantLabel: "Maintenance:",
+			wantLabel: "Maintenance",
 			wantLines: []string{"shop.example.com serving a holding page"},
 		},
 		{
 			name:       "disabled with a reason",
 			disabledAt: &at,
 			reason:     "moved to the new cluster",
-			wantLabel:  "Not serving:",
+			wantLabel:  "Not serving",
 			wantLines:  []string{since + " — moved to the new cluster"},
 		},
 		{
 			name:       "disabled with routes in maintenance",
 			disabledAt: &at,
 			routes:     []string{"shop.example.com", ""},
-			wantLabel:  "Not serving:",
+			wantLabel:  "Not serving",
 			wantLines: []string{
 				since,
 				"in maintenance instead: shop.example.com, the default route",

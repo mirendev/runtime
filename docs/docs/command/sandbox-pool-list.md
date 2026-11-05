@@ -1,12 +1,12 @@
 ---
 title: "miren sandbox-pool list"
 sidebar_label: "sandbox-pool list"
-description: "List all sandbox pools"
+description: "Deprecated: use 'miren debug sandbox-pool list'"
 ---
 
 # miren sandbox-pool list
 
-List all sandbox pools
+Deprecated: use 'miren debug sandbox-pool list'
 
 ## Usage
 
@@ -16,10 +16,12 @@ miren sandbox-pool list [flags]
 
 ## Flags
 
+- `--app` — Only show pools belonging to this app
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
+- `--service` — Only show pools of this service (e.g. web, worker)
 
 ## Global Options
 
@@ -32,7 +34,7 @@ miren sandbox-pool list [flags]
 **List all pools:**
 
 ```bash
-miren sandbox-pool list
+miren debug sandbox-pool list
 ```
 
 ## See also

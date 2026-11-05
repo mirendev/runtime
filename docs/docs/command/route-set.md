@@ -17,13 +17,21 @@ miren route set <host> [appname] [flags]
 ## Arguments
 
 - `host` — Hostname for the route (e.g., example.com or *.example.com)
-- `appname` — Application name to route to
+- `appname` — Deprecated: use --app instead
 
 ## Flags
 
+- `--service` — HTTP-capable app service to route to (default: `web`)
+
+## Config Options
+
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--service` — HTTP-capable app service to route to (default: `web`)
+
+## App Options
+
+- `--app, -a` — Application name
+- `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
 
@@ -36,7 +44,7 @@ miren route set <host> [appname] [flags]
 **Route a domain to an app:**
 
 ```bash
-miren route set example.com myapp
+miren route set example.com -a myapp
 ```
 
 ## See also

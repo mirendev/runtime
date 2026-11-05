@@ -31,13 +31,13 @@ func TestVerbosityLadder(t *testing.T) {
 	for _, tc := range cases {
 		flags := &GlobalFlags{Verbose: make([]bool, tc.verbose)}
 
-		cliCtx := setup(context.Background(), flags, struct{}{}, "test", false)
+		cliCtx := setup(context.Background(), flags, struct{}{}, "test", false, false)
 		if got := cliCtx.Level(); got != tc.cli {
 			t.Errorf("cli with %d -v: got %v, want %v", tc.verbose, got, tc.cli)
 		}
 		cliCtx.Close()
 
-		daemonCtx := setup(context.Background(), flags, struct{}{}, "test", true)
+		daemonCtx := setup(context.Background(), flags, struct{}{}, "test", true, false)
 		if got := daemonCtx.Level(); got != tc.daemon {
 			t.Errorf("daemon with %d -v: got %v, want %v", tc.verbose, got, tc.daemon)
 		}

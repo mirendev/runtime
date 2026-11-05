@@ -89,7 +89,7 @@ interfaces:
         parameters:
           - name: app
             type: string
-            doc: Empty lists all apps for unscoped callers, or the bound app for app-scoped callers.
+            doc: Empty lists all apps for unscoped callers, or the bound app for app-scoped callers. Otherwise matches the app each pool reports, which for addon pools comes from their app label.
         results:
           - name: pools
             type: list

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"time"
 
-	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -33,6 +32,9 @@ func ClusterSwitch(ctx *Context, opts struct {
 			ctx.Printf("No clusters configured\n")
 			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
 			return nil
+		}
+		if !ui.IsInteractive() {
+			return fmt.Errorf("cluster name is required; use 'miren cluster switch <cluster-name>'")
 		}
 
 		// Create picker items
@@ -97,11 +99,6 @@ func ClusterSwitch(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Switched to cluster: %s\n", clusterName)
-
-	// Also update per-app state if we're in an app directory.
-	if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
-		_ = appconfig.SaveAppState(ac.Name, &appconfig.AppState{Cluster: clusterName})
-	}
 
 	return nil
 }

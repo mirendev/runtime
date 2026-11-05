@@ -51,12 +51,13 @@ func TestAppVersionsRPC(t *testing.T) {
 		v.AdminToken = "never-show-this-token"
 		v.Config.Entrypoint = "never-show-this-config"
 		inmem.AddEntity(entity.New(entity.DBId, v.ID, v.Encode,
+			entity.String(entity.DBShortId, []string{"act123", "pre456", "old789"}[i]),
 			entity.Time(entity.CreatedAt, created.Add(time.Duration(i)*time.Minute))))
 	}
 	want := []map[string]any{
-		{"id": "app_version/rolling", "version": "m-rolling", "status": "replaced", "created_at": "2026-01-02T03:06:05Z"},
-		{"id": "app_version/preview", "version": "a-preview", "status": "ephemeral", "created_at": "2026-01-02T03:05:05Z", "ephemeral_label": "pr-17", "ephemeral_ttl": "1h", "expires_at": "2026-01-02T04:04:05Z"},
-		{"id": "app_version/active", "version": "z-active", "status": "active", "created_at": "2026-01-02T03:04:05Z", "ephemeral_label": "promoted", "ephemeral_ttl": "48h"},
+		{"id": "app_version/rolling", "short_id": "old789", "version": "m-rolling", "status": "replaced", "created_at": "2026-01-02T03:06:05Z"},
+		{"id": "app_version/preview", "short_id": "pre456", "version": "a-preview", "status": "ephemeral", "created_at": "2026-01-02T03:05:05Z", "ephemeral_label": "pr-17", "ephemeral_ttl": "1h", "expires_at": "2026-01-02T04:04:05Z"},
+		{"id": "app_version/active", "short_id": "act123", "version": "z-active", "status": "active", "created_at": "2026-01-02T03:04:05Z", "ephemeral_label": "promoted", "ephemeral_ttl": "48h"},
 	}
 	for _, mode := range []string{"workload", "oidc", "old-service", "missing-service"} {
 		t.Run(mode, func(t *testing.T) {
@@ -107,6 +108,31 @@ func TestAppVersionsRPC(t *testing.T) {
 				require.NoError(t, err)
 				return string(printed), cmdErr
 			}
+			t.Run("history includes ephemeral versions", func(t *testing.T) {
+				out, err := os.CreateTemp(t.TempDir(), "stdout")
+				require.NoError(t, err)
+				defer out.Close()
+				original := os.Stdout
+				os.Stdout = out
+				defer func() { os.Stdout = original }()
+				ctx := &Context{Context: t.Context(), Log: slog.Default(), Stdout: out, Stderr: io.Discard}
+				ctx.Config.ServerAddress = server.ListenAddr()
+				err = AppHistory(ctx, struct {
+					AppCentric
+					FormatOptions
+					Limit     int  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
+					All       bool `long:"all" description:"Show all deployments (ignore limit)"`
+					Detailed  bool `long:"detailed" description:"Show all columns including git information"`
+					Versions  bool `long:"versions" description:"Show app versions, including versions without a deployment"`
+					Ephemeral bool `long:"ephemeral" description:"Show only ephemeral app versions"`
+				}{AppCentric: AppCentric{App: "shop"}, FormatOptions: FormatOptions{JSON: true}, Ephemeral: true, Limit: 1})
+				require.NoError(t, err)
+				_, err = out.Seek(0, io.SeekStart)
+				require.NoError(t, err)
+				var got []map[string]any
+				require.NoError(t, json.NewDecoder(out).Decode(&got))
+				require.Equal(t, want[1:2], got)
+			})
 			for _, tc := range []struct {
 				name      string
 				ephemeral bool

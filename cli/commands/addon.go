@@ -355,20 +355,16 @@ func addonStatusCell(status, errorMessage string) string {
 func AddonDestroy(ctx *Context, opts struct {
 	AppCentric
 	Name  string `position:"0" usage:"Addon name (e.g., miren-postgresql)" required:"true"`
-	Force bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Yes   bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
+	Force bool   `short:"f" long:"force" description:"Deprecated: use --yes to skip confirmation"`
 }) error {
-	if !opts.Force {
-		confirmed, err := ui.Confirm(
-			ui.WithMessage(fmt.Sprintf("This will destroy the %s addon and delete its data. Continue?", opts.Name)),
-			ui.WithDefault(false),
-		)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			ctx.Printf("Aborted\n")
-			return nil
-		}
+	confirmed, err := confirmDeletion(fmt.Sprintf("This will destroy the %s addon and delete its data. Continue?", opts.Name), opts.Yes, opts.Force, false)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ctx.Printf("Aborted\n")
+		return nil
 	}
 
 	cl, err := ctx.RPCClient("dev.miren.runtime/addons")

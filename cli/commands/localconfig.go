@@ -7,8 +7,8 @@ import (
 	"miren.dev/runtime/appconfig"
 )
 
-// localAppConfig is the .miren/app.toml found by walking up from the working
-// directory, loaded at most once per CLI invocation. Alias expansion, per-app
+// localAppConfig is the app.toml found by walking up from the working directory,
+// loaded at most once per invocation. Alias expansion, per-app
 // cluster pinning, and app-name defaulting all want it, so the load is
 // memoized and a broken file is reported by whichever caller hits it first.
 // Package state rather than a Context field because alias expansion runs

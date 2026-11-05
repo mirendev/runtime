@@ -28,6 +28,9 @@ type Cmd struct {
 	description string
 	group       string
 	daemon      bool
+	localOnly   bool
+	replacement string
+	options     []CommandOption
 }
 
 type CommandOption func(*Cmd)
@@ -56,6 +59,21 @@ func WithLabsFeature(feature string) CommandOption {
 func WithGroup(group string) CommandOption {
 	return func(c *Cmd) {
 		c.group = group
+	}
+}
+
+// WithDeprecated preserves a command during the CLI naming transition. Warnings
+// go to stderr, including for commands whose stdout is machine-readable.
+func WithDeprecated(replacement string) CommandOption {
+	return func(c *Cmd) {
+		c.replacement = replacement
+	}
+}
+
+// WithLocalOnly skips cluster resolution for commands that manage local config.
+func WithLocalOnly() CommandOption {
+	return func(c *Cmd) {
+		c.localOnly = true
 	}
 }
 
@@ -122,12 +140,13 @@ func Infer(name, syn string, f any, opts ...CommandOption) *Cmd {
 	}
 
 	cmd := &Cmd{
-		syn:    syn,
-		name:   name,
-		f:      rv,
-		global: &globalFlags,
-		opts:   sv,
-		fs:     fs,
+		syn:     syn,
+		name:    name,
+		f:       rv,
+		global:  &globalFlags,
+		opts:    sv,
+		fs:      fs,
+		options: opts,
 	}
 
 	for _, o := range opts {
@@ -135,6 +154,22 @@ func Infer(name, syn string, f any, opts ...CommandOption) *Cmd {
 	}
 
 	return cmd
+}
+
+// Alias reuses the command declaration, not its mutable flag parsing state.
+// Examples and descriptions keep the canonical spelling.
+func (w *Cmd) Alias(name string, opts ...CommandOption) *Cmd {
+	options := append([]CommandOption(nil), w.options...)
+	options = append(options, opts...)
+	alias := Infer(name, "Alias for 'miren "+w.name+"'", w.f.Interface(), options...)
+	if alias.replacement != "" {
+		alias.syn = "Deprecated: use 'miren " + alias.replacement + "'"
+	}
+	return alias
+}
+
+func (w *Cmd) DeprecatedAlias(name string, opts ...CommandOption) *Cmd {
+	return w.Alias(name, append(opts, WithDeprecated(w.name))...)
 }
 
 func (w *Cmd) Examples() []mflags.Example {
@@ -191,6 +226,9 @@ func (w *Cmd) ReadOptions(path string) error {
 	if err != nil {
 		return err
 	}
+	if _, ok := vals["server-address"]; ok {
+		w.global.serverAddressExplicit = true
+	}
 
 	return err
 }
@@ -218,6 +256,9 @@ func (w *Cmd) show(rv reflect.Value) {
 
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Field(i)
+		if !field.CanInterface() {
+			continue
+		}
 		name := rv.Type().Field(i).Tag.Get("long")
 		if name == "" {
 			name = rv.Type().Field(i).Tag.Get("short")
@@ -325,6 +366,10 @@ func (w *Cmd) Run(fs *mflags.FlagSet, args []string) error {
 }
 
 func (w *Cmd) Invoke(args ...string) error {
+	if w.replacement != "" {
+		fmt.Fprintf(os.Stderr, "Warning: 'miren %s' is deprecated; use 'miren %s' instead.\n", w.name, w.replacement)
+	}
+
 	if err := w.loadOptions(args); err != nil {
 		return fmt.Errorf("error loading options: %w", err)
 	}
@@ -352,7 +397,8 @@ func (w *Cmd) Invoke(args ...string) error {
 		w.show(w.opts.Elem())
 	}
 
-	ctx := setup(context.Background(), w.global, w.opts.Interface(), w.name, w.daemon)
+	w.global.serverAddressExplicit = w.global.serverAddressExplicit || w.fs.Lookup("server-address").HasValue
+	ctx := setup(context.Background(), w.global, w.opts.Interface(), w.name, w.daemon, w.localOnly)
 	defer ctx.Close()
 
 	rets := w.f.Call([]reflect.Value{reflect.ValueOf(ctx), w.opts.Elem()})
@@ -392,7 +438,8 @@ func RunCommand(f any, args ...string) (*CommandOutput, error) {
 		return &out, err
 	}
 
-	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface(), cmd.name, cmd.daemon)
+	cmd.global.serverAddressExplicit = cmd.fs.Lookup("server-address").HasValue
+	ctx := setup(context.Background(), cmd.global, cmd.opts.Interface(), cmd.name, cmd.daemon, cmd.localOnly)
 	defer ctx.Close()
 
 	ctx.Stdout = &out.Stdout

@@ -1,12 +1,12 @@
 ---
 title: "miren login"
 sidebar_label: "login"
-description: "Authenticate with miren.cloud"
+description: "Alias for 'miren cloud login'"
 ---
 
 # miren login
 
-Authenticate with miren.cloud
+Alias for 'miren cloud login'
 
 ## Usage
 
@@ -34,11 +34,11 @@ miren login [flags]
 **Login:**
 
 ```bash
-miren login
+miren cloud login
 ```
 
 **Login to a specific cloud instance:**
 
 ```bash
-miren login --url https://cloud.example.com
+miren cloud login --url https://cloud.example.com
 ```

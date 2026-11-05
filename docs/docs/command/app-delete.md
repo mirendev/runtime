@@ -16,13 +16,22 @@ miren app delete [appname] [flags]
 
 ## Arguments
 
-- `appname` — Name of the app to delete
+- `appname` — Deprecated: use --app instead
 
 ## Flags
 
+- `--force, -f` — Deprecated: use --yes to skip confirmation
+- `--yes, -y` — Skip confirmation prompt
+
+## Config Options
+
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--force, -f` — Force delete without confirmation
+
+## App Options
+
+- `--app, -a` — Application name
+- `--dir, -d` — Directory to run from (default: `.`)
 
 ## Global Options
 
@@ -35,13 +44,13 @@ miren app delete [appname] [flags]
 **Delete an app (with confirmation prompt):**
 
 ```bash
-miren app delete myapp
+miren app delete -a myapp
 ```
 
 **Delete without confirmation:**
 
 ```bash
-miren app delete myapp --force
+miren app delete -a myapp --yes
 ```
 
 ## See also

@@ -74,7 +74,7 @@ func RouteList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"HOST", "APP", "SERVICE", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
+	headers := []string{"ROUTE", "APP", "SERVICE", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
 
 	for _, route := range routes {
 		host := route.Host()

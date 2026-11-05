@@ -167,23 +167,18 @@ func SecretDestroy(ctx *Context, opts struct {
 	ConfigCentric
 	Ref     string `position:"0" usage:"Reference naming a version, e.g. payments/stripe-key@x1A" required:"true"`
 	Backend string `short:"b" long:"backend" description:"Backend instance holding the secret (default: cluster)"`
-	Force   bool   `short:"f" long:"force" description:"Skip the confirmation prompt"`
+	Yes     bool   `short:"y" long:"yes" description:"Skip confirmation prompt"`
+	Force   bool   `short:"f" long:"force" description:"Deprecated: use --yes to skip confirmation"`
 }) error {
-	if !opts.Force {
-		// Destroying drops the payload, so unlike disabling it cannot be undone
-		// and anything still pinned to the version can never resolve again.
-		confirmed, err := ui.Confirm(
-			ui.WithMessage(fmt.Sprintf(
-				"Destroy %s? The value is deleted and anything pinned to it can never resolve again. Continue?", opts.Ref)),
-			ui.WithDefault(false),
-		)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			ctx.Printf("Aborted\n")
-			return nil
-		}
+	// Destroying drops the payload, so unlike disabling it cannot be undone
+	// and anything still pinned to the version can never resolve again.
+	confirmed, err := confirmDeletion(fmt.Sprintf("Destroy %s? The value is deleted and anything pinned to it can never resolve again. Continue?", opts.Ref), opts.Yes, opts.Force, false)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		ctx.Printf("Aborted\n")
+		return nil
 	}
 
 	return setSecretState(ctx, opts.Backend, opts.Ref, secret.StateDestroyed)

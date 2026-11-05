@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 type ConfigCentric struct {
@@ -73,6 +73,9 @@ func (c *ConfigCentric) SaveConfig() error {
 func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
 	cfg, err := c.LoadConfig()
 	if err != nil {
+		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
+			return nil, "", clusterSelectionError(fmt.Errorf("no clusters configured; add one with 'miren cluster add': %w", ErrNoConfig))
+		}
 		return nil, "", err
 	}
 
@@ -103,21 +106,12 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 		return cc, name, nil
 	}
 
-	// Check per-app state if we're in an app directory.
-	if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
-		state, err := appconfig.LoadAppState(ac.Name)
-		if err == nil && state != nil && state.Cluster != "" {
-			cc, err := cfg.GetCluster(state.Cluster)
-			if err == nil && cc != nil {
-				return cc, state.Cluster, nil
-			}
-			// State references unknown cluster; fall through to global default.
-		}
-	}
-
 	name = cfg.ActiveCluster()
 	if name == "" {
-		return nil, "", nil
+		name, err = pickCluster(cfg.GetClusterNames(), false, ui.IsInteractive())
+		if err != nil {
+			return nil, "", clusterSelectionError(err)
+		}
 	}
 
 	cc, err := cfg.GetCluster(name)

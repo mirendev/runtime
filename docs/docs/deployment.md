@@ -68,13 +68,109 @@ miren deploy -d path/to/app
 
 Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](./app-configuration.md#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
 
+### Monorepos: independent deployment strategies
+
+In a monorepo, give each independently deployed service its own `.miren` directory and app name. Services can share source code while choosing their own Dockerfile, commands, environment variables, scaling settings, and deployment targets. Unlike defining several services in one `app.toml`, these are separate Miren apps: deploying or rolling back one does not deploy or roll back the others.
+
+Set `build.source_root` when an app needs source outside its own directory. Miren resolves it relative to the **config root**, the directory containing `.miren`, and uses the resulting **source root** as the upload root and build context. Dockerfile and top-level `include` paths are relative to the source root. Without `source_root`, the config root and source root are the same, as before.
+
+:::warning[Review the upload root]
+`source_root` must be relative; absolute paths are rejected. Relative paths such as `../../..` can still reach outside your repository: this is not a repository-containment check. Review the configured path and the directory it selects before deploying an unfamiliar repository.
+:::
+
+Without an explicit `build.dockerfile`, build detection runs at the source root, not the service directory. Many monorepos need only `source_root`: Go can select `cmd/<app-name>`, Rust virtual workspaces use the app name to select the binary, and Elixir prefers a release matching the app name with hyphens converted to underscores.
+
+:::warning[Root Dockerfiles take precedence]
+A `Dockerfile.miren` at the source root takes precedence over stack detection and even an explicit `[services.web] image`. A service sharing that root will use that Dockerfile rather than infer its own build. Set `build.dockerfile` to select the service's Dockerfile explicitly and avoid this ambiguity.
+:::
+
+For example, keep the API and background worker configurations alongside their shared source tree:
+
+```text
+services/
+  api/
+    .miren/
+      app.toml
+      deploy.toml
+    Dockerfile
+  worker/
+    .miren/
+      app.toml
+      deploy.toml
+    Dockerfile
+packages/
+  shared/
+```
+
+The API builds with its own Dockerfile and autoscales with incoming requests:
+
+```toml title="services/api/.miren/app.toml"
+name = "my-api"
+
+[build]
+source_root = "../.."
+dockerfile = "services/api/Dockerfile"
+
+[services.web]
+command = "./bin/api"
+port = 8080
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 20
+```
+
+The worker builds a different binary and runs two fixed instances:
+
+```toml title="services/worker/.miren/app.toml"
+name = "my-worker"
+
+[build]
+source_root = "../.."
+dockerfile = "services/worker/Dockerfile"
+
+[services.worker]
+command = "./bin/worker"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+```
+
+Here, `../..` is relative to `services/api/` or `services/worker/`, not to the `.miren` directory itself. Both apps upload and build from the repository root, so their Dockerfiles can copy code from `packages/shared/`. These Dockerfiles should build the corresponding `bin/api` and `bin/worker` executables.
+
+Deploy from the repository root by selecting the app directory, or change into that directory and run `miren deploy`:
+
+```miren
+miren deploy -d services/api
+miren deploy -d services/worker
+```
+
+The CLI projects the chosen `app.toml` into `.miren/app.toml` at the upload root without changing your repository. The server receives the usual layout and needs no new configuration-selection or path behavior.
+
+Give the apps their own [deployment targets](#deployment-targets). For example, the API can have a staging-to-production workflow while the worker deploys to a separate jobs cluster. Run these commands from the repository root, using cluster names already configured in your client:
+
+```miren
+miren deploy target add staging api-staging-cluster -d services/api
+miren deploy target add prod api-prod-cluster -d services/api
+miren deploy target add prod jobs-cluster -d services/worker
+
+miren deploy -d services/api --target staging
+miren deploy -d services/api --target prod
+miren deploy -d services/worker --target prod
+```
+
+Targets stay alongside each app's configuration in `services/api/.miren/deploy.toml` and `services/worker/.miren/deploy.toml`, not at the shared source root.
+
+Each deploy command deploys only the selected app. CI jobs can use `-d services/api` or `-d services/worker` and run on independent release schedules. If CI uses path-based triggers, include shared-package changes in every dependent service's triggers; selecting an app directory does not determine which source changes affect that app.
+
 ### Deployment targets
 
 To keep deployment destinations in the repository, add a target from the app directory:
 
 <CliCommand context="client">
 ```miren
-miren deploy target add staging
+miren target add staging
 ```
 </CliCommand>
 
@@ -82,7 +178,7 @@ Choose a configured cluster from the picker. For scripts, supply its local name 
 
 <CliCommand context="client">
 ```miren
-miren deploy target add prod my-prod-cluster
+miren target add prod my-prod-cluster
 ```
 </CliCommand>
 
@@ -100,11 +196,17 @@ cluster = "miren-prod"
 cluster_id = "cluster-def456"
 ```
 
-The first target is the default for `miren deploy`. Select another by name:
+All app-centric commands use these targets, including `deploy`, `logs`, `app status`, and `env`. With one target, Miren selects it automatically. With several, choose a target with `-C` or `MIREN_CLUSTER`; an interactive terminal offers a picker when neither is set. Scripts fail with an actionable error rather than choosing the first target.
+
+These targets belong to the app named in the directory's `app.toml`. If you select a different app with `-a`, `MIREN_APP`, or a legacy positional argument, the command ignores the directory's targets and uses normal cluster selection instead. For example, `miren logs -a otherapp -C another-cluster` can read another app's logs without adding that cluster as a target of the local app. Explicitly selecting the local app still uses its targets.
+
+Deploy is an exception: because it ships this directory's source, its deploy targets still apply when `-a` names a different app. For example, `miren deploy -a myapp-staging --target staging` retains its existing behavior. An `app.toml` without a default `name` also keeps the directory's targets when you supply an app explicitly.
+
+For example, select production for this invocation:
 
 <CliCommand context="client">
 ```miren
-miren deploy --target prod
+miren deploy -C prod
 ```
 </CliCommand>
 
@@ -113,27 +215,34 @@ miren deploy --target prod
 Manage the file without editing TOML by hand:
 
 ```miren
-miren deploy target                 # list targets
-miren deploy target add qa          # add via cluster picker
-miren deploy target set-default prod
-miren deploy target remove qa
+miren target list
+miren target add qa                 # add via cluster picker
+miren target remove qa
 ```
 
-An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with either explicit cluster selection.
+Deployment target commands also accept `-d` to manage another app's local targets:
 
-Selecting a deployment target affects that deploy only. It does not change the app's pinned cluster for commands such as `miren logs`.
-
-### Confirmation Prompt
-
-If your cluster config includes multiple clusters, Miren asks you to confirm which cluster to deploy to. Skip the prompt with `--force`:
-
-<CliCommand context="client">
 ```miren
-miren deploy --force
+miren target add prod my-prod-cluster -d services/api
+miren target list -d services/api
+miren deploy -d services/api --target prod
 ```
-</CliCommand>
 
-The prompt is also skipped automatically when only one cluster is configured or when stdin is not a terminal (e.g., in CI).
+These commands use `services/api/.miren/deploy.toml`, even when `build.source_root` points to the repository root. Other apps' targets are unchanged.
+
+When `deploy.toml` exists, `-C` and `MIREN_CLUSTER` must name one of its targets. Configured cluster names for those targets remain accepted for compatibility. `miren deploy --target prod` also remains supported, but cannot be combined with `-C` or `MIREN_CLUSTER`.
+
+Selecting a cluster affects only the current invocation. Per-app cluster pins are no longer read or written. `miren cluster switch` changes the global active cluster; cluster-wide commands ignore `deploy.toml`, even when run in an app directory.
+
+:::warning[Target order is not a default]
+`miren deploy target set-default` and `target add --default` retain their file-reordering behavior for one release and print a deprecation warning. Reordering no longer decides which cluster commands use.
+:::
+
+### Deploying without targets
+
+Without `deploy.toml`, pass `-C` or set `MIREN_CLUSTER` to choose a configured cluster explicitly. Otherwise, deploy uses the sole configured cluster or offers a picker when several are configured. Without an interactive terminal, an ambiguous deploy fails and asks for `-C`.
+
+Deploy never silently uses the global active cluster to resolve an ambiguous destination. Other app commands without targets may use the global active cluster.
 
 ## Build Detection
 

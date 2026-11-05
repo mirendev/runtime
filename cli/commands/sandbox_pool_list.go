@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
@@ -29,6 +30,8 @@ type sandboxPoolListEntry struct {
 }
 
 func SandboxPoolList(ctx *Context, opts struct {
+	App     string `long:"app" description:"Only show pools belonging to this app"`
+	Service string `long:"service" description:"Only show pools of this service (e.g. web, worker)"`
 	FormatOptions
 	ConfigCentric
 }) error {
@@ -42,7 +45,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 	}
 	var pools []*compute_v1alpha.SandboxPoolInfo
 	if err == nil {
-		res, callErr := compute_v1alpha.NewSandboxPoolsClient(client).List(ctx, "")
+		res, callErr := compute_v1alpha.NewSandboxPoolsClient(client).List(ctx, opts.App)
 		err = callErr
 		if err == nil {
 			pools = res.Pools()
@@ -50,10 +53,17 @@ func SandboxPoolList(ctx *Context, opts struct {
 	}
 	if isMissingRPC(err) {
 		pools, err = sandboxPoolsLegacy(ctx)
+		// Servers without the RPC cannot filter by app.
+		pools = slices.DeleteFunc(pools, func(pool *compute_v1alpha.SandboxPoolInfo) bool {
+			return opts.App != "" && pool.App() != opts.App
+		})
 	}
 	if err != nil {
 		return err
 	}
+	pools = slices.DeleteFunc(pools, func(pool *compute_v1alpha.SandboxPoolInfo) bool {
+		return opts.Service != "" && pool.Service() != opts.Service
+	})
 
 	if opts.IsJSON() {
 		entries := make([]sandboxPoolListEntry, 0, len(pools))
@@ -71,7 +81,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"ID", "VERSION", "SERVICE", "MODE", "DESIRED", "CURRENT", "READY", "CREATED", "UPDATED"}
+	headers := []string{"ID", "APP", "VERSION", "SERVICE", "MODE", "DESIRED", "CURRENT", "READY", "CREATED", "UPDATED"}
 
 	for _, pool := range pools {
 		versionDisplay := ui.DisplayAppVersion(pool.Version())
@@ -81,8 +91,9 @@ func SandboxPoolList(ctx *Context, opts struct {
 
 		rows = append(rows, ui.Row{
 			ui.DisplayShortID(pool.ShortId(), pool.Id()),
-			versionDisplay,
-			pool.Service(),
+			orDash(pool.App()),
+			orDash(versionDisplay),
+			orDash(pool.Service()),
 			pool.ScalingMode(),
 			fmt.Sprintf("%d", pool.DesiredInstances()),
 			fmt.Sprintf("%d", pool.CurrentInstances()),
@@ -93,7 +104,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 	}
 
 	if len(rows) == 0 {
-		ctx.Printf("No sandbox pools found\n")
+		ctx.Printf("No sandbox pools found%s\n", sandboxFilter{app: opts.App, service: opts.Service}.describe())
 		return nil
 	}
 

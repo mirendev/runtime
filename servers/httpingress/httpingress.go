@@ -68,6 +68,8 @@ func (c *idleTimeoutConn) Write(p []byte) (int, error) {
 
 var httpingressTracer = otel.Tracer("miren.dev/runtime/httpingress")
 
+var errAppLoading = errors.New("app is still loading")
+
 const (
 	timeoutMessage = "Request timeout"
 	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot.
@@ -76,6 +78,8 @@ const (
 	// stranding it. Unrelated to the request timeout, which a route can now
 	// raise past this.
 	leaseAcquisitionTimeout = 2 * time.Minute
+	// Let browser retries observe a failed boot before allowing another attempt.
+	bootFailureTTL = 30 * time.Second
 	// minLeaseTTL is the minimum time a lease is kept in cache after its last
 	// use before it becomes eligible for eviction. This prevents low-traffic
 	// apps from having their leases evicted on every 30s tick, which would
@@ -132,8 +136,9 @@ type Server struct {
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
 
-	mu   sync.Mutex
-	apps map[string]*appUsage
+	mu    sync.Mutex
+	apps  map[string]*appUsage
+	boots map[string]*appBoot
 
 	// sessionManager holds the cookie encryption key shared by every
 	// cookie-based auth backend (OIDC, connector, password). Handlers get a
@@ -158,6 +163,14 @@ type Server struct {
 
 type appUsage struct {
 	leases []*lease
+}
+
+type appBoot struct {
+	done    chan struct{}
+	lease   *activator.Lease
+	err     error
+	waiters int
+	claimed bool
 }
 
 func NewServer(
@@ -428,13 +441,17 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	return h.useLeaseLocked(app), nil
+}
+
+func (h *Server) useLeaseLocked(app string) *lease {
 	ar, ok := h.apps[app]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	if len(ar.leases) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	for _, l := range ar.leases {
@@ -444,11 +461,107 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 		if l.Uses < l.Lease.Size {
 			l.Uses++
 			l.LastUsed = time.Now()
-			return l, nil
+			return l
 		}
 	}
 
-	return nil, nil
+	return nil
+}
+
+func (h *Server) waitForNavigationLease(ctx context.Context, key string, ver *core_v1alpha.AppVersion, service string) (*lease, error) {
+	timer := time.NewTimer(1500 * time.Millisecond)
+	defer timer.Stop()
+	bootKey := key + ":" + ver.ID.String()
+
+	for {
+		h.mu.Lock()
+		// Recheck under the same lock as the boot map: another acquisition may
+		// have populated the lease cache since this request first missed it.
+		if l := h.useLeaseLocked(key); l != nil {
+			h.mu.Unlock()
+			return l, nil
+		}
+		boot := h.boots[bootKey]
+		if boot == nil {
+			boot = &appBoot{done: make(chan struct{})}
+			if h.boots == nil {
+				h.boots = make(map[string]*appBoot)
+			}
+			h.boots[bootKey] = boot
+			go func() {
+				actContext, cancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
+				defer cancel()
+				acquired, err := h.aa.AcquireLease(actContext, ver, service)
+				if err == nil && acquired != nil && !acquired.Overflow {
+					h.releaseLease(actContext, h.retainLease(actContext, key, acquired))
+				}
+
+				h.mu.Lock()
+				boot.lease, boot.err = acquired, err
+				releaseOverflow := err == nil && acquired != nil && acquired.Overflow && boot.waiters == 0
+				if releaseOverflow {
+					boot.claimed = true
+				}
+				if boot.err == nil && boot.lease != nil {
+					delete(h.boots, bootKey)
+				} else {
+					// Keep the terminal result long enough for all current loading
+					// pages to see it, then allow a new boot and reclaim the entry.
+					time.AfterFunc(bootFailureTTL, func() {
+						h.mu.Lock()
+						defer h.mu.Unlock()
+						if h.boots[bootKey] == boot {
+							delete(h.boots, bootKey)
+						}
+					})
+				}
+				close(boot.done)
+				h.mu.Unlock()
+				if releaseOverflow {
+					h.aa.ReleaseLease(context.WithoutCancel(actContext), acquired)
+				}
+			}()
+		}
+		boot.waiters++
+		h.mu.Unlock()
+
+		var waitErr error
+		select {
+		case <-boot.done:
+		case <-timer.C:
+			waitErr = errAppLoading
+		case <-ctx.Done():
+			waitErr = ctx.Err()
+		}
+
+		h.mu.Lock()
+		boot.waiters--
+		var overflow *activator.Lease
+		if boot.err == nil && boot.lease != nil && boot.lease.Overflow && !boot.claimed {
+			// Overflow capacity belongs to one request, never to the shared
+			// cache. If every waiter left, return it instead of stranding it.
+			if waitErr == nil || boot.waiters == 0 {
+				boot.claimed = true
+				overflow = boot.lease
+			}
+		}
+		acquired, err := boot.lease, boot.err
+		h.mu.Unlock()
+		if waitErr != nil {
+			if overflow != nil {
+				h.aa.ReleaseLease(context.WithoutCancel(ctx), overflow)
+			}
+			return nil, waitErr
+		}
+		if err != nil || acquired == nil {
+			return nil, err
+		}
+		if overflow != nil {
+			return h.retainLease(ctx, key, overflow), nil
+		}
+		// Each remaining waiter takes its own cached use or acquires more
+		// capacity within its original budget if the lease is full or claimed.
+	}
 }
 
 func (h *Server) releaseLease(ctx context.Context, lease *lease) {
@@ -529,6 +642,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h.handleRequest(w, req)
 }
 
+type loadingPageKey struct{}
+
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	// Always overwrite client/proxy values: this measures arrival at Miren,
@@ -552,6 +667,8 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 			attribute.String("server.address", req.Host),
 		))
 	defer span.End()
+	var loadingPage bool
+	ctx = context.WithValue(ctx, loadingPageKey{}, &loadingPage)
 	req = req.WithContext(ctx)
 
 	// Handle OIDC discovery — only on the issuer's own hostname to avoid
@@ -591,7 +708,8 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		attribute.String("miren.app.name", appName),
 	)
 
-	if h.httpMetrics != nil {
+	// A loading page describes ingress startup, not an app request or failure.
+	if h.httpMetrics != nil && !loadingPage {
 		if appName == "" {
 			appName = "unknown"
 		}
@@ -1011,6 +1129,12 @@ func leaseCacheKey(appID entity.Id, service string, versionID entity.Id, ephemer
 	return key
 }
 
+// Only browser navigations can safely receive a loading page that retries via GET.
+func isBrowserNavigation(req *http.Request) bool {
+	return req.Method == http.MethodGet && errorRepresentation(req.Header.Get("Accept")) == "text/html" &&
+		req.Header.Get("Sec-Fetch-Dest") == "document"
+}
+
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
 	req = req.WithContext(context.WithValue(req.Context(), errorPageTargetKey{}, target))
@@ -1116,12 +1240,29 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			)
 		}
 
-		// Give lease acquisition a generous timeout to complete sandbox boot
-		// even if the client request times out. This prevents dangling resources.
-		actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
-		defer actCancel()
-
-		actLease, err := h.aa.AcquireLease(actContext, &av, service)
+		var actLease *activator.Lease
+		var localLease *lease
+		if isBrowserNavigation(req) {
+			localLease, err = h.waitForNavigationLease(ctx, leaseKey, &av, service)
+			if errors.Is(err, errAppLoading) {
+				if loadingPage, ok := ctx.Value(loadingPageKey{}).(*bool); ok {
+					*loadingPage = true
+				}
+				serveLoading(w)
+				return
+			}
+			if err != nil && ctx.Err() != nil {
+				return
+			}
+			if localLease != nil {
+				actLease = localLease.Lease
+			}
+		} else {
+			// Let sandbox boot finish even if the client request times out.
+			actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
+			defer actCancel()
+			actLease, err = h.aa.AcquireLease(actContext, &av, service)
+		}
 		if err != nil {
 			if errors.Is(err, activator.ErrAppDisabled) {
 				h.serveIngressError(w, req, fmt.Sprintf("The application %s is disabled.\n", targetAppId), http.StatusServiceUnavailable)
@@ -1146,7 +1287,9 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		leaseSpan.SetAttributes(attribute.String("miren.lease.url", actLease.URL))
 
-		localLease := h.retainLease(ctx, leaseKey, actLease)
+		if localLease == nil {
+			localLease = h.retainLease(ctx, leaseKey, actLease)
+		}
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)

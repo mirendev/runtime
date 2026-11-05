@@ -5,6 +5,7 @@ import (
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
+	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/pkg/userlabel"
 )
 
@@ -63,15 +64,13 @@ func Whoami(ctx *Context, opts struct {
 
 	// Prepare output
 	type WhoamiOutput struct {
-		Cluster        string   `json:"cluster"`
-		ServerURL      string   `json:"server_url"`
-		AuthMethod     string   `json:"auth_method"`
-		Identity       string   `json:"identity,omitempty"`
-		UserID         string   `json:"user_id,omitempty"`
-		UserEmail      string   `json:"user_email,omitempty"`
-		UserName       string   `json:"user_name,omitempty"`
-		OrganizationID string   `json:"organization_id,omitempty"`
-		GroupIDs       []string `json:"group_ids,omitempty"`
+		Cluster    string `json:"cluster"`
+		ServerURL  string `json:"server_url"`
+		AuthMethod string `json:"auth_method"`
+		Identity   string `json:"identity,omitempty"`
+		UserID     string `json:"user_id,omitempty"`
+		UserEmail  string `json:"user_email,omitempty"`
+		UserName   string `json:"user_name,omitempty"`
 	}
 
 	output := WhoamiOutput{
@@ -89,8 +88,6 @@ func Whoami(ctx *Context, opts struct {
 		output.UserID = claims.Subject
 		output.UserEmail = claims.Email
 		output.UserName = claims.Name
-		output.OrganizationID = claims.OrganizationID
-		output.GroupIDs = claims.GroupIDs
 	}
 
 	// Output results
@@ -98,30 +95,25 @@ func Whoami(ctx *Context, opts struct {
 		return PrintJSON(output)
 	}
 
-	// Human-readable output
-	ctx.Info("Cluster:       %s", ctx.ClusterName)
-	ctx.Info("Server:        %s", hostname)
-	ctx.Info("Auth Method:   %s", authMethod)
+	items := []ui.NamedValue{
+		ui.NewNamedValue("Cluster", ctx.ClusterName),
+		ui.NewNamedValue("Server", hostname),
+		ui.NewNamedValue("Authentication", authMethod),
+	}
 
 	if identity != nil {
-		ctx.Info("Identity:      %s", ctx.ClusterConfig.Identity)
+		items = append(items, ui.NewNamedValue("Identity", ctx.ClusterConfig.Identity))
 	}
 
 	if claims != nil {
-		ctx.Info("")
 		if user := userlabel.Label(claims.Name, claims.Email, ""); user != "" {
-			ctx.Info("User:          %s", user)
+			items = append(items, ui.NewNamedValue("User", user))
 		}
-		ctx.Info("User ID:       %s", claims.Subject)
-		if claims.OrganizationID != "" {
-			ctx.Info("Organization:  %s", claims.OrganizationID)
-		}
-		if len(claims.GroupIDs) > 0 {
-			ctx.Info("Group IDs:     %v", claims.GroupIDs)
-		}
-	} else if authMethod == "none" {
-		ctx.Info("")
-		ctx.Info("No authentication configured for this cluster")
+		items = append(items, ui.NewNamedValue("User ID", claims.Subject))
+	}
+	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
+	if authMethod == "none" {
+		ctx.Printf("%s\n", ui.NewHint("No authentication configured for this cluster").Render())
 	}
 
 	return nil

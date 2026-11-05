@@ -1,12 +1,12 @@
 ---
 title: "miren whoami"
 sidebar_label: "whoami"
-description: "Display information about the current authenticated user"
+description: "Alias for 'miren cloud whoami'"
 ---
 
 # miren whoami
 
-Display information about the current authenticated user
+Alias for 'miren cloud whoami'
 
 ## Usage
 
@@ -32,11 +32,11 @@ miren whoami [flags]
 **Show current user:**
 
 ```bash
-miren whoami
+miren cloud whoami
 ```
 
 **JSON output:**
 
 ```bash
-miren whoami --json
+miren cloud whoami --json
 ```

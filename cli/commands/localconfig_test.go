@@ -34,6 +34,24 @@ func writeLocalAppConfig(t *testing.T, contents string) {
 	chdir(t, dir)
 }
 
+func TestSourceRootConfigSelection(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeAppToml(t, dir, `name = "root-app"`)
+	configDir := filepath.Join(dir, "services", "api")
+	writeAppToml(t, configDir, "name = 'api-app'\n[build]\nsource_root = '../..'\n")
+	child := filepath.Join(configDir, "src")
+	require.NoError(t, os.MkdirAll(child, 0755))
+	t.Chdir(child)
+	for _, configPath := range []string{".", configDir} {
+		opts := AppCentric{Dir: configPath}
+		require.NoError(t, opts.Validate(nil))
+		require.Equal(t, "api-app", opts.App)
+		require.Equal(t, configDir, opts.ResolvedDir())
+		require.Equal(t, dir, opts.config.SourceDir(opts.ResolvedDir()))
+	}
+}
+
 func TestLocalAppConfig(t *testing.T) {
 	t.Run("broken config warns once across callers", func(t *testing.T) {
 		writeLocalAppConfig(t, "name = 'demo'\npost_import = ''\n")

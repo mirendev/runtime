@@ -1,12 +1,12 @@
 ---
 title: "miren cluster upgrade"
 sidebar_label: "cluster upgrade"
-description: "Upgrade the active cluster's server and wait for it to report ready"
+description: "A remote cluster: upgrade its server and wait for it to report ready"
 ---
 
 # miren cluster upgrade
 
-Upgrade the active cluster's server and wait for it to report ready
+A remote cluster: upgrade its server and wait for it to report ready
 
 ## Usage
 

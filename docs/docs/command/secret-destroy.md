@@ -1,12 +1,12 @@
 ---
 title: "miren secret destroy"
 sidebar_label: "secret destroy"
-description: "Permanently delete a version's value"
+description: "Deprecated: use 'miren secret delete'"
 ---
 
 # miren secret destroy
 
-Permanently delete a version's value
+Deprecated: use 'miren secret delete'
 
 Permanently deletes a version's value. Unlike `miren secret disable`, this cannot be undone: the encrypted payload is dropped, so anything still referencing the version can never resolve again.
 
@@ -27,7 +27,8 @@ miren secret destroy <ref> [flags]
 - `--backend, -b` — Backend instance holding the secret (default: cluster)
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--force, -f` — Skip the confirmation prompt
+- `--force, -f` — Deprecated: use --yes to skip confirmation
+- `--yes, -y` — Skip confirmation prompt
 
 ## Global Options
 
@@ -40,7 +41,7 @@ miren secret destroy <ref> [flags]
 **Destroy a version's value for good:**
 
 ```bash
-miren secret destroy payments/stripe-key@x1A
+miren secret delete payments/stripe-key@x1A
 ```
 
 ## See also
