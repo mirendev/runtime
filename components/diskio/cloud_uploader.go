@@ -224,17 +224,25 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 				continue
 			}
 			prefix := []*preparedUpload{p}
-			if batchSupported && p.batchLimit > 0 && !p.active {
-				if !headKnown {
-					updates, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
-					if err != nil {
-						return err
-					}
+			if batchSupported && p.batchLimit > 0 && !p.active && !headKnown {
+				// The head is needed only to build a batch request. If it
+				// cannot be read, single completion still works.
+				updates, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
+				switch {
+				case ctx.Err() != nil:
+					return err
+				case err != nil:
+					u.log.Warn("cannot read cloud head, completing this turn one segment at a time",
+						"volume_id", volumeID, "error", err)
+					batchSupported = false
+				default:
 					if len(updates) > 0 {
 						head = &publicationBoundary{updates[0].UpdateID, updates[0].OrderingKey}
 					}
 					headKnown = true
 				}
+			}
+			if batchSupported && p.batchLimit > 0 && !p.active {
 			collect:
 				for len(prefix) < p.batchLimit && i+len(prefix) < len(paths) {
 					index := i + len(prefix)
@@ -249,9 +257,9 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 						break collect
 					}
 				}
-				var err error
-				head, err = publisher.PublishPrepared(ctx, head, prefix)
+				acknowledged, err := publisher.PublishPrepared(ctx, head, prefix)
 				if err == nil {
+					head = acknowledged
 					i += len(prefix)
 					continue
 				}
@@ -269,6 +277,12 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 				batchSupported = false
 			}
 			for _, entry := range prefix {
+				// A batch would have rejected a pending segment at or below the
+				// known head; keep that check when completing one at a time.
+				// Publishing it would put it before writes that follow it.
+				if !entry.active && head != nil && entry.orderingKey <= head.OrderingKey {
+					return fmt.Errorf("publishing %s: segment is not after cloud head %s", paths[i], head.OrderingKey)
+				}
 				if _, err := staged.CompleteUpload(ctx, entry); err != nil {
 					return fmt.Errorf("publishing %s: %w", paths[i], err)
 				}

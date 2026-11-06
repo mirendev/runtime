@@ -337,10 +337,6 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.Method == "PUT" {
-		if row.prepared || row.active {
-			http.Error(w, "prepared payload is immutable", http.StatusConflict)
-			return
-		}
 		if s.fail("put", key) {
 			http.Error(w, "PUT failed", http.StatusServiceUnavailable)
 			return
@@ -353,6 +349,9 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "checksum mismatch", 400)
 			return
 		}
+		// Like GCS staging, a PUT may arrive after a cancelled preparation
+		// still finished server-side. Bytes are bound by the checksums
+		// above, so a matching rewrite cannot change a prepared payload.
 		row.data = data
 		return
 	}
@@ -927,14 +926,26 @@ func TestUploadPipelineByteAdmission(t *testing.T) {
 }
 
 func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
-	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack"} {
+	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head"} {
 		t.Run(mode, func(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
 			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
-			var publications, completions int // protected by remote.mu
+			var publications, completions, malformedReplies int // protected by remote.mu
 			var loseAck atomic.Bool
 			loseAck.Store(mode == "lost-ack")
 			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/updates") {
+					switch mode {
+					case "head-unreadable":
+						http.Error(w, "list unavailable", http.StatusInternalServerError)
+						return
+					case "behind-head":
+						// Another writer already published past every local segment.
+						json.NewEncoder(w).Encode(map[string]any{"updates": []map[string]any{{"update_id": "volup-later",
+							"kind": "lbd_log", "ordering_key": "4000000000000002ffffffff", "size": 1}}})
+						return
+					}
+				}
 				if strings.HasSuffix(r.URL.Path, "/updates/upload") {
 					rec := httptest.NewRecorder()
 					remote.ServeHTTP(rec, r)
@@ -975,7 +986,9 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 					case "unavailable":
 						http.Error(w, "busy", http.StatusServiceUnavailable)
 						return
-					case "conflict":
+					case "conflict", "behind-head":
+						// The real cloud rejects a suffix that is not after
+						// its current head with a 409 head conflict.
 						http.Error(w, "conflict", http.StatusConflict)
 						return
 					}
@@ -1000,10 +1013,15 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 						conn.Close()
 						return
 					}
+					terminal := ack[len(ack)-1]
 					if mode == "malformed" {
-						ack = ack[:len(ack)-1]
+						// Name a different identity than requested, valid JSON
+						// at any batch length, so the client's ack check must
+						// reject a response it actually received.
+						ack[0] = map[string]string{"update_id": "volup-other", "ordering_key": ack[0]["ordering_key"]}
+						malformedReplies++
 					}
-					json.NewEncoder(w).Encode(map[string]any{"version": 1, "entries": ack, "terminal": ack[len(ack)-1]})
+					json.NewEncoder(w).Encode(map[string]any{"version": 1, "entries": ack, "terminal": terminal})
 					return
 				}
 				if strings.HasSuffix(r.URL.Path, "/complete") {
@@ -1024,6 +1042,17 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				paths = append(paths, writeTestSegment(t, key, []byte(key)))
 			}
 			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			if mode == "behind-head" {
+				// A rejected batch must not be published below the head one
+				// segment at a time; stopping is the only safe outcome.
+				require.ErrorContains(t, u.UploadSegments(t.Context(), "vol-test", dir, paths, os.Remove), "not after cloud head")
+				require.Empty(t, remote.order)
+				require.True(t, state.HasPendingCloudUpload("vol-test"))
+				for _, path := range paths {
+					require.FileExists(t, path)
+				}
+				return
+			}
 			// Every batch failure, whether refused, rejected, malformed or
 			// lost after commit, must still publish the whole turn in order
 			// through single completion rather than stall the volume.
@@ -1037,12 +1066,15 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 			case "batch":
 				require.Positive(t, publications)
 				require.Zero(t, completions)
-			case "legacy", "unknown-version":
+			case "legacy", "unknown-version", "head-unreadable":
 				require.Zero(t, publications)
 				require.Equal(t, len(paths), completions)
 			default:
 				require.Equal(t, 1, publications, "after one failure the turn stops using batches")
 				require.Positive(t, completions)
+			}
+			if mode == "malformed" {
+				require.Equal(t, 1, malformedReplies, "the malformed acknowledgement was delivered, not dropped")
 			}
 		})
 	}

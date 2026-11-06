@@ -108,22 +108,28 @@ type cloudUpdatesClient struct {
 	baseURL    string
 	authClient *cloudauth.AuthClient
 	client     *http.Client
-	preparing  chan struct{}
+	// payloads sends PUT bodies. It has no overall timeout: the stall timer
+	// bounds a transfer that stops, so a large one on a slow link can finish.
+	payloads  *http.Client
+	preparing chan struct{}
 }
 
 // NewCloudUpdatesClient creates a client for the cloud's volume update API.
 func NewCloudUpdatesClient(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) CloudUpdatesClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// Preparation cannot consume the publisher's last connection.
-	transport.MaxIdleConnsPerHost = uploadConcurrency + 1
-	transport.MaxConnsPerHost = uploadConcurrency + 1
+	// Preparation holds at most uploadConcurrency connections, which leaves
+	// one for each volume's publisher so control requests never queue behind
+	// payload transfers and spend their deadline waiting for a connection.
+	transport.MaxIdleConnsPerHost = uploadConcurrency + logVolumeConcurrency
+	transport.MaxConnsPerHost = uploadConcurrency + logVolumeConcurrency
 	return &cloudUpdatesClient{
 		log:        log.With("module", "cloud-updates"),
 		baseURL:    baseURL,
 		authClient: authClient,
 		preparing:  make(chan struct{}, uploadConcurrency),
 		// Generous: a loop image can be gigabytes.
-		client: &http.Client{Timeout: 30 * time.Minute, Transport: transport},
+		client:   &http.Client{Timeout: 30 * time.Minute, Transport: transport},
+		payloads: &http.Client{Transport: transport},
 	}
 }
 
@@ -485,7 +491,7 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 	}
 	uploadReq.ContentLength = size
 
-	uploadResp, err := c.client.Do(uploadReq)
+	uploadResp, err := c.payloads.Do(uploadReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload data: %w", err)
 	}
