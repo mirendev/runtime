@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -220,8 +221,8 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 		if err := s.ec.GetById(ctx, pool.App, &app); err != nil {
 			return err
 		}
-		if !app.Disabled.Empty() {
-			return fmt.Errorf("app %s is disabled; run `miren app enable -a %s` to start it", owner, owner)
+		if err := deploylifecycle.CheckEnabled(owner, &app); err != nil {
+			return err
 		}
 	}
 	revision := ent.Revision()

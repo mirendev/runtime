@@ -3,11 +3,11 @@ package build
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -48,8 +48,5 @@ func (b *Builder) refuseDisabled(ctx context.Context, name string) error {
 		}
 		return err
 	}
-	if !rec.Disabled.Empty() {
-		return fmt.Errorf("app %s is disabled; run `miren app enable -a %s` before deploying", name, name)
-	}
-	return nil
+	return deploylifecycle.CheckEnabled(name, &rec)
 }
