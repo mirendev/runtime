@@ -34,7 +34,7 @@ func TestCloudUpdatesClientBoundsStalledUploadNotSlowOne(t *testing.T) {
 			h.handler = func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case strings.HasSuffix(r.URL.Path, "/updates/upload"):
-					json.NewEncoder(w).Encode(beginUploadResponseJSON{UpdateID: "volup-slow", UploadURL: ts.URL + "/put",
+					json.NewEncoder(w).Encode(beginUploadResponseJSON{UpdateID: "volup-slow", UploadURL: ts.URL + "/put?X-Goog-Signature=secret",
 						CompleteURL: "/api/v1/disk/volumes/vol-1/updates/volup-slow/complete"})
 				case r.Method == "PUT":
 					_, err := io.ReadAll(r.Body)
@@ -69,6 +69,7 @@ func TestCloudUpdatesClientBoundsStalledUploadNotSlowOne(t *testing.T) {
 				// transport returns once the read resumes; what matters is
 				// that the stall, not a deadline, cancelled the transfer.
 				require.ErrorIs(t, err, context.Canceled)
+				require.NotContains(t, err.Error(), "X-Goog-Signature", "logged errors must not carry the presigned URL")
 				return
 			}
 			require.NoError(t, err)

@@ -230,7 +230,8 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 				updates, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
 				switch {
 				case ctx.Err() != nil:
-					return err
+					// List can succeed just before cancellation; err may be nil.
+					return ctx.Err()
 				case err != nil:
 					u.log.Warn("cannot read cloud head, completing this turn one segment at a time",
 						"volume_id", volumeID, "error", err)

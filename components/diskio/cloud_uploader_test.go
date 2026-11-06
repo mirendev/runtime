@@ -925,8 +925,20 @@ func TestUploadPipelineByteAdmission(t *testing.T) {
 	}
 }
 
+// cancelAfterList cancels the turn just after a successful head read.
+type cancelAfterList struct {
+	*cloudUpdatesClient
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterList) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {
+	updates, err := c.cloudUpdatesClient.List(ctx, volumeID, opts)
+	c.cancel()
+	return updates, err
+}
+
 func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
-	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head"} {
+	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head", "cancel-after-head"} {
 		t.Run(mode, func(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
 			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
@@ -1042,6 +1054,20 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				paths = append(paths, writeTestSegment(t, key, []byte(key)))
 			}
 			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			if mode == "cancel-after-head" {
+				// Shutdown can land after the head read succeeded. The turn
+				// must fail rather than report unpublished segments uploaded.
+				ctx, cancel := context.WithCancel(t.Context())
+				client := cancelAfterList{NewCloudUpdatesClient(slog.Default(), ts.URL, auth).(*cloudUpdatesClient), cancel}
+				u = NewCloudSegmentUploaderWithClient(slog.Default(), client, state)
+				require.ErrorIs(t, u.UploadSegments(ctx, "vol-test", dir, paths, os.Remove), context.Canceled)
+				require.Empty(t, remote.order)
+				require.True(t, state.HasPendingCloudUpload("vol-test"))
+				for _, path := range paths {
+					require.FileExists(t, path)
+				}
+				return
+			}
 			if mode == "behind-head" {
 				// A rejected batch must not be published below the head one
 				// segment at a time; stopping is the only safe outcome.

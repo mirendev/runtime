@@ -552,10 +552,12 @@ func TestLogWatcherDrainsAcrossScanWindowsWithoutDiscoveryDelay(t *testing.T) {
 	watch := NewLogWatcher(slog.Default(), state, uploader, time.Hour)
 	go func() { assert.NoError(t, watch.Run(ctx)) }()
 	t.Cleanup(func() { cancel(); watch.Wait() })
+	// Retirement fsyncs dominate on real disks; the bound only has to stay
+	// well below the hour-long discovery interval.
 	require.Eventually(t, func() bool {
 		horizon, err := readLogHorizon(dir)
 		return err == nil && horizon == last
-	}, 5*time.Second, time.Millisecond, "known work must not wait for the discovery interval")
+	}, time.Minute, time.Millisecond, "known work must not wait for the discovery interval")
 	require.EqualValues(t, count, uploaded.Load())
 }
 

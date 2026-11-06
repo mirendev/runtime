@@ -493,6 +493,10 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 
 	uploadResp, err := c.payloads.Do(uploadReq)
 	if err != nil {
+		// url.Error renders the presigned URL, signature included.
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
+			err = uerr.Err
+		}
 		return nil, fmt.Errorf("failed to upload data: %w", err)
 	}
 	defer uploadResp.Body.Close()
