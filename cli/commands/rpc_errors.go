@@ -311,6 +311,18 @@ func (c *Context) diagnoseResolve(re *rpc.ResolveError) *ui.Diagnostic {
 			}
 		}
 
+		// Same wrong turn as above: this certificate will never work again, and
+		// nothing about a session or a sign-in is at fault.
+		if re.StatusCode == 401 && re.Code == rpc.AuthErrorCertRevoked {
+			return &ui.Diagnostic{
+				Summary: fmt.Sprintf("this client certificate was revoked on %s", cluster),
+				Detail: "The cluster refuses this certificate for good, so retrying won't " +
+					"help. Ask a cluster operator for a new one.",
+				Facts: []ui.Fact{{Label: "Cluster reported", Value: re.Detail}},
+				Cause: fmt.Errorf("%w: %w", ErrAccessDenied, re),
+			}
+		}
+
 		if re.StatusCode == 401 {
 			return &ui.Diagnostic{
 				Summary: fmt.Sprintf("access denied on %s", cluster),

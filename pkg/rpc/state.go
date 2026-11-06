@@ -78,6 +78,12 @@ type StateCommon struct {
 	// certAuthDeduper.
 	certAuth *certAuthDeduper
 
+	// certRevocations is the set of client certificates this server refuses.
+	// Nil means it does not enforce revocations. certDenied bounds the audit
+	// record a revoked certificate can produce by retrying.
+	certRevocations *CertRevocations
+	certDenied      *certAuthDeduper
+
 	opts *stateOptions
 
 	serverTlsCfg *tls.Config
@@ -226,6 +232,7 @@ type stateOptions struct {
 
 	authenticator   Authenticator
 	authorizer      Authorizer
+	certRevocations *CertRevocations
 	bearerToken     string // JWT or other bearer token for authentication
 	bearerTokenFunc func() (string, error)
 	tlsServerName   string
@@ -396,6 +403,16 @@ func WithHTTPHandler(pattern string, handler http.Handler) StateOption {
 	}
 }
 
+// WithCertRevocations enforces a revocation set on every request that presents a
+// verified client certificate. Until the set is loaded, such requests are refused
+// with a retryable 503. Enforcement lives in Server.ServeHTTP, so the listeners
+// from WithTCPBindAddr and WithWSBindAddr are not covered.
+func WithCertRevocations(revocations *CertRevocations) StateOption {
+	return func(o *stateOptions) {
+		o.certRevocations = revocations
+	}
+}
+
 func WithBearerToken(token string) StateOption {
 	return func(o *stateOptions) {
 		o.bearerToken = token
@@ -538,12 +555,15 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 			log:           so.log,
 			auditLog:      newAuditLogger(so.log),
 			certAuth:      newCertAuthDeduper(),
+			certDenied:    newCertAuthDeduper(),
 			opts:          &so,
 			clientTlsCfg:  tlsCfg,
 			privkey:       priv,
 			pubkey:        pub,
 			authenticator: authenticator,
 			authorizer:    so.authorizer,
+
+			certRevocations: so.certRevocations,
 		},
 
 		cancel:          cancelState,

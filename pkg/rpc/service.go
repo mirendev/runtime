@@ -20,4 +20,7 @@ const (
 	// ServiceSqliteBackup stores LTX transaction files replicated from
 	// SQLite-provider disks on runners.
 	ServiceSqliteBackup ServiceID = "dev.miren.runtime/sqlite-backup"
+
+	// ServiceCertRevocations lets operators revoke client certificates.
+	ServiceCertRevocations ServiceID = "dev.miren.runtime/cert-revocations"
 )
