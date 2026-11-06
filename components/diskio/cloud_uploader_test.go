@@ -463,6 +463,19 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			}
 			remote.mu.Unlock()
 			require.Equal(t, keys[:len(prefix)], prefix, "replay must never see a hole")
+			// The failed scan abandons its in-flight prepares, but their handlers
+			// outlive it. peakTransfers measures one client's limit, so let them
+			// drain rather than counting them against the restarted client.
+			require.Eventually(t, func() bool {
+				remote.mu.Lock()
+				defer remote.mu.Unlock()
+				return remote.activeTransfers == 0
+			}, 5*time.Second, time.Millisecond)
+			remote.mu.Lock()
+			firstPeak := remote.peakTransfers
+			remote.peakTransfers = 0
+			remote.mu.Unlock()
+			require.LessOrEqual(t, firstPeak, 8)
 			// Rebuild state, client and watcher as after a process restart.
 			state, err = LoadState(diskPath)
 			require.NoError(t, err)
@@ -478,7 +491,7 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			require.Equal(t, keys, remote.order)
 			require.Len(t, remote.rows, count, "retries must reuse remote identities")
 			require.LessOrEqual(t, remote.peakTransfers, 8)
-			require.Greater(t, remote.peakTransfers, 1)
+			require.Greater(t, max(firstPeak, remote.peakTransfers), 1)
 			// Restore into a distinct empty image through authenticated list/download
 			// and the real LBD replay parser, not from the upload fixture's memory.
 			restore := t.TempDir()
