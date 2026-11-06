@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -445,9 +446,10 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			if stage == "put" {
 				assert.Equal(t, keys[:1], prefix)
 				assert.False(t, remote.rows[keys[1]].prepared)
-				for _, key := range keys[2:uploadConcurrency] {
-					assert.True(t, remote.rows[key].prepared, "later concurrent work survives the earlier PUT failure")
-					assert.False(t, remote.rows[key].active)
+				for _, row := range remote.rows {
+					if row.key > keys[1] {
+						assert.False(t, row.active, "preparation may run ahead, publication must not")
+					}
 				}
 			}
 			remote.mu.Unlock()
@@ -815,6 +817,233 @@ func TestUploadPipelineCrashBoundaries(t *testing.T) {
 			require.Len(t, remote.rows, remoteCount)
 			require.Len(t, remote.order, remoteCount, "restart must not republish")
 			remote.mu.Unlock()
+		})
+	}
+}
+
+func TestUploadPipelineOverlapsPreparationAndOrderedPublication(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	firstPublishing, aheadPrepared := make(chan struct{}), make(chan struct{})
+	releaseFirst, releaseTail := make(chan struct{}), make(chan struct{})
+	key := func(i int) string { return fmt.Sprintf("4000000000000001%08x", i+1) }
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(0)+"/complete") {
+			close(firstPublishing)
+			select {
+			case <-releaseFirst:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(31)+"/prepare") {
+			select {
+			case <-releaseTail:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		remote.ServeHTTP(w, r)
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(8)+"/prepare") {
+			close(aheadPrepared)
+		}
+	}
+	var paths []string
+	for i := 0; i < 32; i++ {
+		paths = append(paths, writeTestSegment(t, key(i), []byte(key(i))))
+	}
+	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, nil)
+	done := make(chan error, 1)
+	var retired []string
+	go func() {
+		done <- uploader.UploadSegments(ctx, "vol-test", t.TempDir(), paths, func(path string) error {
+			retired = append(retired, path)
+			return nil
+		})
+	}()
+	for _, event := range []<-chan struct{}{firstPublishing, aheadPrepared} {
+		select {
+		case <-event:
+		case <-ctx.Done():
+			t.Fatal("preparation did not overlap publication of the earlier prefix")
+		}
+	}
+	close(releaseFirst)
+	require.Eventually(t, func() bool {
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		return len(remote.order) == 31
+	}, 5*time.Second, time.Millisecond, "a blocked final preparation must not hold back the ready prefix")
+	close(releaseTail)
+	require.NoError(t, <-done)
+	require.Equal(t, paths, retired)
+	for i, published := range remote.order {
+		require.Equal(t, key(i), published)
+	}
+}
+
+func TestUploadPipelineByteAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sizes []int64
+		begin bool
+	}{
+		{"over-budget", []int64{33 << 20, 31 << 20, 1}, false},
+		{"exact-budget", []int64{33 << 20, 31 << 20}, true},
+		{"oversized-oldest-alone", []int64{65 << 20}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			var mu sync.Mutex
+			begun := false
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				begun = true
+				mu.Unlock()
+				http.Error(w, "injected begin failure", http.StatusServiceUnavailable)
+			}
+			var paths []string
+			for i, size := range tc.sizes {
+				path := writeTestSegment(t, fmt.Sprintf("4000000000000001%08x", i+1), nil)
+				require.NoError(t, os.Truncate(path, size))
+				paths = append(paths, path)
+			}
+			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, nil)
+			err := u.UploadSegments(t.Context(), "vol-test", t.TempDir(), paths, func(string) error {
+				t.Error("unacknowledged files must not retire")
+				return nil
+			})
+			require.Error(t, err)
+			if !tc.begin {
+				require.ErrorContains(t, err, "byte budget")
+			}
+			mu.Lock()
+			require.Equal(t, tc.begin, begun)
+			mu.Unlock()
+		})
+	}
+}
+
+func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
+	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack"} {
+		t.Run(mode, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+			var publications, completions int // protected by remote.mu
+			var loseAck atomic.Bool
+			loseAck.Store(mode == "lost-ack")
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/updates/upload") {
+					rec := httptest.NewRecorder()
+					remote.ServeHTTP(rec, r)
+					var response map[string]any
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+					version := 1
+					if mode == "unknown-version" {
+						version = 2
+					}
+					response["prepared_prefix_publication"] = map[string]int{"version": version, "max_entries": 32}
+					if mode == "legacy" {
+						response["supports_prepare"] = false
+					}
+					json.NewEncoder(w).Encode(response)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/publish-prepared") {
+					var request struct {
+						Nonce   string `json:"lease_nonce"`
+						Entries []struct {
+							ID   string `json:"update_id"`
+							Key  string `json:"ordering_key"`
+							MD5  string `json:"md5"`
+							CRC  string `json:"crc32c"`
+							Size int64  `json:"size"`
+						} `json:"entries"`
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+					require.Equal(t, "nonce", request.Nonce)
+					remote.mu.Lock()
+					defer remote.mu.Unlock()
+					publications++
+					if mode == "route-missing" {
+						http.NotFound(w, r)
+						return
+					}
+					switch mode {
+					case "unavailable":
+						http.Error(w, "busy", http.StatusServiceUnavailable)
+						return
+					case "conflict":
+						http.Error(w, "conflict", http.StatusConflict)
+						return
+					}
+					var ack []map[string]string
+					for _, entry := range request.Entries {
+						row := remote.rows[entry.Key]
+						require.NotNil(t, row)
+						require.True(t, row.prepared)
+						require.Equal(t, row.size, entry.Size)
+						require.Equal(t, row.md5, entry.MD5)
+						require.Equal(t, row.crc, entry.CRC)
+						require.Equal(t, "volup-"+entry.Key, entry.ID)
+						if !row.active {
+							row.active = true
+							remote.order = append(remote.order, entry.Key)
+						}
+						ack = append(ack, map[string]string{"update_id": entry.ID, "ordering_key": entry.Key})
+					}
+					if loseAck.Load() {
+						conn, _, err := w.(http.Hijacker).Hijack()
+						require.NoError(t, err)
+						conn.Close()
+						return
+					}
+					if mode == "malformed" {
+						ack = ack[:len(ack)-1]
+					}
+					json.NewEncoder(w).Encode(map[string]any{"version": 1, "entries": ack, "terminal": ack[len(ack)-1]})
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/complete") {
+					remote.mu.Lock()
+					completions++
+					remote.mu.Unlock()
+				}
+				remote.ServeHTTP(w, r)
+			}
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			require.NoError(t, state.SetMountAndSave("mount", &MountState{EntityId: "mount", CloudVolumeId: "vol-test", LeaseNonce: "nonce", LeaseOwned: true}))
+			var paths, keys []string
+			for i := 0; i < 13; i++ {
+				key := fmt.Sprintf("4000000000000001%08x", i+1)
+				keys = append(keys, key)
+				paths = append(paths, writeTestSegment(t, key, []byte(key)))
+			}
+			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			// Every batch failure, whether refused, rejected, malformed or
+			// lost after commit, must still publish the whole turn in order
+			// through single completion rather than stall the volume.
+			require.NoError(t, u.UploadSegments(t.Context(), "vol-test", dir, paths, os.Remove))
+			require.False(t, state.HasPendingCloudUpload("vol-test"))
+			require.Equal(t, keys, remote.order)
+			for _, path := range paths {
+				require.NoFileExists(t, path)
+			}
+			switch mode {
+			case "batch":
+				require.Positive(t, publications)
+				require.Zero(t, completions)
+			case "legacy", "unknown-version":
+				require.Zero(t, publications)
+				require.Equal(t, len(paths), completions)
+			default:
+				require.Equal(t, 1, publications, "after one failure the turn stops using batches")
+				require.Positive(t, completions)
+			}
 		})
 	}
 }

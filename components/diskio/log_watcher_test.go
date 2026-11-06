@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,9 +20,9 @@ import (
 // Run a scan window synchronously for the segment retirement tests.
 func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 	for _, vol := range w.state.ListVolumes() {
-		paths := w.scanVolume(ctx, vol, nil)
-		for len(paths) > 0 {
-			paths = w.scanVolume(ctx, vol, paths)
+		paths, more, _ := w.scanVolume(ctx, vol, nil)
+		for more {
+			paths, more, _ = w.scanVolume(ctx, vol, paths)
 		}
 	}
 }
@@ -527,4 +529,87 @@ func TestLogWatcherCleansUpSegmentsAtOrBeforeHorizon(t *testing.T) {
 	})
 	assert.Empty(t, logs.String(), "already-retired cached paths should not produce warnings")
 	assert.Len(t, uploader.uploaded, 2)
+}
+
+func TestLogWatcherDrainsAcrossScanWindowsWithoutDiscoveryDelay(t *testing.T) {
+	state := NewState()
+	dir := t.TempDir()
+	logs := filepath.Join(dir, "logs")
+	require.NoError(t, os.Mkdir(logs, 0755))
+	const count = 1031 // crosses both the scheduling turn and directory window
+	last := fmt.Sprintf("4000000000000001%08x", count)
+	for i := 1; i <= count; i++ {
+		name := fmt.Sprintf("disk.4000000000000001%08x.log", i)
+		require.NoError(t, os.WriteFile(filepath.Join(logs, name), []byte{1}, 0600))
+	}
+	state.SetVolume("vol", &VolumeState{EntityId: "vol", CloudVolumeId: "vol", DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR})
+	var uploaded atomic.Int32
+	uploader := logUploaderFunc(func(context.Context, string, string) (string, error) {
+		uploaded.Add(1)
+		return "remote", nil
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	watch := NewLogWatcher(slog.Default(), state, uploader, time.Hour)
+	go func() { assert.NoError(t, watch.Run(ctx)) }()
+	t.Cleanup(func() { cancel(); watch.Wait() })
+	require.Eventually(t, func() bool {
+		horizon, err := readLogHorizon(dir)
+		return err == nil && horizon == last
+	}, 5*time.Second, time.Millisecond, "known work must not wait for the discovery interval")
+	require.EqualValues(t, count, uploaded.Load())
+}
+
+func TestLogWatcherHonorsRetryAfterWithoutHoldingVolumeSlot(t *testing.T) {
+	// More volumes than slots: the healthy one is dispatched only after the
+	// first four turns end, so a failed volume holding its slot through
+	// backoff would keep it out.
+	ids := []string{"retry0", "retry1", "retry2", "retry3", "healthy"}
+	require.Greater(t, len(ids), logVolumeConcurrency)
+	state := NewState()
+	for _, id := range ids {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "logs"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "logs/disk.400000000000000100000001.log"), []byte{1}, 0600))
+		state.SetVolume(id, &VolumeState{EntityId: id, CloudVolumeId: id, DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR})
+	}
+	var mu sync.Mutex
+	attempts := map[string][]time.Time{}
+	healthy := make(chan struct{}, 1)
+	uploader := logUploaderFunc(func(_ context.Context, id, _ string) (string, error) {
+		if id == "healthy" {
+			healthy <- struct{}{}
+			return id, nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		attempts[id] = append(attempts[id], time.Now())
+		if len(attempts[id]) == 1 {
+			return "", &cloudUpdateHTTPError{status: 503, retryAfter: 500 * time.Millisecond, message: "busy"}
+		}
+		return id, nil
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	watch := NewLogWatcher(slog.Default(), state, uploader, time.Hour)
+	go func() { assert.NoError(t, watch.Run(ctx)) }()
+	t.Cleanup(func() { cancel(); watch.Wait() })
+	select {
+	case <-healthy:
+	case <-time.After(400 * time.Millisecond):
+		t.Fatal("healthy volume waited for other volumes' backoff")
+	}
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, id := range ids[:4] {
+			if len(attempts[id]) < 2 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "retries waited for discovery instead of their eligibility deadline")
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range ids[:4] {
+		require.GreaterOrEqual(t, attempts[id][1].Sub(attempts[id][0]), 500*time.Millisecond, id)
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,61 @@ import (
 
 // These assert the wire shapes the cloud actually expects, so a drift on either
 // side shows up here rather than as a 400 in production.
+
+// A large segment on a slow link must finish however long it takes, or the
+// same oldest segment would time out forever; only a stalled PUT is cancelled.
+func TestCloudUpdatesClientBoundsStalledUploadNotSlowOne(t *testing.T) {
+	previous := uploadStallTimeout
+	uploadStallTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { uploadStallTimeout = previous })
+	for _, stalled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stalled=%v", stalled), func(t *testing.T) {
+			ts, h, authClient := newTestUploaderServer(t)
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/updates/upload"):
+					json.NewEncoder(w).Encode(beginUploadResponseJSON{UpdateID: "volup-slow", UploadURL: ts.URL + "/put",
+						CompleteURL: "/api/v1/disk/volumes/vol-1/updates/volup-slow/complete"})
+				case r.Method == "PUT":
+					_, err := io.ReadAll(r.Body)
+					if err != nil {
+						return
+					}
+				default:
+					json.NewEncoder(w).Encode(map[string]any{"update_id": "volup-slow"})
+				}
+			}
+			// Ten chunks 100 ms apart: about a second in total, several times
+			// the stall timeout, but never idle longer than half of it.
+			pr, pw := io.Pipe()
+			go func() {
+				for i := range 10 {
+					if stalled && i == 5 {
+						time.Sleep(time.Second)
+					}
+					if _, err := pw.Write([]byte("0123456789")); err != nil {
+						return
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				pw.Close()
+			}()
+			t.Cleanup(func() { pr.Close() })
+			client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+			started := time.Now()
+			_, err := client.Upload(t.Context(), "vol-1", UploadRequest{Kind: KindLoopImage, OrderingKey: "0000000000000001"}, pr, 100)
+			if stalled {
+				// The source here blocks rather than the network, so the
+				// transport returns once the read resumes; what matters is
+				// that the stall, not a deadline, cancelled the transfer.
+				require.ErrorIs(t, err, context.Canceled)
+				return
+			}
+			require.NoError(t, err)
+			require.Greater(t, time.Since(started), 3*uploadStallTimeout, "outlasted the stall timeout while making progress")
+		})
+	}
+}
 
 func TestCloudUpdatesClientUploadFullFlow(t *testing.T) {
 	ts, h, authClient := newTestUploaderServer(t)
@@ -400,10 +456,66 @@ func TestCloudPreparationFailsClosedOnOldReplica(t *testing.T) {
 				}
 			}
 			client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
-			u := NewCloudSegmentUploaderWithClient(slog.Default(), client, nil)
-			err := u.UploadSegments(context.Background(), "vol-test", t.TempDir(), []string{writeTestSegment(t, "400000000000000100000001", []byte("data"))}, func(string) error { t.Error("must not retire"); return nil })
+			_, err := client.(stagedUpdatesClient).PrepareUpload(t.Context(), "vol-test",
+				UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000100000001"}, bytes.NewReader([]byte("data")), 4)
 			require.Error(t, err)
 			require.False(t, published)
+		})
+	}
+}
+
+func TestCloudPreparedPublicationRequiresExactAcknowledgement(t *testing.T) {
+	for _, variant := range []string{"exact", "wrong-id", "reordered", "wrong-terminal", "missing-version", "missing-entry"} {
+		t.Run(variant, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/api/v1/disk/volumes/vol-test/updates/publish-prepared", r.URL.Path)
+				var request struct {
+					Kind    string            `json:"kind"`
+					Nonce   string            `json:"lease_nonce"`
+					Head    map[string]string `json:"expected_head"`
+					Entries []map[string]any  `json:"entries"`
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+				require.Equal(t, "lbd_log", request.Kind)
+				require.Equal(t, "nonce", request.Nonce)
+				require.Equal(t, "volup-base", request.Head["update_id"])
+				require.Len(t, request.Entries, 2)
+				require.EqualValues(t, 7, request.Entries[0]["size"])
+				require.Equal(t, "crc", request.Entries[1]["crc32c"])
+				entries := []map[string]string{
+					{"update_id": "volup-a", "ordering_key": "400000000000000100000001"},
+					{"update_id": "volup-b", "ordering_key": "400000000000000100000002"},
+				}
+				terminal := map[string]string{"update_id": "volup-b", "ordering_key": "400000000000000100000002"}
+				version := 1
+				switch variant {
+				case "wrong-id":
+					entries[0]["update_id"] = "volup-other"
+				case "reordered":
+					entries[0], entries[1] = entries[1], entries[0]
+				case "wrong-terminal":
+					terminal["ordering_key"] = "400000000000000100000003"
+				case "missing-version":
+					version = 0
+				case "missing-entry":
+					entries = entries[:1]
+				}
+				json.NewEncoder(w).Encode(map[string]any{"version": version, "entries": entries, "terminal": terminal})
+			}
+			client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth).(prefixUpdatesClient)
+			entries := []*preparedUpload{
+				{updateID: "volup-a", volumeID: "vol-test", kind: KindLBDLog, orderingKey: "400000000000000100000001", completion: completeUploadRequestJSON{MD5: "md5-a", CRC32C: "crc", Size: 7, LeaseNonce: "nonce"}},
+				{updateID: "volup-b", volumeID: "vol-test", kind: KindLBDLog, orderingKey: "400000000000000100000002", completion: completeUploadRequestJSON{MD5: "md5-b", CRC32C: "crc", Size: 13, LeaseNonce: "nonce"}},
+			}
+			boundary, err := client.PublishPrepared(t.Context(), &publicationBoundary{"volup-base", "400000000000000100000000"}, entries)
+			if variant == "exact" {
+				require.NoError(t, err)
+				require.Equal(t, "volup-b", boundary.UpdateID)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, boundary)
+			}
 		})
 	}
 }

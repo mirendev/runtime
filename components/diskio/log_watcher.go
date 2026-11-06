@@ -2,9 +2,11 @@ package diskio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,9 +35,18 @@ const logScanWindow = 1024
 // prevents large backlogs from taking every turn when all workers are busy.
 const logVolumeConcurrency = 4
 
+// Per-volume failure backoff. Retry-After can extend a wait to at most
+// maxLogRetryDelay so one bad header cannot park a volume for hours.
+const (
+	minLogRetryDelay = time.Second
+	maxLogRetryDelay = time.Minute
+)
+
 type logVolumeScan struct {
 	volume *VolumeState
 	paths  []string
+	more   bool
+	err    error
 }
 
 func oldestSegments(ctx context.Context, logDir string) ([]string, error) {
@@ -104,12 +115,18 @@ func (w *LogWatcher) Run(ctx context.Context) error {
 	if w.interval <= 0 {
 		return fmt.Errorf("log watcher interval must be positive, got %s", w.interval)
 	}
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
+	discovery := time.NewTimer(0)
+	defer discovery.Stop()
+	nextDiscovery := time.Now()
 
 	completed := make(chan *logVolumeScan, logVolumeConcurrency)
 	active := make(map[string]bool)
 	queued := make(map[string]bool)
+	type retry struct {
+		until time.Time
+		delay time.Duration
+	}
+	retries := make(map[string]retry)
 	var pending []*logVolumeScan
 	// Shutdown must join uploads before the runner tears down their dependencies.
 	defer func() {
@@ -122,9 +139,17 @@ func (w *LogWatcher) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-discovery.C:
+			now := time.Now()
+			// A due retry wakes only its own volume; only the interval
+			// starts a full discovery pass.
+			full := !now.Before(nextDiscovery)
+			if full {
+				nextDiscovery = now.Add(w.interval)
+			}
 			for _, vol := range w.state.ListVolumes() {
-				if vol.Mode == storage_v1alpha.VM_ACCELERATOR && !active[vol.EntityId] && !queued[vol.EntityId] {
+				r, retrying := retries[vol.EntityId]
+				if (full || retrying) && vol.Mode == storage_v1alpha.VM_ACCELERATOR && !active[vol.EntityId] && !queued[vol.EntityId] && !r.until.After(now) {
 					pending = append(pending, &logVolumeScan{volume: vol})
 					queued[vol.EntityId] = true
 				}
@@ -132,7 +157,23 @@ func (w *LogWatcher) Run(ctx context.Context) error {
 		case scan := <-completed:
 			id := scan.volume.EntityId
 			delete(active, id)
-			if len(scan.paths) > 0 {
+			if scan.err != nil {
+				delay := min(max(minLogRetryDelay, retries[id].delay*2), maxLogRetryDelay)
+				// Jitter within the upper half so the first retry still waits
+				// at least half a second rather than retrying immediately.
+				wait := delay/2 + time.Duration(rand.Int64N(int64(delay/2)+1))
+				var response *cloudUpdateHTTPError
+				if errors.As(scan.err, &response) {
+					wait = max(wait, min(response.retryAfter, maxLogRetryDelay))
+					if response.status >= 400 && response.status < 500 && response.status != 429 {
+						wait = max(wait, maxLogRetryDelay)
+					}
+				}
+				retries[id] = retry{until: time.Now().Add(wait), delay: delay}
+			} else {
+				delete(retries, id)
+			}
+			if scan.err == nil && scan.more {
 				pending = append(pending, scan)
 				queued[id] = true
 			}
@@ -155,10 +196,23 @@ func (w *LogWatcher) Run(ctx context.Context) error {
 			scan.volume = vol
 			active[id] = true
 			go func() {
-				scan.paths = w.scanVolume(ctx, vol, scan.paths)
+				scan.paths, scan.more, scan.err = w.scanVolume(ctx, vol, scan.paths)
 				completed <- scan
 			}()
 		}
+		next := nextDiscovery
+		for id, retry := range retries {
+			// Drop entries for volumes that are gone or no longer upload logs;
+			// otherwise a past-due entry would fire the timer in a tight loop.
+			if vol := w.state.GetVolume(id); vol == nil || vol.Mode != storage_v1alpha.VM_ACCELERATOR {
+				delete(retries, id)
+				continue
+			}
+			if !active[id] && !queued[id] && retry.until.Before(next) {
+				next = retry.until
+			}
+		}
+		discovery.Reset(max(0, time.Until(next)))
 	}
 }
 
@@ -167,9 +221,9 @@ func (w *LogWatcher) Wait() {
 	<-w.done
 }
 
-func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []string) []string {
+func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []string) ([]string, bool, error) {
 	if vol.Mode != storage_v1alpha.VM_ACCELERATOR {
-		return nil
+		return nil, false, nil
 	}
 
 	// A volume with no cloud id has not been registered yet. Uploading
@@ -179,7 +233,7 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 	if w.uploader != nil && vol.CloudVolumeId == "" {
 		w.log.Debug("volume not registered with miren.cloud, deferring segment upload",
 			"volume_id", vol.VolumeId)
-		return nil
+		return nil, false, nil
 	}
 
 	if len(paths) == 0 {
@@ -189,24 +243,27 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 			if !os.IsNotExist(err) {
 				w.log.Warn("failed to read log directory", "path", logDir, "error", err)
 			}
-			return nil
+			return nil, false, nil
 		}
 		for _, name := range names {
 			paths = append(paths, filepath.Join(logDir, name))
 		}
 	}
+	if len(paths) == 0 {
+		return nil, false, nil
+	}
 	horizon, err := readLogHorizon(vol.DiskPath)
 	if err != nil {
 		w.log.Warn("failed to read log horizon, pausing this volume's scan",
 			"path", vol.DiskPath, "error", err)
-		return nil
+		return nil, false, err
 	}
 	// A previous rename may have succeeded just before fsync failed.
 	// Make the observed horizon durable before trusting it for deletion.
 	if horizon != "" {
 		if err := syncLogHorizon(vol.DiskPath); err != nil {
 			w.log.Warn("failed to sync log horizon, pausing this volume's scan", "path", vol.DiskPath, "error", err)
-			return nil
+			return nil, false, err
 		}
 	}
 
@@ -219,6 +276,7 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 			// do not reintroduce stale writes into the cloud history.
 			if err := os.Remove(segPath); err != nil && !os.IsNotExist(err) {
 				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
+				return nil, false, err
 			} else if err == nil {
 				w.log.Warn("removed segment covered by log horizon without upload",
 					"path", segPath, "horizon", horizon)
@@ -233,39 +291,46 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 		if err := updateLogHorizonFromPath(vol.DiskPath, segPath); err != nil {
 			return fmt.Errorf("updating log horizon for %s: %w", segPath, err)
 		}
-		if err := os.Remove(segPath); err != nil {
-			w.log.Warn("failed to remove segment", "path", segPath, "error", err)
+		if err := os.Remove(segPath); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 		return nil
 	}
 	n := min(uploadConcurrency, len(paths))
+	if _, ok := w.uploader.(logSegmentBatchUploader); ok {
+		n, err = uploadTurnSize(paths)
+		if err != nil {
+			w.log.Warn("failed to inspect segment, pausing this volume's scan", "error", err)
+			return nil, false, err
+		}
+	}
 	remaining := paths[n:]
 	paths = paths[:n]
 	for len(paths) > 0 {
 		if err := ctx.Err(); err != nil {
-			return nil
+			return nil, false, err
 		}
 		if batch, ok := w.uploader.(logSegmentBatchUploader); ok {
-			n := min(uploadConcurrency, len(paths))
-			if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths[:n], retire); err != nil {
+			if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths, retire); err != nil {
 				w.log.Warn("failed to upload segments, pausing this volume's scan", "path", paths[0], "error", err)
-				return nil
+				return nil, false, err
 			}
-			paths = paths[n:]
-			continue
+			break
 		}
 		path := paths[0]
 		if w.uploader != nil {
 			if _, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, path); err != nil {
 				w.log.Warn("failed to upload segment, pausing this volume's scan", "path", path, "error", err)
-				return nil
+				return nil, false, err
 			}
 		}
 		if err := retire(path); err != nil {
 			w.log.Warn("failed to update log horizon, pausing this volume's scan", "path", path, "error", err)
-			return nil
+			return nil, false, err
 		}
 		paths = paths[1:]
 	}
-	return remaining
+	// Even after the cached scan window is exhausted, immediately check for
+	// more work. Only an empty scan or a failure should wait for discovery ticks.
+	return remaining, true, nil
 }

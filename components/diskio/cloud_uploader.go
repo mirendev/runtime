@@ -2,12 +2,14 @@ package diskio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"miren.dev/lbd"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -55,9 +57,30 @@ func (u *CloudSegmentUploader) UploadSegment(ctx context.Context, volumeID, segm
 	return id, err
 }
 
-const uploadConcurrency = 8
+const (
+	uploadConcurrency = 8
+	uploadWindow      = 32
+	uploadWindowBytes = 64 << 20
+)
 
-// UploadSegments prepares a bounded batch concurrently, then publishes in order.
+// uploadTurnSize bounds retained preparation as well as active transfers. An
+// oversized oldest segment runs alone rather than wedging the ordered stream.
+func uploadTurnSize(paths []string) (int, error) {
+	var bytes int64
+	for i, path := range paths[:min(uploadWindow, len(paths))] {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0, err
+		}
+		if i > 0 && bytes+info.Size() > uploadWindowBytes {
+			return i, nil
+		}
+		bytes += info.Size()
+	}
+	return min(uploadWindow, len(paths)), nil
+}
+
+// UploadSegments overlaps bounded preparation with ordered publication.
 // No local files are retired until the entire batch is authenticated remotely.
 // Thus a crash or partial publication leaves the original batch available to
 // resume by checksum-bound ordering key, including a lost begin response.
@@ -73,8 +96,8 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 }
 
 func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
-	if len(paths) == 0 || len(paths) > uploadConcurrency {
-		return fmt.Errorf("upload batch must contain 1..%d segments", uploadConcurrency)
+	if len(paths) == 0 || len(paths) > uploadWindow {
+		return fmt.Errorf("upload batch must contain 1..%d segments", uploadWindow)
 	}
 	var previous string
 	for _, path := range paths {
@@ -100,6 +123,13 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		for len(paths) > 0 && lbd.LabelFromLogPath(paths[0]) <= horizon {
 			paths = paths[1:]
 		}
+		n, err := uploadTurnSize(paths)
+		if err != nil {
+			return false, err
+		}
+		if n != len(paths) {
+			return false, fmt.Errorf("upload batch exceeds the preparation byte budget")
+		}
 		return len(paths) > 0, nil
 	}, func() error {
 		staged, ok := u.updates.(stagedUpdatesClient)
@@ -111,39 +141,139 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 			}
 			return nil
 		}
-		prepared := make([]*preparedUpload, len(paths))
-		errors := make([]error, len(paths))
+		uploadCtx := ctx
+		ctx, cancel := context.WithCancel(ctx)
 		var wg sync.WaitGroup
-		for i, path := range paths {
+		defer func() {
+			cancel()
+			wg.Wait()
+		}()
+		type result struct {
+			prepared *preparedUpload
+			err      error
+		}
+		ready := make([]chan result, len(paths))
+		jobs := make(chan int, len(paths))
+		for i := range paths {
+			ready[i] = make(chan result, 1)
+			jobs <- i
+		}
+		close(jobs)
+		var failed atomic.Bool
+		nonce := u.leaseNonceFor(volumeID)
+		for range min(uploadConcurrency, len(paths)) {
 			wg.Go(func() {
-				f, err := os.Open(path)
-				if err != nil {
-					errors[i] = err
-					return
+				for {
+					if failed.Load() || ctx.Err() != nil {
+						return
+					}
+					i, ok := <-jobs
+					if !ok {
+						return
+					}
+					p, err := func() (*preparedUpload, error) {
+						f, err := os.Open(paths[i])
+						if err != nil {
+							return nil, err
+						}
+						defer f.Close()
+						info, err := f.Stat()
+						if err != nil || info.Size() == 0 {
+							return nil, err
+						}
+						return staged.PrepareUpload(ctx, volumeID, UploadRequest{
+							Kind: KindLBDLog, OrderingKey: lbd.LabelFromLogPath(paths[i]), LeaseNonce: nonce,
+						}, f, info.Size())
+					}()
+					ready[i] <- result{p, err}
+					if err != nil {
+						failed.Store(true)
+						return
+					}
 				}
-				defer f.Close()
-				info, err := f.Stat()
-				if err != nil {
-					errors[i] = err
-					return
-				}
-				if info.Size() == 0 {
-					return
-				}
-				prepared[i], errors[i] = staged.PrepareUpload(ctx, volumeID, UploadRequest{
-					Kind: KindLBDLog, OrderingKey: lbd.LabelFromLogPath(path), LeaseNonce: u.leaseNonceFor(volumeID),
-				}, f, info.Size())
 			})
 		}
-		wg.Wait()
-		for i, p := range prepared {
-			if errors[i] != nil {
-				return fmt.Errorf("preparing %s: %w", paths[i], errors[i])
+		var head *publicationBoundary
+		headKnown := false
+		publisher, batchSupported := u.updates.(prefixUpdatesClient)
+		for i := 0; i < len(paths); {
+			var r result
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case r = <-ready[i]:
 			}
-			if p != nil {
-				if _, err := staged.CompleteUpload(ctx, p); err != nil {
+			if r.err != nil {
+				if errors.Is(r.err, errPreparationUnsupported) {
+					// Join every preparation before any legacy completion can
+					// publish. Old replicas must never interpret preparation as activation.
+					cancel()
+					wg.Wait()
+					for _, path := range paths[i:] {
+						if _, err := u.uploadSegment(uploadCtx, volumeID, path); err != nil {
+							return err
+						}
+					}
+					return nil
+				}
+				return fmt.Errorf("preparing %s: %w", paths[i], r.err)
+			}
+			p := r.prepared
+			if p == nil {
+				i++
+				continue
+			}
+			prefix := []*preparedUpload{p}
+			if batchSupported && p.batchLimit > 0 && !p.active {
+				if !headKnown {
+					updates, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
+					if err != nil {
+						return err
+					}
+					if len(updates) > 0 {
+						head = &publicationBoundary{updates[0].UpdateID, updates[0].OrderingKey}
+					}
+					headKnown = true
+				}
+			collect:
+				for len(prefix) < p.batchLimit && i+len(prefix) < len(paths) {
+					index := i + len(prefix)
+					select {
+					case next := <-ready[index]:
+						if next.err != nil || next.prepared == nil || next.prepared.active || next.prepared.batchLimit < len(prefix)+1 {
+							ready[index] <- next
+							break collect
+						}
+						prefix = append(prefix, next.prepared)
+					default:
+						break collect
+					}
+				}
+				var err error
+				head, err = publisher.PublishPrepared(ctx, head, prefix)
+				if err == nil {
+					i += len(prefix)
+					continue
+				}
+				if ctx.Err() != nil {
 					return fmt.Errorf("publishing %s: %w", paths[i], err)
 				}
+				// Batch publication is only an accelerator. Finish this turn
+				// through ordered single completion, which every server version
+				// accepts. It is safe even if this batch committed or is still
+				// running: both paths activate only these exact prepared
+				// identities oldest-first, so whatever lands is still a prefix,
+				// and completing an already active entry just authenticates it.
+				u.log.Warn("batch publication failed, completing this turn one segment at a time",
+					"volume_id", volumeID, "count", len(prefix), "error", err)
+				batchSupported = false
+			}
+			for _, entry := range prefix {
+				if _, err := staged.CompleteUpload(ctx, entry); err != nil {
+					return fmt.Errorf("publishing %s: %w", paths[i], err)
+				}
+				head = &publicationBoundary{entry.updateID, entry.orderingKey}
+				i++
 			}
 		}
 		return nil
@@ -227,12 +357,16 @@ func (u *CloudSegmentUploader) drainSegmentsLocked(ctx context.Context, volumeID
 			return fmt.Errorf("cannot drain cloud logs without an updates client")
 		}
 		for len(names) > 0 {
-			n := min(uploadConcurrency, len(names))
+			n := min(uploadWindow, len(names))
 			paths := make([]string, n)
 			for i, name := range names[:n] {
 				paths[i] = filepath.Join(diskPath, "logs", name)
 			}
-			if err := u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, func(path string) error {
+			n, err = uploadTurnSize(paths)
+			if err != nil {
+				return err
+			}
+			if err := u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths[:n], func(path string) error {
 				if err := updateLogHorizonFromPath(diskPath, path); err != nil {
 					return err
 				}
