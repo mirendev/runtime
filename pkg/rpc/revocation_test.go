@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/caauth"
-	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/example"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -139,10 +138,7 @@ func TestRevocationReachesEstablishedConnection(t *testing.T) {
 
 	h.revocations.Add(serial)
 
-	err = emit(t.Context(), c)
-	var denial cond.ErrRemote
-	require.ErrorAs(t, err, &denial)
-	require.Equal(t, "unauthorized", denial.Code)
+	require.ErrorContains(t, emit(t.Context(), c), "status 401")
 }
 
 // A callstream is authenticated only when it opens, so revoking must end the

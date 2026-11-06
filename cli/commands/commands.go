@@ -1568,7 +1568,7 @@ A revocation cannot be undone from the CLI. To restore someone's access, issue t
 
 The command refuses to revoke the certificate it is running with, and the coordinator's own API certificate.
 
-A leaked runner certificate needs more than this command. It can renew itself into a new certificate with a new serial, and revoking the old serial does not touch the new one. Also run ` + "`miren runner delete`" + ` to stop further renewals, then check the audit log for other serials with that runner's subject and revoke those too.`
+A leaked runner certificate needs more than this command. It can renew itself into a new certificate with a new serial, and revoking the old serial does not touch the new one. Also run ` + "`miren runner remove`" + ` to stop further renewals, then check the audit log for other serials with that runner's subject and revoke those too.`
 
 const rollbackDescription = `Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
