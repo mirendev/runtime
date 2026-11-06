@@ -833,9 +833,10 @@ func TestAcceleratorDetachDoesNotWaitForCheckpoint(t *testing.T) {
 	data := bytes.Repeat([]byte{0xF6}, 4096)
 	segment := buildSegmentData(t, 4096, finalLabel, []lbd.Entry{makeWriteEntry(3, data)})
 	require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+finalLabel+".log"), segment, 0600))
+	c.ops.(*mockDiskMountOps).lbdBackings["/dev/lbd0"] = imagePath
 	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{
 		EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol", Mode: storage_v1alpha.VM_ACCELERATOR,
-		BackingPath: imagePath, LeaseNonce: "nonce", LeaseOwned: true,
+		BackingPath: imagePath, DevicePath: "/dev/lbd0", LeaseNonce: "nonce", LeaseOwned: true,
 	}))
 	cloud.mockCloudServer.mu.Lock()
 	cloud.leases["vol"] = &activeLease{Nonce: "nonce"}
@@ -914,4 +915,30 @@ func TestAcceleratorFailedInstallReportsItsOwnError(t *testing.T) {
 	cloud.mu.Lock()
 	require.False(t, cloud.stallRenewal, "the background renewal must have been in flight")
 	cloud.mu.Unlock()
+}
+
+func TestAcceleratorNoCheckpointWithoutLbdDetach(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x7E}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	// A reboot: the kernel device is gone, so cleanup never calls LbdDetach.
+	ops := c.ops.(*mockDiskMountOps)
+	clear(ops.lbdBackings)
+	clear(ops.mountDevices)
+	mount.DesiredState, mount.ActualState = storage_v1alpha.DM_WANT_UNMOUNTED, storage_v1alpha.DM_MOUNTED
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	require.Nil(t, c.state.GetMount("mount"))
+	require.Zero(t, checkpointClaims(cloud), "a post-crash image is not a checkpoint")
+	require.NoFileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+	cloud.mockCloudServer.mu.Lock()
+	require.Empty(t, cloud.leases)
+	cloud.mockCloudServer.mu.Unlock()
 }

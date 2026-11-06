@@ -759,6 +759,10 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 
 	// Detach device based on mode (use persisted mode from MountState)
 	var detachErr error
+	// Only an LBD detach in this call proves the image holds every logged
+	// write. A device that vanished (for example after a reboot) proves
+	// nothing about the local image, so it must not become a checkpoint.
+	lbdDetached := false
 	if mountState.DevicePath != "" {
 		mounted, err := c.ops.IsDeviceMounted(mountState.DevicePath)
 		if err != nil {
@@ -769,6 +773,8 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach lbd device", "error", err)
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
+			} else {
+				lbdDetached = true
 			}
 		} else {
 			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
@@ -794,7 +800,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
 		return err
 	}
-	c.checkpointDetachedMount(ctx, mountState)
+	if lbdDetached {
+		c.checkpointDetachedMount(ctx, mountState)
+	}
 
 	// Release cloud lease if one was acquired
 	var leaseErr error
