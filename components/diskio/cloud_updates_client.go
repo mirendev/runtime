@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -107,19 +108,28 @@ type cloudUpdatesClient struct {
 	baseURL    string
 	authClient *cloudauth.AuthClient
 	client     *http.Client
+	// payloads sends PUT bodies. It has no overall timeout: the stall timer
+	// bounds a transfer that stops, so a large one on a slow link can finish.
+	payloads  *http.Client
+	preparing chan struct{}
 }
 
 // NewCloudUpdatesClient creates a client for the cloud's volume update API.
 func NewCloudUpdatesClient(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) CloudUpdatesClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConnsPerHost = uploadConcurrency
-	transport.MaxConnsPerHost = uploadConcurrency
+	// Preparation holds at most uploadConcurrency connections, which leaves
+	// one for each volume's publisher so control requests never queue behind
+	// payload transfers and spend their deadline waiting for a connection.
+	transport.MaxIdleConnsPerHost = uploadConcurrency + logVolumeConcurrency
+	transport.MaxConnsPerHost = uploadConcurrency + logVolumeConcurrency
 	return &cloudUpdatesClient{
 		log:        log.With("module", "cloud-updates"),
 		baseURL:    baseURL,
 		authClient: authClient,
+		preparing:  make(chan struct{}, uploadConcurrency),
 		// Generous: a loop image can be gigabytes.
-		client: &http.Client{Timeout: 30 * time.Minute, Transport: transport},
+		client:   &http.Client{Timeout: 30 * time.Minute, Transport: transport},
+		payloads: &http.Client{Transport: transport},
 	}
 }
 
@@ -146,6 +156,10 @@ type beginUploadResponseJSON struct {
 	MD5             string `json:"md5"`
 	CRC32C          string `json:"crc32c"`
 	Size            int64  `json:"size"`
+	Publication     *struct {
+		Version    int `json:"version"`
+		MaxEntries int `json:"max_entries"`
+	} `json:"prepared_prefix_publication"`
 }
 
 type completeUploadRequestJSON struct {
@@ -171,6 +185,42 @@ type preparedUpload struct {
 	volumeID    string
 	kind        UpdateKind
 	orderingKey string
+	active      bool
+	batchLimit  int
+}
+
+type publicationBoundary struct {
+	UpdateID    string `json:"update_id"`
+	OrderingKey string `json:"ordering_key"`
+}
+
+type prefixUpdatesClient interface {
+	PublishPrepared(context.Context, *publicationBoundary, []*preparedUpload) (*publicationBoundary, error)
+}
+
+var errPreparationUnsupported = errors.New("cloud does not support ordered upload preparation")
+
+type cloudUpdateHTTPError struct {
+	status     int
+	message    string
+	retryAfter time.Duration
+}
+
+func (e *cloudUpdateHTTPError) Error() string { return e.message }
+
+func updateHTTPError(resp *http.Response) error {
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	apiURL := *resp.Request.URL
+	apiURL.RawQuery, apiURL.Fragment = "", ""
+	var delay time.Duration
+	if seconds, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); err == nil && seconds > 0 {
+		// Cap before conversion so an invalid header cannot overflow Duration.
+		delay = time.Duration(min(seconds, 86400)) * time.Second
+	} else if until, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
+		delay = max(0, time.Until(until))
+	}
+	return &cloudUpdateHTTPError{status: resp.StatusCode, retryAfter: delay,
+		message: fmt.Sprintf("%s %s failed with status %d: %s", resp.Request.Method, apiURL.Redacted(), resp.StatusCode, payload)}
 }
 
 type listUpdatesResponseJSON struct {
@@ -198,8 +248,31 @@ func (c *cloudUpdatesClient) authorize(ctx context.Context, req *http.Request) e
 	return nil
 }
 
+// jsonRequestTimeout bounds each small control request. Payload bytes travel
+// only through the PUT, which is bounded by uploadStallTimeout instead.
+const jsonRequestTimeout = 2 * time.Minute
+
+// uploadStallTimeout cancels a PUT that stops sending; a variable for tests.
+var uploadStallTimeout = 2 * time.Minute
+
+// progressReader reports each successful read so a stall timer can be reset.
+type progressReader struct {
+	r        io.Reader
+	progress func()
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.progress()
+	}
+	return n, err
+}
+
 // doJSON sends a request and decodes a JSON response body into out.
 func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, body any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, jsonRequestTimeout)
+	defer cancel()
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -213,6 +286,10 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
+	started := time.Now()
+	defer func() {
+		c.log.Debug("cloud update request", "method", method, "path", req.URL.Path, "duration", time.Since(started))
+	}()
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -227,8 +304,7 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		payload, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s %s failed with status %d: %s", method, apiURL, resp.StatusCode, string(payload))
+		return updateHTTPError(resp)
 	}
 
 	if out == nil {
@@ -250,7 +326,61 @@ func (c *cloudUpdatesClient) Upload(ctx context.Context, volumeID string, req Up
 }
 
 func (c *cloudUpdatesClient) PrepareUpload(ctx context.Context, volumeID string, req UploadRequest, body io.ReadSeeker, size int64) (*preparedUpload, error) {
+	select {
+	case c.preparing <- struct{}{}:
+		defer func() { <-c.preparing }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return c.uploadPayload(ctx, volumeID, req, body, size, true)
+}
+
+func (c *cloudUpdatesClient) PublishPrepared(ctx context.Context, head *publicationBoundary, prepared []*preparedUpload) (*publicationBoundary, error) {
+	first := prepared[0]
+	type entry struct {
+		publicationBoundary
+		MD5      string         `json:"md5"`
+		CRC32C   string         `json:"crc32c"`
+		Size     int64          `json:"size"`
+		Metadata map[string]any `json:"metadata,omitempty"`
+	}
+	request := struct {
+		Kind         UpdateKind           `json:"kind"`
+		LeaseNonce   string               `json:"lease_nonce"`
+		ExpectedHead *publicationBoundary `json:"expected_head"`
+		Entries      []entry              `json:"entries"`
+	}{Kind: first.kind, LeaseNonce: first.completion.LeaseNonce, ExpectedHead: head}
+	for _, p := range prepared {
+		request.Entries = append(request.Entries, entry{
+			publicationBoundary: publicationBoundary{p.updateID, p.orderingKey},
+			MD5:                 p.completion.MD5, CRC32C: p.completion.CRC32C, Size: p.completion.Size, Metadata: p.completion.Metadata,
+		})
+	}
+	var response struct {
+		Version  int                   `json:"version"`
+		Entries  []publicationBoundary `json:"entries"`
+		Terminal publicationBoundary   `json:"terminal"`
+	}
+	apiURL, err := c.updatesPath(first.volumeID, "publish-prepared")
+	if err != nil {
+		return nil, err
+	}
+	if err := c.doJSON(ctx, "POST", apiURL, request, &response); err != nil {
+		return nil, err
+	}
+	if response.Version != 1 || len(response.Entries) != len(prepared) {
+		return nil, fmt.Errorf("cloud did not acknowledge the publication manifest")
+	}
+	for i, p := range prepared {
+		if response.Entries[i] != (publicationBoundary{p.updateID, p.orderingKey}) {
+			return nil, fmt.Errorf("cloud acknowledged a different publication identity")
+		}
+	}
+	if response.Terminal != response.Entries[len(prepared)-1] {
+		return nil, fmt.Errorf("cloud acknowledged a different publication boundary")
+	}
+	c.log.Info("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
+	return &response.Terminal, nil
 }
 
 func (c *cloudUpdatesClient) CompleteUpload(ctx context.Context, prepared *preparedUpload) (string, error) {
@@ -316,7 +446,7 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 	// Old servers ignore prepare_only. Refuse BEFORE the completion request,
 	// otherwise a concurrent preparation could publish a replay-visible hole.
 	if prepareOnly && !begun.SupportsPrepare {
-		return nil, fmt.Errorf("cloud does not support ordered upload preparation")
+		return nil, errPreparationUnsupported
 	}
 	if begun.UpdateID == "" {
 		return nil, fmt.Errorf("cloud returned an empty upload identity")
@@ -332,9 +462,12 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 		return nil, err
 	}
 	prepared := &preparedUpload{updateID: begun.UpdateID, completeURL: completeURL,
-		volumeID: volumeID, kind: req.Kind, orderingKey: req.OrderingKey,
+		volumeID: volumeID, kind: req.Kind, orderingKey: req.OrderingKey, active: begun.AlreadyActive,
 		completion: completeUploadRequestJSON{MD5: claim.MD5, CRC32C: claim.CRC32C, Size: size,
 			Metadata: req.Metadata, LeaseNonce: req.LeaseNonce}}
+	if begun.Publication != nil && begun.Publication.Version == 1 && req.Kind == KindLBDLog && req.LeaseNonce != "" {
+		prepared.batchLimit = min(uploadWindow, begun.Publication.MaxEntries)
+	}
 	// Prepared bytes are immutable and have no upload URL. Reuse the bound
 	// identity, but still authenticate publication through CompleteUpload.
 	if begun.AlreadyActive || begun.Prepared {
@@ -345,22 +478,31 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 		return prepared, nil
 	}
 
-	uploadReq, err := http.NewRequestWithContext(ctx, "PUT", begun.UploadURL,
-		io.TeeReader(body, io.MultiWriter(md5h, crch)))
+	// Bound a stalled transfer, not a large or slow one: a fixed deadline
+	// would fail the same oversized segment forever and wedge its volume.
+	putCtx, cancelPut := context.WithCancel(ctx)
+	defer cancelPut()
+	stall := time.AfterFunc(uploadStallTimeout, cancelPut)
+	defer stall.Stop()
+	uploadReq, err := http.NewRequestWithContext(putCtx, "PUT", begun.UploadURL,
+		&progressReader{r: io.TeeReader(body, io.MultiWriter(md5h, crch)), progress: func() { stall.Reset(uploadStallTimeout) }})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create data upload request: %w", err)
 	}
 	uploadReq.ContentLength = size
 
-	uploadResp, err := c.client.Do(uploadReq)
+	uploadResp, err := c.payloads.Do(uploadReq)
 	if err != nil {
+		// url.Error renders the presigned URL, signature included.
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
+			err = uerr.Err
+		}
 		return nil, fmt.Errorf("failed to upload data: %w", err)
 	}
 	defer uploadResp.Body.Close()
 
 	if uploadResp.StatusCode < 200 || uploadResp.StatusCode >= 300 {
-		payload, _ := io.ReadAll(uploadResp.Body)
-		return nil, fmt.Errorf("data upload failed with status %d: %s", uploadResp.StatusCode, string(payload))
+		return nil, updateHTTPError(uploadResp)
 	}
 	if _, err := io.Copy(io.Discard, uploadResp.Body); err != nil {
 		return nil, err

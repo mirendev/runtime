@@ -16,8 +16,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -323,6 +327,13 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				updates = append(updates, map[string]any{"update_id": "volup-" + key, "kind": "lbd_log", "ordering_key": key, "size": s.rows[key].size})
 			}
 		}
+		// Honor the newest-first head lookup the uploader makes.
+		if r.URL.Query().Get("order") == "desc" {
+			slices.Reverse(updates)
+		}
+		if limit, _ := strconv.Atoi(r.URL.Query().Get("limit")); limit > 0 && len(updates) > limit {
+			updates = updates[:limit]
+		}
 		json.NewEncoder(w).Encode(map[string]any{"updates": updates})
 		return
 	}
@@ -336,10 +347,6 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.Method == "PUT" {
-		if row.prepared || row.active {
-			http.Error(w, "prepared payload is immutable", http.StatusConflict)
-			return
-		}
 		if s.fail("put", key) {
 			http.Error(w, "PUT failed", http.StatusServiceUnavailable)
 			return
@@ -352,6 +359,9 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "checksum mismatch", 400)
 			return
 		}
+		// Like GCS staging, a PUT may arrive after a cancelled preparation
+		// still finished server-side. Bytes are bound by the checksums
+		// above, so a matching rewrite cannot change a prepared payload.
 		row.data = data
 		return
 	}
@@ -445,9 +455,10 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			if stage == "put" {
 				assert.Equal(t, keys[:1], prefix)
 				assert.False(t, remote.rows[keys[1]].prepared)
-				for _, key := range keys[2:uploadConcurrency] {
-					assert.True(t, remote.rows[key].prepared, "later concurrent work survives the earlier PUT failure")
-					assert.False(t, remote.rows[key].active)
+				for _, row := range remote.rows {
+					if row.key > keys[1] {
+						assert.False(t, row.active, "preparation may run ahead, publication must not")
+					}
 				}
 			}
 			remote.mu.Unlock()
@@ -815,6 +826,324 @@ func TestUploadPipelineCrashBoundaries(t *testing.T) {
 			require.Len(t, remote.rows, remoteCount)
 			require.Len(t, remote.order, remoteCount, "restart must not republish")
 			remote.mu.Unlock()
+		})
+	}
+}
+
+func TestUploadPipelineOverlapsPreparationAndOrderedPublication(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	firstPublishing, aheadPrepared := make(chan struct{}), make(chan struct{})
+	releaseFirst, releaseTail := make(chan struct{}), make(chan struct{})
+	key := func(i int) string { return fmt.Sprintf("4000000000000001%08x", i+1) }
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(0)+"/complete") {
+			close(firstPublishing)
+			select {
+			case <-releaseFirst:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(31)+"/prepare") {
+			select {
+			case <-releaseTail:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		remote.ServeHTTP(w, r)
+		if strings.HasSuffix(r.URL.Path, "/volup-"+key(8)+"/prepare") {
+			close(aheadPrepared)
+		}
+	}
+	var paths []string
+	for i := 0; i < 32; i++ {
+		paths = append(paths, writeTestSegment(t, key(i), []byte(key(i))))
+	}
+	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, nil)
+	done := make(chan error, 1)
+	var retired []string
+	go func() {
+		done <- uploader.UploadSegments(ctx, "vol-test", t.TempDir(), paths, func(path string) error {
+			retired = append(retired, path)
+			return nil
+		})
+	}()
+	for _, event := range []<-chan struct{}{firstPublishing, aheadPrepared} {
+		select {
+		case <-event:
+		case <-ctx.Done():
+			t.Fatal("preparation did not overlap publication of the earlier prefix")
+		}
+	}
+	close(releaseFirst)
+	require.Eventually(t, func() bool {
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		return len(remote.order) == 31
+	}, 5*time.Second, time.Millisecond, "a blocked final preparation must not hold back the ready prefix")
+	close(releaseTail)
+	require.NoError(t, <-done)
+	require.Equal(t, paths, retired)
+	for i, published := range remote.order {
+		require.Equal(t, key(i), published)
+	}
+}
+
+func TestUploadPipelineByteAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sizes []int64
+		begin bool
+	}{
+		{"over-budget", []int64{33 << 20, 31 << 20, 1}, false},
+		{"exact-budget", []int64{33 << 20, 31 << 20}, true},
+		{"oversized-oldest-alone", []int64{65 << 20}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			var mu sync.Mutex
+			begun := false
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				begun = true
+				mu.Unlock()
+				http.Error(w, "injected begin failure", http.StatusServiceUnavailable)
+			}
+			var paths []string
+			for i, size := range tc.sizes {
+				path := writeTestSegment(t, fmt.Sprintf("4000000000000001%08x", i+1), nil)
+				require.NoError(t, os.Truncate(path, size))
+				paths = append(paths, path)
+			}
+			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, nil)
+			err := u.UploadSegments(t.Context(), "vol-test", t.TempDir(), paths, func(string) error {
+				t.Error("unacknowledged files must not retire")
+				return nil
+			})
+			require.Error(t, err)
+			if !tc.begin {
+				require.ErrorContains(t, err, "byte budget")
+			}
+			mu.Lock()
+			require.Equal(t, tc.begin, begun)
+			mu.Unlock()
+		})
+	}
+}
+
+// cancelAfterList cancels the turn just after a successful head read.
+type cancelAfterList struct {
+	*cloudUpdatesClient
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterList) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {
+	updates, err := c.cloudUpdatesClient.List(ctx, volumeID, opts)
+	c.cancel()
+	return updates, err
+}
+
+func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
+	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head", "cancel-after-head", "active-start", "after-earlier-turn"} {
+		t.Run(mode, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+			var publications, completions, malformedReplies, headMismatches int // protected by remote.mu
+			var loseAck atomic.Bool
+			loseAck.Store(mode == "lost-ack")
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/updates") {
+					switch mode {
+					case "head-unreadable":
+						http.Error(w, "list unavailable", http.StatusInternalServerError)
+						return
+					case "behind-head":
+						// Another writer already published past every local segment.
+						json.NewEncoder(w).Encode(map[string]any{"updates": []map[string]any{{"update_id": "volup-later",
+							"kind": "lbd_log", "ordering_key": "4000000000000002ffffffff", "size": 1}}})
+						return
+					}
+				}
+				if strings.HasSuffix(r.URL.Path, "/updates/upload") {
+					rec := httptest.NewRecorder()
+					remote.ServeHTTP(rec, r)
+					var response map[string]any
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+					version := 1
+					if mode == "unknown-version" {
+						version = 2
+					}
+					// A small maximum makes every turn span several batches, so
+					// head tracking between batches is exercised.
+					response["prepared_prefix_publication"] = map[string]int{"version": version, "max_entries": 4}
+					if mode == "legacy" {
+						response["supports_prepare"] = false
+					}
+					json.NewEncoder(w).Encode(response)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/publish-prepared") {
+					var request struct {
+						Nonce   string             `json:"lease_nonce"`
+						Head    *map[string]string `json:"expected_head"`
+						Entries []struct {
+							ID   string `json:"update_id"`
+							Key  string `json:"ordering_key"`
+							MD5  string `json:"md5"`
+							CRC  string `json:"crc32c"`
+							Size int64  `json:"size"`
+						} `json:"entries"`
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+					require.Equal(t, "nonce", request.Nonce)
+					remote.mu.Lock()
+					defer remote.mu.Unlock()
+					publications++
+					if mode == "route-missing" {
+						http.NotFound(w, r)
+						return
+					}
+					switch mode {
+					case "unavailable":
+						http.Error(w, "busy", http.StatusServiceUnavailable)
+						return
+					case "conflict", "behind-head":
+						// The real cloud rejects a suffix that is not after
+						// its current head with a 409 head conflict.
+						http.Error(w, "conflict", http.StatusConflict)
+						return
+					}
+					// The real cloud rejects a batch whose expected_head is not
+					// its current head; count it so a stale head fails the test.
+					var want *map[string]string
+					if n := len(remote.order); n > 0 {
+						want = &map[string]string{"update_id": "volup-" + remote.order[n-1], "ordering_key": remote.order[n-1]}
+					}
+					if !reflect.DeepEqual(want, request.Head) {
+						headMismatches++
+						http.Error(w, "prepared prefix rejected: head moved", http.StatusConflict)
+						return
+					}
+					var ack []map[string]string
+					for _, entry := range request.Entries {
+						row := remote.rows[entry.Key]
+						require.NotNil(t, row)
+						require.True(t, row.prepared)
+						require.Equal(t, row.size, entry.Size)
+						require.Equal(t, row.md5, entry.MD5)
+						require.Equal(t, row.crc, entry.CRC)
+						require.Equal(t, "volup-"+entry.Key, entry.ID)
+						if !row.active {
+							row.active = true
+							remote.order = append(remote.order, entry.Key)
+						}
+						ack = append(ack, map[string]string{"update_id": entry.ID, "ordering_key": entry.Key})
+					}
+					if loseAck.Load() {
+						conn, _, err := w.(http.Hijacker).Hijack()
+						require.NoError(t, err)
+						conn.Close()
+						return
+					}
+					terminal := ack[len(ack)-1]
+					if mode == "malformed" {
+						// Name a different identity than requested, valid JSON
+						// at any batch length, so the client's ack check must
+						// reject a response it actually received.
+						ack[0] = map[string]string{"update_id": "volup-other", "ordering_key": ack[0]["ordering_key"]}
+						malformedReplies++
+					}
+					json.NewEncoder(w).Encode(map[string]any{"version": 1, "entries": ack, "terminal": terminal})
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/complete") {
+					remote.mu.Lock()
+					completions++
+					remote.mu.Unlock()
+				}
+				remote.ServeHTTP(w, r)
+			}
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			require.NoError(t, state.SetMountAndSave("mount", &MountState{EntityId: "mount", CloudVolumeId: "vol-test", LeaseNonce: "nonce", LeaseOwned: true}))
+			var paths, keys []string
+			for i := 0; i < 13; i++ {
+				key := fmt.Sprintf("4000000000000001%08x", i+1)
+				keys = append(keys, key)
+				paths = append(paths, writeTestSegment(t, key, []byte(key)))
+			}
+			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			if mode == "active-start" || mode == "after-earlier-turn" {
+				// Publish copies of the first two segments in an earlier turn.
+				// This turn then begins either with those already-active
+				// entries, or after them, so only the head lookup knows them.
+				earlier := t.TempDir()
+				var copies []string
+				for _, key := range keys[:2] {
+					copies = append(copies, writeTestSegment(t, key, []byte(key)))
+				}
+				require.NoError(t, u.UploadSegments(t.Context(), "vol-test", earlier, copies, os.Remove))
+				require.Equal(t, keys[:2], remote.order)
+				if mode == "after-earlier-turn" {
+					paths = paths[2:]
+				}
+			}
+			if mode == "cancel-after-head" {
+				// Shutdown can land after the head read succeeded. The turn
+				// must fail rather than report unpublished segments uploaded.
+				ctx, cancel := context.WithCancel(t.Context())
+				client := cancelAfterList{NewCloudUpdatesClient(slog.Default(), ts.URL, auth).(*cloudUpdatesClient), cancel}
+				u = NewCloudSegmentUploaderWithClient(slog.Default(), client, state)
+				require.ErrorIs(t, u.UploadSegments(ctx, "vol-test", dir, paths, os.Remove), context.Canceled)
+				require.Empty(t, remote.order)
+				require.True(t, state.HasPendingCloudUpload("vol-test"))
+				for _, path := range paths {
+					require.FileExists(t, path)
+				}
+				return
+			}
+			if mode == "behind-head" {
+				// A rejected batch must not be published below the head one
+				// segment at a time; stopping is the only safe outcome.
+				require.ErrorContains(t, u.UploadSegments(t.Context(), "vol-test", dir, paths, os.Remove), "not after cloud head")
+				require.Empty(t, remote.order)
+				require.True(t, state.HasPendingCloudUpload("vol-test"))
+				for _, path := range paths {
+					require.FileExists(t, path)
+				}
+				return
+			}
+			// Every batch failure, whether refused, rejected, malformed or
+			// lost after commit, must still publish the whole turn in order
+			// through single completion rather than stall the volume.
+			require.NoError(t, u.UploadSegments(t.Context(), "vol-test", dir, paths, os.Remove))
+			require.False(t, state.HasPendingCloudUpload("vol-test"))
+			require.Equal(t, keys, remote.order)
+			for _, path := range paths {
+				require.NoFileExists(t, path)
+			}
+			switch mode {
+			case "batch", "active-start", "after-earlier-turn":
+				require.GreaterOrEqual(t, publications, 3, "segments at 4 per batch span several batches")
+				if mode == "batch" {
+					require.Zero(t, completions)
+				}
+			case "legacy", "unknown-version", "head-unreadable":
+				require.Zero(t, publications)
+				require.Equal(t, len(paths), completions)
+			default:
+				require.Equal(t, 1, publications, "after one failure the turn stops using batches")
+				require.Positive(t, completions)
+			}
+			require.Zero(t, headMismatches, "every batch must name the cloud's current head")
+			if mode == "malformed" {
+				require.Equal(t, 1, malformedReplies, "the malformed acknowledgement was delivered, not dropped")
+			}
 		})
 	}
 }
