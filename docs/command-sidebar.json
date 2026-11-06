@@ -193,9 +193,7 @@
       "command/debug-saga-show",
       "command/debug-sandbox-pool",
       "command/debug-sandbox-pool-list",
-      "command/debug-sandbox-pool-set-desired",
-      "command/debug-test",
-      "command/debug-test-load"
+      "command/debug-sandbox-pool-set-desired"
     ]
   },
   {
