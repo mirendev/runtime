@@ -100,7 +100,9 @@ full-image selection and ordinary full-image retirement.
 
 Existing `POST /upload` includes `recovery_version: 1` for checkpoints. Its
 response must explicitly acknowledge the same version before runtime sends bytes
-or completion. Existing `POST /{update}/complete` carries the normal checksum,
+or completion. Runtime reads a 400, 404 or 501 on checkpoint begin as an old
+cloud and stops checkpointing for the rest of the process, so a v1 cloud must
+reject an invalid checkpoint claim with another status, such as 409 or 422. Existing `POST /{update}/complete` carries the normal checksum,
 size and lease fields plus a typed `checkpoint` (`CheckpointPublication`), binding
 volume, stream, update ID, payload size/SHA-256, inclusive boundary and image
 size/SHA-256. Completion must:
