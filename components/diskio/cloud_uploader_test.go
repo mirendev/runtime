@@ -16,6 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -323,6 +326,13 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			if key > r.URL.Query().Get("after") {
 				updates = append(updates, map[string]any{"update_id": "volup-" + key, "kind": "lbd_log", "ordering_key": key, "size": s.rows[key].size})
 			}
+		}
+		// Honor the newest-first head lookup the uploader makes.
+		if r.URL.Query().Get("order") == "desc" {
+			slices.Reverse(updates)
+		}
+		if limit, _ := strconv.Atoi(r.URL.Query().Get("limit")); limit > 0 && len(updates) > limit {
+			updates = updates[:limit]
 		}
 		json.NewEncoder(w).Encode(map[string]any{"updates": updates})
 		return
@@ -938,11 +948,11 @@ func (c cancelAfterList) List(ctx context.Context, volumeID string, opts ListOpt
 }
 
 func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
-	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head", "cancel-after-head"} {
+	for _, mode := range []string{"batch", "legacy", "unknown-version", "route-missing", "unavailable", "conflict", "malformed", "lost-ack", "head-unreadable", "behind-head", "cancel-after-head", "active-start", "after-earlier-turn"} {
 		t.Run(mode, func(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
 			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
-			var publications, completions, malformedReplies int // protected by remote.mu
+			var publications, completions, malformedReplies, headMismatches int // protected by remote.mu
 			var loseAck atomic.Bool
 			loseAck.Store(mode == "lost-ack")
 			h.handler = func(w http.ResponseWriter, r *http.Request) {
@@ -967,7 +977,9 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 					if mode == "unknown-version" {
 						version = 2
 					}
-					response["prepared_prefix_publication"] = map[string]int{"version": version, "max_entries": 32}
+					// A small maximum makes every turn span several batches, so
+					// head tracking between batches is exercised.
+					response["prepared_prefix_publication"] = map[string]int{"version": version, "max_entries": 4}
 					if mode == "legacy" {
 						response["supports_prepare"] = false
 					}
@@ -976,7 +988,8 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				}
 				if strings.HasSuffix(r.URL.Path, "/publish-prepared") {
 					var request struct {
-						Nonce   string `json:"lease_nonce"`
+						Nonce   string             `json:"lease_nonce"`
+						Head    *map[string]string `json:"expected_head"`
 						Entries []struct {
 							ID   string `json:"update_id"`
 							Key  string `json:"ordering_key"`
@@ -1002,6 +1015,17 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 						// The real cloud rejects a suffix that is not after
 						// its current head with a 409 head conflict.
 						http.Error(w, "conflict", http.StatusConflict)
+						return
+					}
+					// The real cloud rejects a batch whose expected_head is not
+					// its current head; count it so a stale head fails the test.
+					var want *map[string]string
+					if n := len(remote.order); n > 0 {
+						want = &map[string]string{"update_id": "volup-" + remote.order[n-1], "ordering_key": remote.order[n-1]}
+					}
+					if !reflect.DeepEqual(want, request.Head) {
+						headMismatches++
+						http.Error(w, "prepared prefix rejected: head moved", http.StatusConflict)
 						return
 					}
 					var ack []map[string]string
@@ -1054,6 +1078,21 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				paths = append(paths, writeTestSegment(t, key, []byte(key)))
 			}
 			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			if mode == "active-start" || mode == "after-earlier-turn" {
+				// Publish copies of the first two segments in an earlier turn.
+				// This turn then begins either with those already-active
+				// entries, or after them, so only the head lookup knows them.
+				earlier := t.TempDir()
+				var copies []string
+				for _, key := range keys[:2] {
+					copies = append(copies, writeTestSegment(t, key, []byte(key)))
+				}
+				require.NoError(t, u.UploadSegments(t.Context(), "vol-test", earlier, copies, os.Remove))
+				require.Equal(t, keys[:2], remote.order)
+				if mode == "after-earlier-turn" {
+					paths = paths[2:]
+				}
+			}
 			if mode == "cancel-after-head" {
 				// Shutdown can land after the head read succeeded. The turn
 				// must fail rather than report unpublished segments uploaded.
@@ -1089,9 +1128,11 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				require.NoFileExists(t, path)
 			}
 			switch mode {
-			case "batch":
-				require.Positive(t, publications)
-				require.Zero(t, completions)
+			case "batch", "active-start", "after-earlier-turn":
+				require.GreaterOrEqual(t, publications, 3, "segments at 4 per batch span several batches")
+				if mode == "batch" {
+					require.Zero(t, completions)
+				}
 			case "legacy", "unknown-version", "head-unreadable":
 				require.Zero(t, publications)
 				require.Equal(t, len(paths), completions)
@@ -1099,6 +1140,7 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 				require.Equal(t, 1, publications, "after one failure the turn stops using batches")
 				require.Positive(t, completions)
 			}
+			require.Zero(t, headMismatches, "every batch must name the cloud's current head")
 			if mode == "malformed" {
 				require.Equal(t, 1, malformedReplies, "the malformed acknowledgement was delivered, not dropped")
 			}
