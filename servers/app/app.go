@@ -976,8 +976,8 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 
 	// Restart restores fixed-mode counts, which would quietly undo a disable
 	// until the next launcher resync put it back.
-	if !appRec.Disabled.Empty() {
-		return fmt.Errorf("app %q is disabled; run `miren app enable` to start it", name)
+	if err := deploylifecycle.CheckEnabled(name, &appRec); err != nil {
+		return err
 	}
 
 	// Resolve the config to restore DesiredInstances for fixed-mode pools.

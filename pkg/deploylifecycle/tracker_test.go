@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -681,4 +682,25 @@ func TestActivateRefusesAppDisabledMidAttempt(t *testing.T) {
 	app, _, err := tr.store.AppByName(ctx, "web")
 	require.NoError(t, err)
 	require.Empty(t, app.ActiveVersion, "a frozen app must keep what it was running")
+}
+
+// The refusal is expected, so REST must not report it as a 500, but it can't
+// read as a lost race either: config mutations retry those, and FailIfUnsettled
+// treats them as already settled.
+func TestDisabledRefusalIsAConflictButNotALostRace(t *testing.T) {
+	err := CheckEnabled("web", &core_v1alpha.App{Disabled: core_v1alpha.Disabled{At: time.Now()}})
+
+	require.ErrorIs(t, err, ErrAppDisabled)
+	assert.NotErrorIs(t, err, cond.ErrConflict{})
+
+	var coded rpc.ErrorCode
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, "conflict", coded.ErrorCode())
+
+	var category rpc.ErrorCategory
+	require.ErrorAs(t, err, &category)
+	assert.Equal(t, "app-disabled", category.ErrorCategory())
+
+	remote := cond.RemoteError(category.ErrorCategory(), coded.ErrorCode(), err.Error())
+	assert.Equal(t, "conflict in app-disabled: app is disabled: run `miren app enable -a web` first", remote.Error())
 }

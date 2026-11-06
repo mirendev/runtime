@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -89,7 +90,7 @@ func (r *AppInfo) Enable(ctx context.Context, state *app_v1alpha.CrudEnable) err
 		return fmt.Errorf("app %q not found: %w", name, err)
 	}
 	if appRec.Disabled.Empty() {
-		return fmt.Errorf("app %q is not disabled", name)
+		return cond.Conflict("app", fmt.Sprintf("app %q is not disabled", name))
 	}
 
 	// The scheduler resumes from this timestamp rather than replaying pending

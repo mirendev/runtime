@@ -867,10 +867,6 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			d.reportLockBlocked(ctx, results, holder)
 			return nil
 		}
-		if errors.Is(err, deploylifecycle.ErrAppDisabled) {
-			results.SetError(err.Error())
-			return nil
-		}
 		d.Log.Error("Failed to create deployment", "error", err)
 		results.SetError("failed to create deployment")
 		return nil

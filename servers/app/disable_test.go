@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/apphealth"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -110,6 +111,7 @@ func TestAppDisableEnable(t *testing.T) {
 
 	_, err = client.Enable(ctx, appName)
 	require.ErrorContains(t, err, "is not disabled")
+	require.ErrorIs(t, err, cond.ErrConflict{})
 
 	disabled, err := client.Disable(ctx, appName, "moved to the new box")
 	require.NoError(t, err)

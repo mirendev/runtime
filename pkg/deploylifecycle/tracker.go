@@ -98,11 +98,37 @@ type BeginParams struct {
 // mode instead.
 var ErrAppDisabled = errors.New("app is disabled")
 
+// disabledError is what callers see for ErrAppDisabled. Its "conflict" code
+// answers 409 over REST, but it deliberately doesn't match cond.ErrConflict:
+// that means a lost race to config mutations, which would retry, and
+// FailIfUnsettled reads it as already settled.
+type disabledError struct {
+	name string
+}
+
+func (e *disabledError) Error() string {
+	return fmt.Sprintf("%s: run `miren app enable -a %s` first", ErrAppDisabled, e.name)
+}
+
+func (e *disabledError) Is(target error) bool {
+	return target == ErrAppDisabled
+}
+
+func (e *disabledError) ErrorCode() string {
+	return "conflict"
+}
+
+// ErrorCategory names the conflict for a client across the wire, which rebuilds
+// this as a cond.ErrConflict and prints its category.
+func (e *disabledError) ErrorCategory() string {
+	return "app-disabled"
+}
+
 // CheckEnabled returns ErrAppDisabled, with what to do about it, if app is
 // disabled.
 func CheckEnabled(name string, app *core_v1alpha.App) error {
 	if !app.Disabled.Empty() {
-		return fmt.Errorf("%w: run `miren app enable -a %s` first", ErrAppDisabled, name)
+		return &disabledError{name: name}
 	}
 	return nil
 }
