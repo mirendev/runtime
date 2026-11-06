@@ -440,6 +440,4 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug sandbox-pool`](./command/debug-sandbox-pool.md) | Sandbox pool diagnostics |
 | [`miren debug sandbox-pool list`](./command/debug-sandbox-pool-list.md) | List all sandbox pools |
 | [`miren debug sandbox-pool set-desired`](./command/debug-sandbox-pool-set-desired.md) | Set desired instance count for a sandbox pool |
-| [`miren debug test`](./command/debug-test.md) | Debug test commands |
-| [`miren debug test load`](./command/debug-test-load.md) | Loadtest a URL |
 

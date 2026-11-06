@@ -111,7 +111,6 @@
         "miren.dev/runtime/discovery",
         "miren.dev/runtime/guardrails",
         "miren.dev/runtime/controllers/certificate",
-        "miren.dev/runtime/pkg/hey/requester",
         "miren.dev/runtime/servers/deployment",
         "miren.dev/runtime/pkg/cloudauth",
         "miren.dev/runtime/components/ocireg",

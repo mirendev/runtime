@@ -1310,8 +1310,6 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug connection", Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection))
 	d.Dispatch("debug advertise", Infer("debug advertise", "Show which addresses the server would advertise and why", DebugAdvertise))
 	d.Dispatch("debug reindex", Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex))
-	d.Dispatch("debug test", Section("debug test", "Debug test commands", ""))
-	d.Dispatch("debug test load", Infer("debug test load", "Loadtest a URL", TestLoad))
 	d.Dispatch("debug ctr", Infer("debug ctr", "Run ctr with miren defaults", DebugCtr))
 	d.Dispatch("debug ctr nuke", Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke))
 	d.Dispatch("debug etcdctl", Infer("debug etcdctl", "Run etcdctl against Miren's embedded etcd", DebugEtcdctl,
