@@ -481,6 +481,11 @@ func (l *Locks) commitActivation(ctx context.Context, appName string, appID, ver
 		if app.ActiveVersion == versionID && app.ActiveDeployment == entity.Id(deploymentID) {
 			return nil
 		}
+		// Begin refuses a disabled app, but an attempt can outlive that check.
+		// Disable moves the app's revision, so this can't race the patch below.
+		if err := CheckEnabled(appName, app); err != nil {
+			return err
+		}
 		if expectedRevision != 0 && current.Revision != expectedRevision {
 			return cond.Conflict("app-revision", "app changed after deployment version was derived")
 		}

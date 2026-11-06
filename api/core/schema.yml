@@ -109,6 +109,29 @@ kinds:
       type: ref
       doc: Reference to the initial ConfigVersion entity created before the first deploy
 
+    disabled:
+      type: component
+      doc: >-
+        Operator-initiated disabled state, set by `miren app disable`. When
+        present, every service is held at zero instances, anything that would
+        change the active version is refused, and requests get a 503. Absent
+        means the app runs normally.
+      attrs:
+        at:
+          type: time
+          doc: When the app was disabled
+        reason:
+          type: string
+          doc: Why the app was disabled, shown by `miren app status`
+
+    schedules_resumed_at:
+      type: time
+      doc: >-
+        When `miren app enable` last resumed the app's schedules. The run
+        scheduler discards pending ticks up to this time, including ticks due
+        before the disable, so a pause it never observed between sweeps still
+        counts.
+
     workload_role:
       type: string
       doc: >-

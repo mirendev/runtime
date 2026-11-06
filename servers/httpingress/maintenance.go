@@ -54,11 +54,36 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 		}
 	}
 
+	s.serveHoldingPage(w, r, &app, holdingPage{Reason: maint.Reason, BackAt: maint.BackAt})
+}
+
+// serveDisabled answers for an app turned off with `miren app disable`. It's
+// the maintenance holding page worded as unavailable, without the operator's
+// disable reason: that's a note for app status, not copy written for visitors
+// the way a maintenance reason is.
+func (s *Server) serveDisabled(w http.ResponseWriter, r *http.Request, app *core_v1alpha.App) {
+	s.serveHoldingPage(w, r, app, holdingPage{Disabled: true})
+}
+
+// holdingPage is what a 503 holding page says. Maintenance and a disabled app
+// share the page, the JSON shape and no-store; only the wording differs.
+type holdingPage struct {
+	Reason   string
+	BackAt   string
+	Disabled bool
+}
+
+func (s *Server) serveHoldingPage(w http.ResponseWriter, r *http.Request, app *core_v1alpha.App, hold holdingPage) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Add("Vary", "Accept")
 
-	if secs, ok := retryAfterSeconds(maint.BackAt, time.Now()); ok {
+	if secs, ok := retryAfterSeconds(hold.BackAt, time.Now()); ok {
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
+	}
+
+	headline, code := "Down for maintenance", "maintenance"
+	if hold.Disabled {
+		headline, code = "Unavailable", "disabled"
 	}
 
 	accept := r.Header.Get("Accept")
@@ -66,9 +91,9 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	if representation == "text/plain" && accept != "" && accept != "*/*" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("Down for maintenance\n"))
-		if maint.Reason != "" {
-			_, _ = w.Write([]byte(maint.Reason + "\n"))
+		_, _ = w.Write([]byte(headline + "\n"))
+		if hold.Reason != "" {
+			_, _ = w.Write([]byte(hold.Reason + "\n"))
 		}
 		return
 	}
@@ -82,13 +107,13 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 			Reason string `json:"reason,omitempty"`
 			BackAt string `json:"back_at,omitempty"`
 		}{
-			Error:  "maintenance",
-			Reason: maint.Reason,
-			BackAt: maint.BackAt,
+			Error:  code,
+			Reason: hold.Reason,
+			BackAt: hold.BackAt,
 		}
 
 		if err := json.NewEncoder(w).Encode(body); err != nil {
-			s.Log.Debug("failed to write maintenance JSON response", "error", err)
+			s.Log.Debug("failed to write holding page JSON response", "error", err)
 		}
 		return
 	}
@@ -96,15 +121,17 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	data := errorPageData{
 		Status:      http.StatusServiceUnavailable,
 		Site:        visitorHost(r),
-		Reason:      maint.Reason,
-		BackAt:      formatBackAt(maint.BackAt),
+		Reason:      hold.Reason,
+		BackAt:      formatBackAt(hold.BackAt),
 		Maintenance: true,
+		Disabled:    hold.Disabled,
 	}
 
 	page := s.htmlErrorTemplate(r)
-	// Maintenance runs before target preparation. Resolve the active version
-	// only for the optional HTML page; failure never blocks the holding page.
-	if !entity.Empty(app.ActiveVersion) {
+	// A holding page is served before target preparation finishes. Resolve
+	// the active version only for the optional HTML page; failure never blocks
+	// the holding page.
+	if app != nil && !entity.Empty(app.ActiveVersion) {
 		if resolved, err := s.resolveVersionConfig(r.Context(), app.ActiveVersion, nil); err == nil {
 			target := &resolvedIngressTarget{version: resolved.version, config: &resolved.config}
 			page = s.htmlErrorTemplate(r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target)))

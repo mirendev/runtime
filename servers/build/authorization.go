@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -31,4 +33,20 @@ func (b *Builder) authorizeBuild(ctx context.Context, name string) error {
 	return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
 		Resource: "app", Action: "deploy", Instance: name, Owner: app.CreationSubject(ctx),
 	})
+}
+
+// refuseDisabled stops a build of a disabled app before any work happens. A
+// deploy to an app that's off has no coherent behavior: its deploy tasks would
+// boot sandboxes against whatever the app shares, and nothing could verify the
+// new version without booting the app. Maintenance mode is for apps that should
+// keep taking deploys.
+func (b *Builder) refuseDisabled(ctx context.Context, name string) error {
+	var rec core_v1alpha.App
+	if err := b.ec.Get(ctx, name, &rec); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return nil
+		}
+		return err
+	}
+	return deploylifecycle.CheckEnabled(name, &rec)
 }

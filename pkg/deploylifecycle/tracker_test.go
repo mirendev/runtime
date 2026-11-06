@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -626,4 +627,80 @@ func TestReconcileInterruptsAttemptAfterClaimIsStolen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, second, holder.DeploymentID,
 		"reconciling the old attempt must preserve its successor's lock")
+}
+
+func disableTestApp(t *testing.T, tr *Tracker, app string) {
+	t.Helper()
+	disabled := core_v1alpha.Disabled{At: time.Now(), Reason: "parked"}
+	_, err := tr.store.eac.Patch(context.Background(), []entity.Attr{
+		entity.Ref(entity.DBId, entity.Id("app/"+app)),
+		entity.Component(core_v1alpha.AppDisabledId, disabled.Encode()),
+	}, 0)
+	require.NoError(t, err)
+}
+
+func TestBeginRefusesDisabledApp(t *testing.T) {
+	ctx := context.Background()
+
+	for _, op := range []Operation{OperationBuild, OperationRedeploy, OperationRollback, OperationConfigChange} {
+		t.Run(string(op), func(t *testing.T) {
+			tr, _ := newTestTracker(t)
+			disableTestApp(t, tr, "web")
+
+			_, err := tr.Begin(ctx, BeginParams{AppName: "web", ClusterID: "c1", Operation: op})
+			require.ErrorIs(t, err, ErrAppDisabled)
+			require.ErrorContains(t, err, "miren app enable -a web")
+
+			// A refused attempt leaves the lock free for after the app is enabled.
+			holder, err := tr.locks.Blocking(ctx, "web")
+			require.NoError(t, err)
+			require.Nil(t, holder)
+		})
+	}
+}
+
+func TestBeginRefusesDisabledAppWhenCallerResolvedTheID(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	disableTestApp(t, tr, "web")
+
+	_, err := tr.Begin(context.Background(), BeginParams{
+		AppName: "web", AppID: entity.Id("app/web"), ClusterID: "c1",
+	})
+	require.ErrorIs(t, err, ErrAppDisabled)
+}
+
+func TestActivateRefusesAppDisabledMidAttempt(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	id := begin(t, tr, "web", "c1")
+	require.NoError(t, tr.SetAppVersion(ctx, id, "app_version/v1"))
+	disableTestApp(t, tr, "web")
+
+	require.ErrorIs(t, tr.Activate(ctx, id), ErrAppDisabled)
+
+	app, _, err := tr.store.AppByName(ctx, "web")
+	require.NoError(t, err)
+	require.Empty(t, app.ActiveVersion, "a frozen app must keep what it was running")
+}
+
+// The refusal is expected, so REST must not report it as a 500, but it can't
+// read as a lost race either: config mutations retry those, and FailIfUnsettled
+// treats them as already settled.
+func TestDisabledRefusalIsAConflictButNotALostRace(t *testing.T) {
+	err := CheckEnabled("web", &core_v1alpha.App{Disabled: core_v1alpha.Disabled{At: time.Now()}})
+
+	require.ErrorIs(t, err, ErrAppDisabled)
+	assert.NotErrorIs(t, err, cond.ErrConflict{})
+
+	var coded rpc.ErrorCode
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, "conflict", coded.ErrorCode())
+
+	var category rpc.ErrorCategory
+	require.ErrorAs(t, err, &category)
+	assert.Equal(t, "app-disabled", category.ErrorCategory())
+
+	remote := cond.RemoteError(category.ErrorCategory(), coded.ErrorCode(), err.Error())
+	assert.Equal(t, "conflict in app-disabled: app is disabled: run `miren app enable -a web` first", remote.Error())
 }

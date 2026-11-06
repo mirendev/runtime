@@ -44,6 +44,8 @@
       "command/app-admin-run",
       "command/app-attach",
       "command/app-delete",
+      "command/app-disable",
+      "command/app-enable",
       "command/app-history",
       "command/app-init",
       "command/app-list",

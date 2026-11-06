@@ -4,13 +4,16 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/pkg/deploylifecycle"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -218,4 +221,77 @@ func TestFailedSentinelNormalizedInHistory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "", got.Deployment().AppVersionId(),
 		"a legacy failed-<id> sentinel must render as empty")
+}
+
+// A disabled app is frozen. These paths skip the build, so the build's refusal
+// doesn't cover them.
+func TestDeployVersionRefusesDisabledApp(t *testing.T) {
+	cases := []struct {
+		name     string
+		rollback bool
+		label    string
+	}{
+		{name: "redeploy"},
+		{name: "rollback", rollback: true},
+		{name: "preview", label: "feat-x"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			client, inmem := newLockTestClient(t)
+
+			appID, err := inmem.Client.Create(ctx, "web", &core_v1alpha.App{})
+			require.NoError(t, err)
+			_, err = inmem.Client.Create(ctx, "web-v1", &core_v1alpha.AppVersion{Version: "web-v1"})
+			require.NoError(t, err)
+
+			disabled := core_v1alpha.Disabled{At: time.Now(), Reason: "parked"}
+			require.NoError(t, inmem.Client.Patch(ctx, appID, 0,
+				entity.Component(core_v1alpha.AppDisabledId, disabled.Encode())))
+
+			ttl := ""
+			if tc.label != "" {
+				ttl = "48h"
+			}
+			res, err := client.DeployVersion(ctx, "web", "prod", "web-v1", tc.rollback, nil, tc.label, ttl, "")
+			require.NoError(t, err)
+			require.True(t, res.HasError(), "a disabled app must refuse this")
+			assert.Contains(t, res.Error(), "miren app enable -a web")
+
+			lock, err := client.GetDeployLock(ctx, "web", "prod")
+			require.NoError(t, err)
+			assert.False(t, lock.Held(), "a refused deploy must not acquire the lock")
+
+			var app core_v1alpha.App
+			require.NoError(t, inmem.Client.Get(ctx, "web", &app))
+			assert.Empty(t, app.ActiveVersion, "a refused deploy must not change what the app runs")
+
+			if tc.label != "" {
+				preview, err := ephemeralx.LookupByLabel(ctx, inmem.EAC, appID, tc.label)
+				require.NoError(t, err)
+				assert.Nil(t, preview, "a refused preview must not leave a version behind")
+			}
+		})
+	}
+}
+
+func TestEnvChangesRefuseDisabledApp(t *testing.T) {
+	ctx := context.Background()
+	client, inmem := newLockTestClient(t)
+
+	appID, err := inmem.Client.Create(ctx, "web", &core_v1alpha.App{})
+	require.NoError(t, err)
+	disabled := core_v1alpha.Disabled{At: time.Now(), Reason: "parked"}
+	require.NoError(t, inmem.Client.Patch(ctx, appID, 0,
+		entity.Component(core_v1alpha.AppDisabledId, disabled.Encode())))
+
+	var v deployment_v1alpha.EnvironmentVariable
+	v.SetKey("FALLBACK_MODE")
+	v.SetValue("1")
+	_, err = client.SetEnvVars(ctx, "web", "prod", []*deployment_v1alpha.EnvironmentVariable{&v}, "")
+	require.ErrorContains(t, err, "app is disabled")
+
+	_, err = client.DeleteEnvVars(ctx, "web", "prod", []string{"FALLBACK_MODE"}, "")
+	require.ErrorContains(t, err, "app is disabled")
 }

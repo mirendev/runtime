@@ -719,6 +719,13 @@ func runDeployTasks(ctx context.Context, in runDeployTasksIn) (runDeployTasksOut
 		return runDeployTasksOut{}, fmt.Errorf("reading app: %w", err)
 	}
 
+	// The build started before this app was disabled. Its tasks must not run.
+	if !appRec.Disabled.Empty() {
+		err := fmt.Errorf("app %s was disabled during this deploy; deploy tasks did not run", in.AppName)
+		status.SendError("%s", err)
+		return runDeployTasksOut{}, err
+	}
+
 	err = b.runDeployTasks(ctx, in.AppName, appRec.ID, entity.Id(in.AppVersionID), &spec, status)
 	if err != nil {
 		status.SendError("%s", err)

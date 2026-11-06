@@ -82,6 +82,9 @@ var (
 			"updatedeploymentappversion", "canceldeployment",
 		),
 		"builder": set("buildfromtar", "prepareupload", "buildfromprepared"),
+		// A deployer can already ship code that refuses every connection, so
+		// turning the app off and back on grants no new power.
+		"crud": set("disable", "enable"),
 	}
 
 	// appConfig: mutate one app's configuration. These handlers gain their

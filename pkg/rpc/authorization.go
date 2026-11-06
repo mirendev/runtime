@@ -114,7 +114,7 @@ func AppAction(resource, action string) string {
 			return "read"
 		case "setconfiguration", "setenvvar", "setenvvars", "setinitialenvvars", "deleteenvvar":
 			return "configure"
-		case "restart":
+		case "restart", "disable", "enable":
 			return "deploy"
 		}
 	case "appstatus":
