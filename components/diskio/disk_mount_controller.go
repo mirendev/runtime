@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,9 @@ type DiskMountController struct {
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
 	cloudClient   CloudDiskClient
 	updatesClient CloudUpdatesClient
+	// checkpointsUnsupported remembers an old cloud's refusal for this
+	// process, so later detaches do not compress an image just to be refused.
+	checkpointsUnsupported atomic.Bool
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -362,7 +366,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		}
 		leaseNonce, acquisitionID = intent.LeaseNonce, intent.LeaseAcquisitionID
 
-		if rerr := c.replayMissingSegments(ctx, volState); rerr != nil {
+		if rerr := c.replayAccelerator(ctx, volState, leaseNonce); rerr != nil {
 			_ = c.cleanupMount(ctx, c.state.GetMount(entityId))
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to replay segments: %v", rerr))
 			return fmt.Errorf("failed to replay segments: %w", rerr)
@@ -790,6 +794,7 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
 		return err
 	}
+	c.checkpointDetachedMount(ctx, mountState)
 
 	// Release cloud lease if one was acquired
 	var leaseErr error
