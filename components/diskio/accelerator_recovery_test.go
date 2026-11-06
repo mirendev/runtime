@@ -2,6 +2,7 @@ package diskio
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -39,6 +40,8 @@ type recoveryCloud struct {
 	uploadFail      bool
 	downloadDelay   time.Duration
 	renewFail       bool
+	// stallRenewal holds the next renewal open until its request is cancelled.
+	stallRenewal    bool
 	renewals        int
 	sessionExpiry   time.Time
 	publications    []CheckpointPublication
@@ -143,6 +146,15 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.sessionExpiry = s.manifest.ExpiresAt
 		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: "vol", SessionID: "session", ExpiresAt: s.manifest.ExpiresAt})
 	case strings.Contains(r.URL.Path, "/restore-sessions/") && strings.HasSuffix(r.URL.Path, "/renew"):
+		if s.stallRenewal {
+			s.stallRenewal = false
+			s.mu.Unlock()
+			// The server notices a client hang-up only after the body is read.
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done()
+			s.mu.Lock()
+			return
+		}
 		// An expired session cannot be revived, so only timely renewal succeeds.
 		if s.renewFail || time.Now().After(s.sessionExpiry) {
 			w.WriteHeader(http.StatusGone)
@@ -846,4 +858,40 @@ func TestAcceleratorDetachDoesNotWaitForCheckpoint(t *testing.T) {
 	require.Equal(t, "400000000000000000000001", cloud.manifest.Checkpoint.ThroughLabel)
 	cloud.mu.Unlock()
 	require.FileExists(t, filepath.Join(v.DiskPath, checkpointIntentFile), "the staged checkpoint is kept for the next detach")
+}
+
+func TestAcceleratorInstallSurvivesInterruptedBackgroundRenewal(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	// The background renewal starts at a third of the expiry and is still in
+	// flight when the install, which renews on its own, commits.
+	cloud.manifest.ExpiresAt = time.Now().Add(600 * time.Millisecond)
+	cloud.stallRenewal = true
+	cloud.downloadDelay = 300 * time.Millisecond
+	v.DiskPath = streamDir(t)
+	require.NoError(t, c.recoverAccelerator(t.Context(), v, "nonce"))
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+	cloud.mu.Lock()
+	require.False(t, cloud.stallRenewal, "the background renewal must have been in flight")
+	cloud.mu.Unlock()
+}
+
+func TestAcceleratorCheckpointSkippedUnderShortDeadline(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	segment := buildSegmentData(t, 4096, "400000000000000000000002", nil)
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000000000002"}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000002"))
+	mount := &MountState{EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol", Mode: storage_v1alpha.VM_ACCELERATOR,
+		BackingPath: filepath.Join(v.DiskPath, "disk.img"), LeaseNonce: "nonce", LeaseOwned: true}
+	// Shutdown releases leases under a 30s context; checkpointing must not spend it.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	c.checkpointDetachedMount(ctx, mount)
+	require.Equal(t, 1, checkpointClaims(cloud))
+	c.checkpointDetachedMount(t.Context(), mount)
+	require.Equal(t, 2, checkpointClaims(cloud))
 }

@@ -227,14 +227,18 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 	err = c.installAcceleratorRecovery(ctx, client, v, m)
 	cancel()
 	wg.Wait()
-	if protectionErr != nil {
-		return protectionErr
+	// The install renews protection itself just before committing, so a
+	// completed install stands even if a background renewal was cut short
+	// by the cancel above.
+	if err != nil {
+		if protectionErr != nil {
+			return protectionErr
+		}
+		return err
 	}
-	if err == nil {
-		c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
-			"checkpoint", m.Checkpoint.UpdateID, "head", m.Head, "segments", len(m.Segments))
-	}
-	return err
+	c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
+		"checkpoint", m.Checkpoint.UpdateID, "head", m.Head, "segments", len(m.Segments))
+	return nil
 }
 
 // writeRecoveryFile persists a small transition record before any rename that

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
@@ -22,6 +23,10 @@ const checkpointPayloadFile = "accelerator-checkpoint.snapshot"
 // checkpointPublishedFile records the last boundary the cloud acknowledged, so
 // a detach with no new writes does not upload the same image again.
 const checkpointPublishedFile = "accelerator-checkpoint-published"
+
+// checkpointMinBudget is the least remaining deadline worth spending on a
+// full-image checkpoint before releasing the lease.
+const checkpointMinBudget = 5 * time.Minute
 
 type checkpointIntent struct {
 	Publication CheckpointPublication `json:"publication"`
@@ -41,6 +46,12 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	}
 	v := c.state.GetVolume(mount.VolumeId)
 	if v == nil || v.CloudVolumeId == "" {
+		return
+	}
+	// Compression and upload can outlast a bounded caller such as Shutdown,
+	// whose lease release must still fit in the same context.
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < checkpointMinBudget {
+		c.log.Info("skipping accelerator checkpoint under a short deadline", "volume_id", v.CloudVolumeId)
 		return
 	}
 	err := c.publishAcceleratorCheckpoint(ctx, v, mount.LeaseNonce)
