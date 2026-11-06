@@ -895,3 +895,23 @@ func TestAcceleratorCheckpointSkippedUnderShortDeadline(t *testing.T) {
 	c.checkpointDetachedMount(t.Context(), mount)
 	require.Equal(t, 2, checkpointClaims(cloud))
 }
+
+func TestAcceleratorFailedInstallReportsItsOwnError(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	id := cloud.addTail(t, nil)
+	cloud.mockCloudServer.mu.Lock()
+	cloud.segments[id].Data[0] ^= 0xff
+	cloud.mockCloudServer.mu.Unlock()
+	// A background renewal is in flight (from 300ms) when the corrupt
+	// segment fails the install (about 600ms), well before expiry.
+	cloud.manifest.ExpiresAt = time.Now().Add(900 * time.Millisecond)
+	cloud.stallRenewal = true
+	cloud.downloadDelay = 300 * time.Millisecond
+	v.DiskPath = streamDir(t)
+	err := c.recoverAccelerator(t.Context(), v, "nonce")
+	require.ErrorContains(t, err, "digest mismatch")
+	cloud.mu.Lock()
+	require.False(t, cloud.stallRenewal, "the background renewal must have been in flight")
+	cloud.mu.Unlock()
+}

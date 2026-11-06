@@ -216,6 +216,11 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			renewCtx, stop := context.WithDeadline(ctx, expiry)
 			next, err := client.RenewRecovery(renewCtx, v.CloudVolumeId, m.SessionID)
 			stop()
+			// The install finished (or failed) and cancelled us; its own
+			// result is the one to report, not this interrupted renewal.
+			if ctx.Err() != nil {
+				return
+			}
 			if err != nil || !next.After(time.Now()) || !time.Now().Before(expiry) {
 				protectionErr = fmt.Errorf("accelerator restore protection lost: %v", err)
 				cancel()
