@@ -2,12 +2,15 @@ package runner
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/caauth"
@@ -45,6 +48,36 @@ func TestRequireCoordinatorRejectsANonCertMethod(t *testing.T) {
 func TestRequireCoordinatorAcceptsTheCoordinator(t *testing.T) {
 	require.NoError(t, requireCoordinator(rpc.ContextWithIdentity(context.Background(),
 		&rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})))
+}
+
+type recordingExec struct{ calls int }
+
+func (r *recordingExec) Exec(context.Context, *exec_v1alpha.SandboxExecExec) error {
+	r.calls++
+	return nil
+}
+
+func (r *recordingExec) Attach(context.Context, *exec_v1alpha.SandboxExecAttach) error {
+	r.calls++
+	return nil
+}
+
+func TestRunnerExecAcceptsOnlyTheCoordinator(t *testing.T) {
+	coordinator := rpc.ContextWithIdentity(context.Background(),
+		&rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})
+	operator := rpc.ContextWithIdentity(context.Background(),
+		&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "miren-user"})
+
+	inner := &recordingExec{}
+	exec := coordinatorOnlyExec{inner}
+
+	require.ErrorContains(t, exec.Exec(operator, nil), "only the coordinator")
+	require.ErrorContains(t, exec.Attach(operator, nil), "only the coordinator")
+	require.Zero(t, inner.calls, "a refused call must not reach the exec server")
+
+	require.NoError(t, exec.Exec(coordinator, nil))
+	require.NoError(t, exec.Attach(coordinator, nil))
+	require.Equal(t, 2, inner.calls)
 }
 
 func TestRunnerListenerNeedsAClusterCA(t *testing.T) {
@@ -124,6 +157,10 @@ func TestNodeAdminAuthenticatesCoordinatorOverWire(t *testing.T) {
 				return nodeadmin_v1alpha.NewNodeAdminClient(cl).InstallDiskAccelerator(t.Context(), "foreign/image:tag", false)
 			}
 
+			_, err = call(coordinatorCert.CertPEM, coordinatorCert.KeyPEM)
+			require.Error(t, err, "certificates wait for the revocation list to arrive")
+			access.certRevocations.Load(nil)
+
 			// The foreign image stops authorized callers before any host work.
 			result, err := call(coordinatorCert.CertPEM, coordinatorCert.KeyPEM)
 			require.NoError(t, err)
@@ -135,6 +172,15 @@ func TestNodeAdminAuthenticatesCoordinatorOverWire(t *testing.T) {
 
 			_, err = call(forgedCert.CertPEM, forgedCert.KeyPEM)
 			require.Error(t, err)
+
+			// This listener applies the same revocations as the coordinator's.
+			block, _ := pem.Decode(coordinatorCert.CertPEM)
+			require.NotNil(t, block)
+			cert, err := x509.ParseCertificate(block.Bytes)
+			require.NoError(t, err)
+			access.certRevocations.Add(rpc.CertSerial(cert.SerialNumber))
+			_, err = call(coordinatorCert.CertPEM, coordinatorCert.KeyPEM)
+			require.ErrorContains(t, err, "revoked")
 
 			_, err = call(nil, nil)
 			require.Error(t, err)

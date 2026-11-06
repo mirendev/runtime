@@ -1,0 +1,54 @@
+types:
+  - type: Revocation
+    doc: A client certificate the cluster refuses
+    fields:
+      - name: serial
+        type: string
+        index: 0
+        doc: Certificate serial in canonical lowercase hex
+      - name: revoked_at
+        type: string
+        index: 1
+        doc: When the certificate was revoked, as RFC3339
+      - name: revoked_by
+        type: string
+        index: 2
+        doc: Subject of the operator who revoked it
+      - name: reason
+        type: string
+        index: 3
+        doc: Why it was revoked
+
+interfaces:
+  - name: CertRevocations
+    doc: |
+      Client certificate revocation for cluster operators. The server keeps no
+      record of the certificates it issues, so Revoke accepts any well-formed
+      serial and cannot tell a typo from a real certificate.
+    methods:
+      - name: Revoke
+        index: 0
+        doc: Revoke a client certificate by serial. Revoking one twice is harmless.
+        parameters:
+          - name: serial
+            type: string
+            doc: Certificate serial in hexadecimal
+          - name: reason
+            type: string
+            doc: Why the certificate is being revoked
+        results:
+          - name: revocation
+            type: Revocation
+            doc: The revocation now in force
+          - name: already_revoked
+            type: bool
+            doc: Whether the serial was revoked before this call
+
+      - name: List
+        index: 1
+        doc: List revoked client certificates, oldest first
+        results:
+          - name: revocations
+            type: list
+            element: Revocation
+            doc: Every revocation in force
