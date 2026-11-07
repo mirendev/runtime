@@ -56,6 +56,9 @@ type recoveryCloud struct {
 	// completion, after the payload is uploaded.
 	completeOnlyStreamCheck bool
 	begins                  int
+	// source is the history of another volume, "src", that a new volume is
+	// restored from.
+	source *RecoveryManifest
 }
 
 func newRecoveryCloud(t *testing.T) (*recoveryCloud, *DiskMountController, *VolumeState) {
@@ -161,15 +164,34 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(response)
 	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions"):
+		var request struct {
+			Until string `json:"until"`
+		}
+		require.NoError(s.t, json.NewDecoder(r.Body).Decode(&request))
 		s.selection = s.manifest
-		s.selection.Segments = append([]RecoverySegment(nil), s.manifest.Segments...)
-		if s.manifest.StreamID == "" || s.manifest.Status == "never_backed_up" {
+		if strings.Contains(r.URL.Path, "/volumes/src/") {
+			s.selection = *s.source
+		}
+		s.selection.Segments = append([]RecoverySegment(nil), s.selection.Segments...)
+		if request.Until != "" {
+			// Like the cloud: the newest base at or before until, then the
+			// tail through until. These tests keep one base.
+			kept := s.selection.Segments[:0]
+			for _, segment := range s.selection.Segments {
+				if segment.Label <= request.Until {
+					kept = append(kept, segment)
+					s.selection.Head = segment.Label
+				}
+			}
+			s.selection.Segments, s.selection.SegmentCount = kept, len(kept)
+		}
+		if s.selection.VolumeID == "vol" && (s.manifest.StreamID == "" || s.manifest.Status == "never_backed_up") {
 			// No acknowledged stream: cloud retains the whole log, or has
 			// nothing at all, and names no stream either way.
 			status := "never_backed_up"
 			s.mockCloudServer.mu.Lock()
 			for _, object := range s.segments {
-				if object.Complete && object.Kind == string(KindLBDLog) {
+				if object.Complete && object.Kind == string(KindLBDLog) && object.VolumeID == "vol" {
 					status = "legacy"
 				}
 			}
@@ -178,7 +200,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				ExpiresAt: time.Now().Add(time.Minute), Complete: true}
 		}
 		s.sessionExpiry = s.selection.ExpiresAt
-		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: "vol", SessionID: "session", ExpiresAt: s.selection.ExpiresAt})
+		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: s.selection.VolumeID, SessionID: "session", ExpiresAt: s.selection.ExpiresAt})
 	case strings.Contains(r.URL.Path, "/restore-sessions/") && strings.HasSuffix(r.URL.Path, "/renew"):
 		if s.stallRenewal {
 			s.stallRenewal = false
@@ -196,7 +218,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.renewals++
 		s.sessionExpiry = time.Now().Add(time.Minute)
-		json.NewEncoder(w).Encode(map[string]any{"version": 1, "volume_id": "vol", "session_id": "session", "expires_at": s.sessionExpiry})
+		json.NewEncoder(w).Encode(map[string]any{"version": 1, "volume_id": s.selection.VolumeID, "session_id": "session", "expires_at": s.sessionExpiry})
 	case strings.HasSuffix(r.URL.Path, "/updates") && r.URL.Query().Get("restore_session") != "":
 		start, err := strconv.Atoi(r.URL.Query().Get("cursor"))
 		if r.URL.Query().Get("cursor") == "" {
@@ -252,7 +274,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mockCloudServer.mu.Lock()
 		head := s.manifest.Head
 		for _, object := range s.segments {
-			if object.Complete && object.Kind == string(KindLBDLog) && object.Label > head {
+			if object.Complete && object.Kind == string(KindLBDLog) && object.VolumeID == "vol" && object.Label > head {
 				head = object.Label
 			}
 		}
@@ -1162,4 +1184,69 @@ func TestAcceleratorCheckpointRetryUnderNewLease(t *testing.T) {
 	cloud.mu.Lock()
 	require.Equal(t, label, cloud.manifest.Checkpoint.ThroughLabel)
 	cloud.mu.Unlock()
+}
+
+// A new volume restored from another volume's history as of a point in time:
+// a segment opened before the time can hold writes after it, which must not
+// appear, and the result must become the new volume's own first checkpoint so
+// its later history never replays onto an empty image.
+func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	entry := func(ts, seq, block uint64, fill byte) lbd.Entry {
+		data := bytes.Repeat([]byte{fill}, 4096)
+		return lbd.Entry{Op: "W", TimestampNS: ts, Sequence: seq, Block: block, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}
+	}
+	// Labels are 2^62 + Unix seconds plus nanoseconds, so label ...02 is 2ns.
+	cloud.addTail(t, []lbd.Entry{entry(2, 41, 3, 0x11), entry(3, 42, 4, 0x22)})
+	cloud.addTail(t, []lbd.Entry{entry(4, 43, 5, 0x33)})
+	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+
+	// That history now belongs to the source volume; "vol" is brand new.
+	cloud.mu.Lock()
+	source := cloud.manifest
+	source.VolumeID = "src"
+	cloud.source = &source
+	cloud.manifest = RecoveryManifest{Version: 1, VolumeID: "vol", Status: "never_backed_up", SessionID: "session",
+		ExpiresAt: time.Now().Add(time.Minute), Complete: true, DeviceSize: 1024 * 1024}
+	seeded := len(cloud.publications)
+	cloud.mockCloudServer.mu.Lock()
+	for _, object := range cloud.segments {
+		object.VolumeID = "src"
+	}
+	cloud.mockCloudServer.mu.Unlock()
+	cloud.mu.Unlock()
+
+	v.DiskPath = t.TempDir()
+	v.RestoreFrom, v.RestoreUntil = "src", "400000000000000000000002"
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+
+	// Seeded before anything attaches, not at a detach that may never come.
+	require.Len(t, cloud.publications, seeded+1)
+	seed := cloud.publications[seeded]
+	require.Equal(t, "vol", seed.VolumeID)
+	require.Empty(t, seed.Base.ThroughLabel, "the seed precedes all of the new volume's log")
+	require.NotEqual(t, source.StreamID, seed.StreamID)
+	digest := sha256.Sum256(expected)
+	require.Equal(t, hex.EncodeToString(digest[:]), seed.Base.ImageSHA256)
+
+	mount.DesiredState, mount.ActualState = storage_v1alpha.DM_WANT_UNMOUNTED, storage_v1alpha.DM_MOUNTED
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+
+	// Once seeded, the volume recovers from its own history, never the source
+	// again: a second rewind would propose another stream and be refused.
+	v.DiskPath = t.TempDir()
+	mountAndDetach(t, c, v)
+	actual, err = os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoError(t, err)
+	require.Equal(t, seed.StreamID, string(stream))
 }

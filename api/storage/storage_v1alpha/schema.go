@@ -633,6 +633,8 @@ const (
 	DiskVolumeMountIdId                 = entity.Id("dev.miren.storage/disk_volume.mount_id")
 	DiskVolumeNameId                    = entity.Id("dev.miren.storage/disk_volume.name")
 	DiskVolumeNodeIdId                  = entity.Id("dev.miren.storage/disk_volume.node_id")
+	DiskVolumeRestoreFromVolumeId       = entity.Id("dev.miren.storage/disk_volume.restore_from_volume")
+	DiskVolumeRestoreUntilId            = entity.Id("dev.miren.storage/disk_volume.restore_until")
 	DiskVolumeSizeGbId                  = entity.Id("dev.miren.storage/disk_volume.size_gb")
 	DiskVolumeVolumeIdId                = entity.Id("dev.miren.storage/disk_volume.volume_id")
 	DiskVolumeVolumeModeId              = entity.Id("dev.miren.storage/disk_volume.volume_mode")
@@ -641,20 +643,22 @@ const (
 )
 
 type DiskVolume struct {
-	ID            entity.Id              `json:"id"`
-	ActualState   DiskVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
-	CloudVolumeId string                 `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
-	DesiredState  DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
-	DiskId        entity.Id              `cbor:"disk_id" json:"disk_id"`
-	ErrorMessage  string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Filesystem    string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	ImagePath     string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
-	MountId       string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
-	Name          string                 `cbor:"name,omitempty" json:"name,omitempty"`
-	NodeId        entity.Id              `cbor:"node_id" json:"node_id"`
-	SizeGb        int64                  `cbor:"size_gb" json:"size_gb"`
-	VolumeId      string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
-	VolumeMode    DiskVolumeVolumeMode   `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
+	ID                entity.Id              `json:"id"`
+	ActualState       DiskVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
+	CloudVolumeId     string                 `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
+	DesiredState      DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
+	DiskId            entity.Id              `cbor:"disk_id" json:"disk_id"`
+	ErrorMessage      string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	Filesystem        string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	ImagePath         string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
+	MountId           string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
+	Name              string                 `cbor:"name,omitempty" json:"name,omitempty"`
+	NodeId            entity.Id              `cbor:"node_id" json:"node_id"`
+	RestoreFromVolume string                 `cbor:"restore_from_volume,omitempty" json:"restore_from_volume,omitempty"`
+	RestoreUntil      string                 `cbor:"restore_until,omitempty" json:"restore_until,omitempty"`
+	SizeGb            int64                  `cbor:"size_gb" json:"size_gb"`
+	VolumeId          string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
+	VolumeMode        DiskVolumeVolumeMode   `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
 }
 
 type DiskVolumeActualState string
@@ -723,6 +727,12 @@ func (o *DiskVolume) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DiskVolumeNodeIdId); ok && a.Value.Kind() == entity.KindId {
 		o.NodeId = a.Value.Id()
 	}
+	if a, ok := e.Get(DiskVolumeRestoreFromVolumeId); ok && a.Value.Kind() == entity.KindString {
+		o.RestoreFromVolume = a.Value.String()
+	}
+	if a, ok := e.Get(DiskVolumeRestoreUntilId); ok && a.Value.Kind() == entity.KindString {
+		o.RestoreUntil = a.Value.String()
+	}
 	if a, ok := e.Get(DiskVolumeSizeGbId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.SizeGb = a.Value.Int64()
 	}
@@ -781,6 +791,12 @@ func (o *DiskVolume) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.NodeId) {
 		attrs = append(attrs, entity.Ref(DiskVolumeNodeIdId, o.NodeId))
 	}
+	if !entity.Empty(o.RestoreFromVolume) {
+		attrs = append(attrs, entity.String(DiskVolumeRestoreFromVolumeId, o.RestoreFromVolume))
+	}
+	if !entity.Empty(o.RestoreUntil) {
+		attrs = append(attrs, entity.String(DiskVolumeRestoreUntilId, o.RestoreUntil))
+	}
 	attrs = append(attrs, entity.Int64(DiskVolumeSizeGbId, o.SizeGb))
 	if !entity.Empty(o.VolumeId) {
 		attrs = append(attrs, entity.String(DiskVolumeVolumeIdId, o.VolumeId))
@@ -823,6 +839,12 @@ func (o *DiskVolume) Empty() bool {
 	if !entity.Empty(o.NodeId) {
 		return false
 	}
+	if !entity.Empty(o.RestoreFromVolume) {
+		return false
+	}
+	if !entity.Empty(o.RestoreUntil) {
+		return false
+	}
 	if !entity.Empty(o.SizeGb) {
 		return false
 	}
@@ -854,6 +876,8 @@ func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("mount_id", "dev.miren.storage/disk_volume.mount_id", schema.Doc("Override for the mount point directory name (defaults to entity suffix if empty)"))
 	sb.String("name", "dev.miren.storage/disk_volume.name", schema.Doc("Human-readable name for the volume (from parent disk)"))
 	sb.Ref("node_id", "dev.miren.storage/disk_volume.node_id", schema.Doc("Node where this volume should be provisioned"), schema.Required, schema.Indexed)
+	sb.String("restore_from_volume", "dev.miren.storage/disk_volume.restore_from_volume", schema.Doc("miren.cloud accelerator volume whose history seeds this new volume on its first mount (empty for none)"))
+	sb.String("restore_until", "dev.miren.storage/disk_volume.restore_until", schema.Doc("lbd log label (TAI64N) of the point in time restore_from_volume is restored to; empty restores its latest state"))
 	sb.Int64("size_gb", "dev.miren.storage/disk_volume.size_gb", schema.Doc("Volume size in gigabytes"), schema.Required)
 	sb.String("volume_id", "dev.miren.storage/disk_volume.volume_id", schema.Doc("Volume identifier (generated during creation)"), schema.Indexed)
 	sb.Singleton("dev.miren.storage/volume_mode.vm_universal")
@@ -876,5 +900,5 @@ func init() {
 		(&DiskMount{}).InitSchema(sb)
 		(&DiskVolume{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacXۮ\xad&\x14\xfd\x90\xde\xefwON\xd2\xff!(Se)\xe0\x06\xb4\xee\xbe\xf6\xa5iҟ\xe8^9M\x7f\xb0\xcf\r7e\xb9X\xc8>\xe9\x8b\x11\x1cc8\x81\xe9\x98ȕp\xcc\xe0\x89\xc0R1*\x81WJ\v\x89;\x80\x81r\xa2\xae\xeb\awOޘ'\x15\xa1jxg\xb9\xcb=\xc2<t\x02\xff\xb6D0L\xf9\xfd\vږ\xc2H\xd4\xef/5%\xebgi\x8d\xaa\x91\x805\x10T?\xdbW]\xa2\xb6~\x9e\xa0\xa6䚣\xb7t\x04\xf5\xac40G\x8fچN\x80\xcfl0\x17\xb4\xe0q\x06\xf5Ҭ\xadZ?\xbdWۉ\xd5\xda*\x02\xab\xfe9\xf5\xd2\bf Pk٪\xf5\xf3,\xd0b\xec(\x12SmG\xc1\x04\x01\x1b?\xb1w\xc9\xc8\xff\xa23\xa7\vH\x85\xc7T\xfc\x86Xm\x88\x017\r\x8c \xb1\x162\x15\x9dEG\x98\x97\\t6\xb0\xfdb\xa2k\x95\x96\x94w\x96\x96\x90\xb74\tLh@\x82\x8fni\x87\xb8\xc3\x0e\xb1\x16b\xb4\x12\x1f?\x90P\xf4W@]m\xe9]h\x18jC\xb9\xb63\xfa\xd1#\xa6\xc6zV\x96\xd8\xfa\xfb\xe4\xac\xfe\r \xa5\x90\xa9\b\x1c\xad\xb2\xcf{\xac5nzH&\xa2\a\x06HO`\x04My\x97\xc1\x06HO\xe0T7@\xa8\x04\xf3\xc4\b'\xa6܃7\xcc0I\xb1PE\x05\a\xb2~\xf9\x10\x1f\xa1\xc6\xed\u07bc\xe2\xabsJH\x80D6\xda5X\xc483@\x94\xd8e\xa0{3ʠ\xce\xe4+\x15\xbc[\xde\xe2q\xea\xf18Iʰ|F\xc6[\x88\x91I\xcd\xcc\xe6Oh\x04\xac\xc0\xb9\xd4\xfaa:\x0e\x87y\x95Y}\x9bS\xaap\xf34S\t\x04a\xed\x12;\xee\xb0Y\xa6)\x03+\xf4E^h\x9a\xc2\xec\xb4\xfe\xde{\x9e%'V-\"\xdb[\xcf\xeeB#\xa6\x7f\x9f\xa5۴F\f\x94\u009d\xfb\xb0\xd9mW\xb4H\xd7\xccg\xee嘘\xb9\x9b\rp\xb7\x86N\x1b\xc1&\xc1\x81\xeb\xfdίսZuT+\\\xb1\xdf\xec`?Iy\xdc\xccu%&M\x05wNЅ\xc6\xd1\xc2\x12\x99\xe3\xd8\x13ֽs={w\xe4%R\xd3\xf1$`\xb2;\x1fݛ\x9b\xefe\x13\xdf\xcdaA\x12pA\xb6\x0f\xac\v\x8d8\t\xbe\xc9\xd2\x15\xe6\xa4\x16kP\xb8D\xed\xb8\xf8泸\xd4j\xafP\x8b\x99'\xcd\xde;\x8b}\u07b6\x98\x8e\x90\\Q\x0fs\x80n\x02N\x8cS%\xec'8\x95C\xf4\x12l\xa49\x93\r\x90\xec\xb2\\\xf6Q\xe7]\xc9.߉+\xbd&\xc7\xff\xb0\xcb\xf0]N\xa9\u008d\x9e\xf1\x88\xccx\xdc\xf7<\xde\xf4$\x97䟞0\xe4\n`\"Qb~\x15\x80\x17\xc2|\xe8ɀ\x8e\x1c\x0f5\xac\xb0^\x05,\x0f\x1d\bC[\xe1M\xd8ّ\x16\xb0\x86\xb7\x15\xd6\x02^\xc0\x0e!`\x13f\x01/`\xc7\xed݆\xf8Ci\xa0\x9e\xe9\xde^\xc8\xdc\xc0\x8c04\xf3-\xda\x1fϩ;\xfa\x9a+\x0f.\x9b\b([\xd1\xf6tb\xb7]\xe9=\xaa \f\xfd\x82\xb9\xdeR\xe4M\xe2-\xb1Nu <\x85\xb6\x8f\x16\xc8\xfa\xb6Tb\xa3dkx\x18\xdfB\x1b@\x9b\xbf\x0fq\xc7\xd1\xe6O\xa6j3\x85\xe0\xa3춫\xa4(;\xa9\xd7\x14\xe5\x82A\x8eBL\xc8\r\xcc\r2\xee8J=\xaa\x14N\xca^\xf7\xe9\xbaD\xed\xa3У\x8a\xe5\x84N+\xd6\xd7Y\xfaya-\x10\xc9nLkZR\x04\xacPjO\xb4\x17\x01'\xeb\xab\xc0\x83\xff\x14\x0f*,\x03\x7ff?\\'\xf5^u\xe0]O\x96\xd2:\xe0\x81\x86af\xff\xb9\x84a\x81\x17\xb2 \xfb\xdfSR96\xa8a\x15W\x8ee\xaf\x1c\v\xb2'\tEN\xbec\x87\xf0\xe2B^\xc0ڤ\xfb)\xbf0\xcd(f\x82nsO\x1c;\x8f\xbb\xeeDI\x885\xdfӦ)Y\x10\xae\x15p\x9d\xdcTܺk\x80ڕ\x90`Y\xa9\x1c<\xb2<\xd6NM\xe2o\xf2f\x18g\xff2'\xd3\xf0\xbf\xf9\xa6\xd7;9Uz\x85\x12e\xb8\x8b\xca\xcc%j\x1f\x95\x1ey\x96Wr\x8e\xeb'\xa9\xdfZ\x85\xa71A\xe5\xe4,\xe7d\x9dN\xcd\xfb\x84\x9f=\xcf\xc9V!/Pr\xa4\x90\xdd+\xdf\xeal\xe7nCܑ\xfef\xc6\xc5l\xa1\xc2\t\\\xe2\x03\x88$\xaa\x18\xcb\x17\x86\xe2\xe3\xb8\xc4V\xed@\x8d\xd0\xd9R4DC:\x02\a\xd5\v\xa9\x91;\xe3u\a)\xb9\x83\xde\xe2_\x1b\v\x89k\xe0\xf9\x8fP\x1cfI\xc9\xfc\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xffTh\xcf;\xb1\x16\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacX͒\xe3&\x10~\x90\xcd\xcf\xcedw\x93\xccl45Uy\x1f\n\x9b\x96\x8c%\xc0#\xb0\xa2\xc95\x97T.y\x87\x1dצ\xf2\x829\xa7h@\xc22F\xcc\xd6^\\\xfc|\xdfGC7\xdd\x16'&\xa9\x80'\x06C%x\x0f\xb2\xd2F\xf5\xb4\x01h\xb9d\xfa4\xbe\xb9\x98y\xb03\x15\xe3\xba\xfd\x8c\xdc\xe1\x12a'\x9d\xc0\x7f5S\x82ry\xb9@]s\xe8\x98\xfe\xf3e\xc3\xd9x\x93֨\xb6=P\x03\x8cl\x9eq\xa9}\xd47\xcf\a\xd8pv\xca\xd1kށ~\xd6\x06\x84\xa3G}Kg \x8f\xa2\xb5?d\xa0\xdd\x11\xf4\xcbv\xac\xf5\xf8\xf6Rm&Vc\xad\x19\x8c\xe6\xd7\xf1&\v\xb3\x10ؘ\xbe\xd6\xe3m\x16\x88\x18\xdcE\xe2\xa8\xf1\x10\x84b\x80\xf63l%-\xffď\x92\x0f\xd0kڥ\xec\xb7\xc4jB\xb4t\xbb\x85\x0ezjT\x9f\xb2\x0e\xd1\x11\xe6%g\x1d\x1a6\xffX\xebjmz.\x1b\xa4%\xe4\x91փP\x06\x88\x92\x9dsm\x1b\x0fX\x11\xb6Q\xaaC\x89\xef\xaeHh\xfe;\x90f\x83\xf4&t,u˥\xc1\x13\xfd\xf6\x1a\xd3Ps\xd4H\xac};y\xaa\xff\x00\xf4\xbd\xeaS\x168Z\x85\xf3;j\f\xdd\xee \x19\x88\x1e\x18 ;\x06\x1d\x18.\x9b\f6@v\fVu\x03\x84\xf7`g\xac\xf0\xedU\xf0\x84i\x0f\xbd\x1a\xb8\xe6J\x02\x1b\xdf]\xc5G\xa8nj\xdb%ޯSB\x00$\xa2\x11}0\xa8\xee(\x80p\x86n\xe0s7\x8a\xa0\xc6F4W\xb2\x19\x1eiw\xd8\xd1\xee\xd0sA\xfbgbs\v\xb32\xe3M&?\x91\x0e\xa8\x06\x97\xa5\xc6o\xd2v8̫\x92\xd5O9\xa5\x8an\x9f\x8e\xbc\aF\xa8\xc1\x85\xdbx\xc0\xee\x8d\x19.\x00\x85~\xc8\v\x1d\x0e\xe1tj\xdf\xf69\x0f\xc9\xef\xb2d\xd4\xf1\xec&tb\xfa]\x96\x8eaM\x04hM\x1b\x97{\xc4\xf9P\xe4\xa4S\xe6\x9a{9\xa1\x8eҝ\x06\xb8\xa6\xa5\xf3\xad\x12\a%A\x9a\xb9\xe5}u\xa9\x16\xf9\xb3B\x89B\x8f\xfd\x81g\xf5\xfd\xc5\xf4\x03\x8aT\xea`\xb8\x92.\x134\xa1\x13\xed\rى\xc8q\xec\x035;\xa42l-y\x89\xd0t\xbc\x1e(\x9b3\x1f\x9f\xbbS\xde\xcb\x06\xbe;Â \x90\x8aM\x17\xac\t\x9d8\b~\xcc\xd25\x95l\xa3Ơ\xb0\x8f\xfa^\xe4\xb4\x1eť\xa9\xf6\x04\x1bu\x94\xc9d\xef3\v\xce\xd75\xe5\x1d$=\xeaa\x0e\xd0\x1c@2\x9b\xa9\xde^\x05zĮ\a\f\xab\\\x92\r\x90\xac[\xf6\xf3\xae\xf3Y\tݷ\x92\x95^\x13\xe3\x7f\xa1\x1b~\xce)Utk\x8e\xb4#\xf6\x8c\xdc}\xee\xceF\x92.\xf9w\xc7\x04\xc1k\x9f\n\x94\x98_\x05\xe0\x9e\t\xb7 $\rZr<Բ\x82\xbf\nX\x1e\xda2A\xa6\xc2{\xb7N\vX\xcbcP\xce\v\xd86\x18l\xcd,\xe0\x05l7\xadm\x89\xf7\xeb\xc4\t\xdcM\xab\x172'\xb0`\x82\x1c\xe5d\xed\xc7u\xea\x8c>\xe5\xca\x03\x82*\x06\x1a+\xda\x1cN\xe2|(\x19O\x9f\x14\x13\xe47*\xcd\x14\"\x0f\x89Ub\x9djAx\n}o-\xb0\xf1\xb1Tb\xa2dkx\xd8\xdf\xc0\xb7@\xa6\xfc\xde\xc6\x03\xcb4\xbfrTSR\byT\xccyb\x99\x8f\xf3R\xaf)\xca\x05\x9b\xec\x94:\x10\xb71\xb7\xc9x`)u\xadR8\xcb\xf0w>\xae}\xd4_\n]\xabXHY\xafX\x1f\xb2\xf4\xf5\xc2Z \x92\xfdc\xba\xe1%E\x0073\xde技[\xc5W\x81+\xdf)\x1eTX\x06\xfe\xce^\\'\xf5Eu\xe0\xf3\x8e\r\xa5u\xc0\x03-\xc3:㹄\x81\xc0=\x1b\b~\xf7\x94T\x8e\tjYŕc\x82\xb6l \xf8\x92P\x94\xc9gl\x1b\x16.\xe4\x05,\x06\xdd/y\xc7l;ud\xe4<\xf6\xd4r0\xbaL\xe8\xec\xfb\xbc\xe6\x17\xa6i\xce\x06B7\x1a\xa4I\x9d\xe9\x99B5A\xd1\x13=\xd8\xe6xW\xc0\xf2X<\x9a\xf7+\xdbX\xfb\x96Y9\x86\xaf\x967\xbd\xdeʫ\xd2+\x94\xb8\xa0MTf\xf6Q\x7f\xa9\xf4!\xaf\x84\x19'\x1c\xd2n\xea-Un\xf3*+o9+~ZMޏy\xbe{\x9d\x00R\xf7J\xf814F\xa7&\x96\xb6ݗiۿ8\x1d\xaa\x8a\xf3\xa1W\xee5\xfb\xf6\x94\xad\x98^ [e\xbc!\xd9\xff\xf5\xe7:\xd3\x1ba\x1b\x0f\xa4\xefw7\b2\xbd\x05\xa6.k$Q\xc5X9\b\x12?\x1d~\\\xa5F\xe8l\xd9l\xa3--\x81\xadީ\xde L\x9fܣϛLe-\xfe\fCH\\\xaf\xd7?\xdab3K\xca\xfb\xff\x00\x00\x00\xff\xff\x03\x00e\xacT\x11]\x17\x00\x00"))
 }

@@ -264,6 +264,8 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
 			Filesystem:    volume.Filesystem,
 			Mode:          volume.VolumeMode,
+			RestoreFrom:   volume.RestoreFromVolume,
+			RestoreUntil:  volume.RestoreUntil,
 		}
 		c.state.SetVolume(entityId, volState)
 		if err := c.state.Save(); err != nil {
@@ -385,6 +387,8 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		SizeBytes:     sizeBytes,
 		Filesystem:    volume.Filesystem,
 		Mode:          volume.VolumeMode,
+		RestoreFrom:   volume.RestoreFromVolume,
+		RestoreUntil:  volume.RestoreUntil,
 	}
 	c.state.SetVolume(entityId, volState)
 

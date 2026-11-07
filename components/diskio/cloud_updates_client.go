@@ -766,15 +766,19 @@ type restoreSession struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce string) (*RecoveryManifest, error) {
+// BeginRecovery selects and protects a base plus tail. A non-empty until
+// selects the history as of that log label instead of the committed head.
+func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, until string) (*RecoveryManifest, error) {
 	endpoint, err := c.updatesPath(volume, "restore-sessions")
 	if err != nil {
 		return nil, err
 	}
+	body := map[string]any{"version": AcceleratorRecoveryVersion, "lease_nonce": nonce, "kind": KindLBDCheckpoint}
+	if until != "" {
+		body["until"] = until
+	}
 	var session restoreSession
-	if err := c.doJSON(ctx, "POST", endpoint, map[string]any{
-		"version": AcceleratorRecoveryVersion, "lease_nonce": nonce, "kind": KindLBDCheckpoint,
-	}, &session); err != nil {
+	if err := c.doJSON(ctx, "POST", endpoint, body, &session); err != nil {
 		if unsupportedStatus(err, false) {
 			return nil, fmt.Errorf("%w: %v", errRecoveryUnsupported, err)
 		}

@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -109,14 +111,58 @@ func DebugDiskAdopt(ctx *Context, opts struct {
 	Filesystem  string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
 	Node        string `long:"node" description:"Node the volume lives on" default:"node/miren"`
 }) error {
-	client, err := ctx.RPCClient("entities")
+	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
+		v.CloudVolumeId = opts.CloudVolume
+	})
 	if err != nil {
 		return err
+	}
+	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
+	return nil
+}
+
+// DebugDiskRewind creates a new disk holding another accelerator cloud
+// volume's contents as of a point in time. Its first mount rebuilds the image
+// from that volume's checkpoint and log up to the time, crash-consistently,
+// and publishes it as the new disk's own first checkpoint. The source volume
+// is only read.
+func DebugDiskRewind(ctx *Context, opts struct {
+	ConfigCentric
+	Name       string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
+	From       string `long:"from" description:"miren.cloud accelerator volume ID to restore from (vol-...)" required:"true"`
+	At         string `long:"at" description:"Point in time to restore to (RFC 3339); omit for the latest mirrored state"`
+	Size       int    `short:"s" long:"size" description:"Size of the source volume in GB" required:"true"`
+	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
+	Node       string `long:"node" description:"Node to create the disk on" default:"node/miren"`
+}) error {
+	var until string
+	if opts.At != "" {
+		at, err := time.Parse(time.RFC3339Nano, opts.At)
+		if err != nil {
+			return fmt.Errorf("--at: %w", err)
+		}
+		until = diskio.LabelAt(at)
+	}
+	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
+		v.RestoreFromVolume = opts.From
+		v.RestoreUntil = until
+	})
+	if err != nil {
+		return err
+	}
+	ctx.Info("Disk %s (%s) will be restored from %s as of %s (label %s)", opts.Name, diskId, opts.From, opts.At, until)
+	return nil
+}
+
+func createAcceleratorDisk(ctx *Context, name string, sizeGB int, filesystem, node string, bind func(*storage_v1alpha.DiskVolume)) (entity.Id, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return "", err
 	}
 	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
 
 	var fs storage_v1alpha.DiskFilesystem
-	switch opts.Filesystem {
+	switch filesystem {
 	case "ext4":
 		fs = storage_v1alpha.EXT4
 	case "xfs":
@@ -124,39 +170,38 @@ func DebugDiskAdopt(ctx *Context, opts struct {
 	case "btrfs":
 		fs = storage_v1alpha.BTRFS
 	default:
-		return fmt.Errorf("unsupported filesystem type: %s", opts.Filesystem)
+		return "", fmt.Errorf("unsupported filesystem type: %s", filesystem)
 	}
 	// RESTORING keeps the disk controller from provisioning a fresh volume
 	// until the bound one exists; the volume must reference an existing disk.
 	diskId, err := ec.Create(ctx, idgen.GenNS("disk"), &storage_v1alpha.Disk{
-		Name:       opts.Name,
-		SizeGb:     int64(opts.Size),
+		Name:       name,
+		SizeGb:     int64(sizeGB),
 		Filesystem: fs,
 		Status:     storage_v1alpha.RESTORING,
 		Mode:       storage_v1alpha.ACCELERATOR,
 	})
 	if err != nil {
-		return fmt.Errorf("creating disk: %w", err)
+		return "", fmt.Errorf("creating disk: %w", err)
 	}
 	volume := &storage_v1alpha.DiskVolume{
-		Name:          opts.Name,
-		DiskId:        diskId,
-		SizeGb:        int64(opts.Size),
-		Filesystem:    opts.Filesystem,
-		VolumeMode:    storage_v1alpha.VM_ACCELERATOR,
-		DesiredState:  storage_v1alpha.DV_PRESENT,
-		ActualState:   storage_v1alpha.DV_PENDING,
-		NodeId:        entity.Id(opts.Node),
-		CloudVolumeId: opts.CloudVolume,
+		Name:         name,
+		DiskId:       diskId,
+		SizeGb:       int64(sizeGB),
+		Filesystem:   filesystem,
+		VolumeMode:   storage_v1alpha.VM_ACCELERATOR,
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_PENDING,
+		NodeId:       entity.Id(node),
 	}
+	bind(volume)
 	if _, err := ec.Create(ctx, idgen.GenNS("disk-vol"), volume); err != nil {
-		return fmt.Errorf("creating disk_volume: %w", err)
+		return "", fmt.Errorf("creating disk_volume: %w", err)
 	}
 	if err := ec.UpdateAttrs(ctx, diskId, entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisioningId)); err != nil {
-		return fmt.Errorf("releasing disk to provisioning: %w", err)
+		return "", fmt.Errorf("releasing disk to provisioning: %w", err)
 	}
-	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
-	return nil
+	return diskId, nil
 }
 
 // DebugDiskList lists all disk entities

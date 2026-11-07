@@ -60,6 +60,12 @@ type VolumeState struct {
 	// Mode is the disk I/O mode (universal or accelerator)
 	Mode storage_v1alpha.DiskVolumeVolumeMode `json:"mode,omitempty"`
 
+	// RestoreFrom and RestoreUntil name another accelerator cloud volume and
+	// the label to rebuild it to. They seed a new volume that has no history
+	// of its own; once it publishes its own checkpoint they are inert.
+	RestoreFrom  string `json:"restore_from,omitempty"`
+	RestoreUntil string `json:"restore_until,omitempty"`
+
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
 

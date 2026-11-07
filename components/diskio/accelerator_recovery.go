@@ -72,7 +72,7 @@ type CheckpointPublication struct {
 // protectedUpdatesClient extends update listing with renewable restore
 // protection. There is no fallback to an unprotected listing.
 type protectedUpdatesClient interface {
-	BeginRecovery(context.Context, string, string) (*RecoveryManifest, error)
+	BeginRecovery(ctx context.Context, volume, nonce, until string) (*RecoveryManifest, error)
 	RenewRecovery(context.Context, string, string) (time.Time, error)
 }
 
@@ -161,6 +161,9 @@ func (c *DiskMountController) replayAccelerator(ctx context.Context, v *VolumeSt
 			switch {
 			case err == nil:
 				return nil
+			case errors.Is(err, errNeverBackedUp) && v.RestoreFrom != "":
+				// A new volume seeded from another one's history.
+				return c.rewindAccelerator(ctx, v, nonce)
 			case errors.Is(err, errNeverBackedUp):
 				// Still list the log below: a claim of no history must
 				// never be what skips a replay.
@@ -246,7 +249,7 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 	}
 	if len(names) > 0 {
 		// Check stream identity before publishing a crash tail.
-		manifest, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce)
+		manifest, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce, "")
 		if err != nil {
 			return err
 		}
@@ -258,7 +261,7 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			return err
 		}
 	}
-	m, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce)
+	m, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce, "")
 	if err != nil {
 		if errors.Is(err, errRecoveryUnsupported) {
 			return err
@@ -284,6 +287,23 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 		return fmt.Errorf("accelerator stream incarnation changed; explicit recovery required")
 	}
 
+	if err := c.protectRecovery(ctx, client, m, func(ctx context.Context) error {
+		return c.installAcceleratorRecovery(ctx, client, v, m)
+	}); err != nil {
+		return err
+	}
+	base := "(empty image)"
+	if m.Checkpoint != nil {
+		base = m.Checkpoint.UpdateID
+	}
+	c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
+		"checkpoint", base, "head", m.Head, "segments", len(m.Segments))
+	return nil
+}
+
+// protectRecovery runs install while renewing m's restore session, so the
+// selected base and tail cannot be collected underneath large downloads.
+func (c *DiskMountController) protectRecovery(ctx context.Context, client protectedUpdatesClient, m *RecoveryManifest, install func(context.Context) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Renew while large downloads/decompression are running, not just between
@@ -307,7 +327,7 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			case <-timer.C:
 			}
 			renewCtx, stop := context.WithDeadline(ctx, expiry)
-			next, err := client.RenewRecovery(renewCtx, v.CloudVolumeId, m.SessionID)
+			next, err := client.RenewRecovery(renewCtx, m.VolumeID, m.SessionID)
 			stop()
 			// The install finished (or failed) and cancelled us; its own
 			// result is the one to report, not this interrupted renewal.
@@ -322,24 +342,74 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			expiry = next
 		}
 	})
-	err = c.installAcceleratorRecovery(ctx, client, v, m)
+	err := install(ctx)
 	cancel()
 	wg.Wait()
 	// The install renews protection itself just before committing, so a
 	// completed install stands even if a background renewal was cut short
 	// by the cancel above.
-	if err != nil {
-		if protectionErr != nil {
-			return protectionErr
+	if err != nil && protectionErr != nil {
+		return protectionErr
+	}
+	return err
+}
+
+// rewindAccelerator seeds a new volume with another volume's history as of
+// RestoreUntil (its committed head when empty), then publishes the result as
+// this volume's first checkpoint before anything attaches. Without that seed
+// the new volume's cloud history would be a log with no base, which a later
+// recovery would replay onto an empty image. Until the seed is acknowledged
+// the volume is still fresh, so an interrupted rewind starts over.
+func (c *DiskMountController) rewindAccelerator(ctx context.Context, v *VolumeState, nonce string) error {
+	client, ok := c.updatesClient.(protectedUpdatesClient)
+	if !ok {
+		return errRecoveryUnsupported
+	}
+	var cutoff uint64
+	if v.RestoreUntil != "" {
+		ns, err := labelUnixNano(v.RestoreUntil)
+		if err != nil {
+			return err
 		}
+		cutoff = ns
+	}
+	m, err := client.BeginRecovery(ctx, v.RestoreFrom, "", v.RestoreUntil)
+	switch {
+	case errors.Is(err, errRecoveryUnsupported):
+		return fmt.Errorf("restore source %s has no accelerator checkpoint stream to rebuild from", v.RestoreFrom)
+	case errors.Is(err, errNeverBackedUp):
+		return fmt.Errorf("restore source %s has no history", v.RestoreFrom)
+	case err != nil:
+		return fmt.Errorf("select history of restore source %s: %w", v.RestoreFrom, err)
+	}
+	if m.DeviceSize != uint64(v.SizeBytes) {
+		return fmt.Errorf("restore source %s is %d bytes, volume is %d", v.RestoreFrom, m.DeviceSize, v.SizeBytes)
+	}
+	err = c.protectRecovery(ctx, client, m, func(ctx context.Context) error {
+		image, err := c.buildRecoveryImage(ctx, v, m, cutoff)
+		if image != "" {
+			defer os.Remove(image)
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(image, filepath.Join(v.DiskPath, "disk.img")); err != nil {
+			return err
+		}
+		return syncRecoveryDir(v.DiskPath)
+	})
+	if err != nil {
 		return err
 	}
 	base := "(empty image)"
 	if m.Checkpoint != nil {
 		base = m.Checkpoint.UpdateID
 	}
-	c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
-		"checkpoint", base, "head", m.Head, "segments", len(m.Segments))
+	c.log.Info("rebuilt accelerator volume from another volume's history", "volume_id", v.CloudVolumeId,
+		"source", v.RestoreFrom, "until", v.RestoreUntil, "checkpoint", base, "head", m.Head, "segments", len(m.Segments))
+	if err := c.publishAcceleratorCheckpoint(ctx, v, nonce); err != nil {
+		return fmt.Errorf("publish the restored image as the volume's first checkpoint: %w", err)
+	}
 	return nil
 }
 
@@ -404,7 +474,7 @@ func (c *DiskMountController) downloadRecoveryObject(ctx context.Context, volume
 }
 
 func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, client protectedUpdatesClient, v *VolumeState, m *RecoveryManifest) error {
-	image, err := c.buildRecoveryImage(ctx, v, m)
+	image, err := c.buildRecoveryImage(ctx, v, m, 0)
 	if image != "" {
 		defer os.Remove(image)
 	}
@@ -414,9 +484,11 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	return c.commitRecoveryImage(ctx, client, v, m, image)
 }
 
-// buildRecoveryImage writes the selected base plus its full tail into a new
+// buildRecoveryImage writes the selected base plus its tail into a new
 // temporary image in v.DiskPath and returns its path. Nothing is installed.
-func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeState, m *RecoveryManifest) (string, error) {
+// The objects come from m's volume, which need not be v's. A non-zero cutoff
+// stops applying the log at the first entry written after it (unix ns).
+func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeState, m *RecoveryManifest, cutoff uint64) (string, error) {
 	image, err := os.CreateTemp(v.DiskPath, ".accelerator-image-*")
 	if err != nil {
 		return "", err
@@ -426,7 +498,7 @@ func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeS
 		if err := image.Truncate(int64(m.DeviceSize)); err != nil {
 			return image.Name(), err
 		}
-	} else if err := c.restoreRecoveryBase(ctx, v, m.Checkpoint, image); err != nil {
+	} else if err := c.restoreRecoveryBase(ctx, m.VolumeID, v.DiskPath, m.Checkpoint, image); err != nil {
 		return image.Name(), err
 	}
 	if err := image.Close(); err != nil {
@@ -438,11 +510,11 @@ func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeS
 	}
 	defer img.Close()
 	for _, s := range m.Segments {
-		f, err := c.downloadRecoveryObject(ctx, v.CloudVolumeId, v.DiskPath, s.RecoveryObject)
+		f, err := c.downloadRecoveryObject(ctx, m.VolumeID, v.DiskPath, s.RecoveryObject)
 		if err != nil {
 			return image.Name(), err
 		}
-		err = replayRecoverySegment(f, img, s, m.DeviceSize)
+		err = replayRecoverySegment(f, img, s, m.DeviceSize, cutoff)
 		f.Close()
 		os.Remove(f.Name())
 		if err != nil {
@@ -455,8 +527,8 @@ func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeS
 	return image.Name(), img.Close()
 }
 
-func (c *DiskMountController) restoreRecoveryBase(ctx context.Context, v *VolumeState, b *RecoveryCheckpoint, image *os.File) error {
-	base, err := c.downloadRecoveryObject(ctx, v.CloudVolumeId, v.DiskPath, b.RecoveryObject)
+func (c *DiskMountController) restoreRecoveryBase(ctx context.Context, volume, dir string, b *RecoveryCheckpoint, image *os.File) error {
+	base, err := c.downloadRecoveryObject(ctx, volume, dir, b.RecoveryObject)
 	if err != nil {
 		return err
 	}
@@ -509,7 +581,10 @@ func (c *DiskMountController) commitRecoveryImage(ctx context.Context, client pr
 	return os.Remove(filepath.Join(v.DiskPath, acceleratorInstallFile))
 }
 
-func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64) error {
+// A non-zero cutoff applies only the entries before the first one written
+// after it. A log prefix is a crash state of the device, so the result is the
+// disk as if it had crashed at the cutoff. The rest is still validated.
+func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64, cutoff uint64) error {
 	rd, err := lbd.NewReader(src)
 	if err != nil {
 		return err
@@ -519,6 +594,7 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 		return fmt.Errorf("invalid LBD header identity")
 	}
 	var count uint64
+	past := false
 	for {
 		e, err := rd.Next()
 		if err == io.EOF {
@@ -532,6 +608,10 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 			(!e.IsWrite() && !e.IsTrim()) || (e.IsWrite() && (len(e.Data) != int(e.Length) || !e.ValidateCRC())) {
 			return fmt.Errorf("invalid LBD entry sequence, bounds, operation or CRC")
 		}
+		count++
+		if past = past || (cutoff != 0 && e.TimestampNS > cutoff); past {
+			continue
+		}
 		offset := int64(e.Block * uint64(h.BlockSize))
 		if e.IsWrite() {
 			if _, err := img.WriteAt(e.Data, offset); err != nil {
@@ -540,7 +620,6 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 		} else if err := img.Trim(offset, int(e.Length)); err != nil {
 			return err
 		}
-		count++
 	}
 	if count != s.EntryCount {
 		return fmt.Errorf("LBD entry count mismatch: got %d, expected %d", count, s.EntryCount)
