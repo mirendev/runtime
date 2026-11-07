@@ -1381,3 +1381,31 @@ func TestDiskMountControllerTeardownReleasesAfterVolumeGone(t *testing.T) {
 	assert.Equal(t, "vol-cloud-acc", cloud.releaseLeaseCalls[0].volumeID)
 	assert.Equal(t, "nonce-acc", cloud.releaseLeaseCalls[0].nonce)
 }
+
+// A record whose lease a newer mount on this node replaced must not drain the
+// volume's log directory: those segments are the live mount's, its own nonce
+// is dead, and a failed drain would gate the live mount's detach.
+func TestDiskMountSupersededRecordLeavesLiveMountAlone(t *testing.T) {
+	dir := t.TempDir()
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	diskPath := filepath.Join(dir, "vol")
+	require.NoError(t, os.MkdirAll(filepath.Join(diskPath, "logs"), 0755))
+	live := filepath.Join(diskPath, "logs", "disk.400000006aef6b8d38084663.log")
+	require.NoError(t, os.WriteFile(live, []byte("open segment"), 0644))
+	state.SetVolume("volume", &VolumeState{EntityId: "volume", CloudVolumeId: "cloud", DiskPath: diskPath, Mode: storage_v1alpha.VM_ACCELERATOR})
+	state.SetMount("old", &MountState{EntityId: "old", VolumeId: "volume", CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "dead", LeaseOwned: true})
+	state.SetMount("new", &MountState{EntityId: "new", VolumeId: "volume", CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "live", LeaseOwned: true, DevicePath: "/dev/lbd0", Mounted: true})
+	require.NoError(t, state.SetPendingCloudUpload("cloud", "uploading"))
+	cloud := &mockCloudDiskClient{}
+	controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, newMockDiskMountOps())
+	controller.SetCloudClient(cloud)
+
+	old := &storage_v1alpha.DiskMount{ID: "old", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED, ActualState: storage_v1alpha.DM_ERROR}
+	require.NoError(t, controller.Reconcile(t.Context(), old, nil))
+	require.Nil(t, state.GetMount("old"))
+	require.NotNil(t, state.GetMount("new"))
+	require.Empty(t, cloud.releaseLeaseCalls, "a dead nonce has nothing to release")
+	require.FileExists(t, live)
+	require.Equal(t, "live", state.LeaseNonceForCloudVolume("cloud"), "uploads authorize with the live lease again")
+}

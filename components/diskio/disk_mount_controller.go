@@ -651,6 +651,13 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return nil
 	}
 	cloudID := c.cloudVolumeIdFor(mountState)
+	if c.state.MountSuperseded(entityId) {
+		// Draining here would upload the live mount's segments under a dead
+		// nonce, and its failure would gate the live mount's own detach.
+		c.log.Info("dropping mount record superseded by a newer lease on this volume",
+			"entity_id", entityId, "volume_id", cloudID)
+		return c.state.DeleteMountAndSave(entityId)
+	}
 	if c.state.HasPendingCloudUpload(cloudID) {
 		// A failed final drain must be resumable even if the volume entity
 		// vanished and the periodic watcher no longer enumerates it.

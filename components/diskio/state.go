@@ -499,6 +499,35 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	return v.DevicePath, v.MountPath, nil
 }
 
+// MountSuperseded reports whether another mount of the same cloud volume
+// holds a device under a different lease. The cloud keeps one lease per
+// volume, so the other lease ended this record's: it owns neither the lease
+// nor the volume's log directory, which now holds the live mount's segments.
+func (s *State) MountSuperseded(entityId string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cloudID := func(m *MountState) string {
+		if m.CloudVolumeId != "" {
+			return m.CloudVolumeId
+		}
+		if v := s.Volumes[m.VolumeId]; v != nil {
+			return v.CloudVolumeId
+		}
+		return ""
+	}
+	self := s.Mounts[entityId]
+	if self == nil || self.Mounted || self.DevicePath != "" || cloudID(self) == "" {
+		return false
+	}
+	for id, m := range s.Mounts {
+		if id != entityId && (m.Mounted || m.DevicePath != "") && m.LeaseNonce != "" &&
+			m.LeaseNonce != self.LeaseNonce && cloudID(m) == cloudID(self) {
+			return true
+		}
+	}
+	return false
+}
+
 // LeaseNonceForCloudVolume returns the lease nonce held by a mount whose
 // backing volume has the given cloud volume id, or "" if none is held.
 //
