@@ -127,6 +127,9 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		var response beginUploadResponseJSON
 		for id, previous := range s.claims {
 			if previous.OrderingKey == claim.OrderingKey {
+				// Like MIR-2185, the existing-key check ignores the nonce, so a
+				// retry under a later lease resumes the same update.
+				previous.LeaseNonce = claim.LeaseNonce
 				if previous != claim {
 					w.WriteHeader(http.StatusUnprocessableEntity)
 					return
@@ -1060,4 +1063,28 @@ func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
 	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
 	require.NoError(t, err)
 	require.Equal(t, staged.Publication.StreamID, string(stream))
+}
+
+func TestAcceleratorCheckpointRetryUnderNewLease(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	const label = "400000000000000000000002"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(3, bytes.Repeat([]byte{0x61}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	require.NoError(t, writeLogHorizon(v.DiskPath, label))
+	cloud.mu.Lock()
+	cloud.uploadFail = true
+	cloud.mu.Unlock()
+	require.Error(t, c.publishAcceleratorCheckpoint(t.Context(), v, "first-lease"))
+	cloud.mu.Lock()
+	cloud.uploadFail = false
+	cloud.mu.Unlock()
+	// The next detach holds a different lease and re-begins the same key.
+	require.NoError(t, c.publishAcceleratorCheckpoint(t.Context(), v, "second-lease"))
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile), "a cross-lease retry is not a stream conflict")
+	require.Equal(t, 2, checkpointClaims(cloud), "the retry resumes the same update")
+	cloud.mu.Lock()
+	require.Equal(t, label, cloud.manifest.Checkpoint.ThroughLabel)
+	cloud.mu.Unlock()
 }
