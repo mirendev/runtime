@@ -755,6 +755,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			if mountedDevice == mountState.DevicePath {
 				return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", mountedDevice)
 			}
+			// The device vanished (a crash or reboot) rather than detaching
+			// cleanly, which always clears the path: the image proves nothing.
+			mountState.CheckpointDue = false
 			mountState.DevicePath = ""
 			mountState.Mounted = false
 			mountState.MountPath = ""
@@ -789,10 +792,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 
 	// Detach device based on mode (use persisted mode from MountState)
 	var detachErr error
-	// Only an LBD detach in this call proves the image holds every logged
-	// write. A device that vanished (for example after a reboot) proves
-	// nothing about the local image, so it must not become a checkpoint.
-	lbdDetached := false
+	// Only a clean LBD detach proves the image holds every logged write. A
+	// device that vanished (for example after a reboot) proves nothing about
+	// the local image, so it must not become a checkpoint.
 	if mountState.DevicePath != "" {
 		mounted, err := c.ops.IsDeviceMounted(mountState.DevicePath)
 		if err != nil {
@@ -804,7 +806,7 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				c.log.Warn("failed to detach lbd device", "error", err)
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
 			} else {
-				lbdDetached = true
+				mountState.CheckpointDue = true
 			}
 		} else {
 			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
@@ -830,8 +832,12 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
 		return err
 	}
-	if lbdDetached {
+	if mountState.CheckpointDue {
 		c.checkpointDetachedMount(ctx, mountState)
+		mountState.CheckpointDue = false
+		if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+			return err
+		}
 	}
 
 	// Release cloud lease if one was acquired

@@ -1081,6 +1081,11 @@ func TestAcceleratorNoCheckpointWithoutLbdDetach(t *testing.T) {
 	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
 	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	// Even a clean-detach flag left from an earlier attachment proves nothing
+	// about an image whose device was still recorded when it vanished.
+	ms := c.state.GetMount("mount")
+	ms.CheckpointDue = true
+	require.NoError(t, c.state.SetMountAndSave("mount", ms))
 	// A reboot: the kernel device is gone, so cleanup never calls LbdDetach.
 	ops := c.ops.(*mockDiskMountOps)
 	clear(ops.lbdBackings)
@@ -1399,4 +1404,33 @@ func TestAcceleratorAttachedCheckpointStartsStreamForNewVolume(t *testing.T) {
 	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
+}
+
+// The server's shutdown detaches every lbd device cleanly, which proves the
+// image as well as a detach during cleanup does. The checkpoint that cleanup
+// would have published must still come once the mount is released after the
+// restart, even though the device is gone by then.
+func TestAcceleratorCheckpointAfterShutdownDetach(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x7E}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(diskMountBasePath, "hill-shutdown"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	ops := c.ops.(*mockDiskMountOps)
+	NewDiskVolumeController(slog.Default(), v.DiskPath, compute.NewNodeId("fresh-node"), c.state, nil, ops).Shutdown()
+	require.NotEmpty(t, ops.detachedLbds, "shutdown detached the device")
+
+	restarted, err := LoadState(filepath.Dir(c.state.path))
+	require.NoError(t, err)
+	c.state = restarted
+	mount.DesiredState, mount.ActualState = storage_v1alpha.DM_WANT_UNMOUNTED, storage_v1alpha.DM_ERROR
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	require.Nil(t, c.state.GetMount("mount"))
+	require.Equal(t, 1, checkpointClaims(cloud), "a clean shutdown detach is a checkpoint")
 }

@@ -114,6 +114,11 @@ type MountState struct {
 	// Mounted indicates if the volume is currently mounted
 	Mounted bool `json:"mounted"`
 
+	// CheckpointDue records that this mount's lbd device detached cleanly, so
+	// its image holds every logged write. It outlives a failed drain or a
+	// restart, which a device that merely vanished could not prove.
+	CheckpointDue bool `json:"checkpoint_due,omitempty"`
+
 	// ReadOnly indicates if the mount is read-only
 	ReadOnly bool `json:"read_only"`
 
@@ -497,6 +502,22 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	mount.MountPath = v.MountPath
 	s.Mounts[mount.EntityId] = mount
 	return v.DevicePath, v.MountPath, nil
+}
+
+// MarkCheckpointDue records a clean detach of device, such as the server's
+// shutdown detaching every device. Only the accelerator mount whose image
+// backed the device is marked, and its device path is cleared in the same
+// save: a record that still names a device never carries a clean detach.
+func (s *State) MarkCheckpointDue(device, backing string) error {
+	s.mu.Lock()
+	for _, m := range s.Mounts {
+		if device != "" && backing != "" && m.DevicePath == device && m.BackingPath == backing &&
+			m.Mode == storage_v1alpha.VM_ACCELERATOR {
+			m.CheckpointDue, m.DevicePath, m.Mounted = true, "", false
+		}
+	}
+	s.mu.Unlock()
+	return s.Save()
 }
 
 // MountSuperseded reports whether another mount of the same cloud volume

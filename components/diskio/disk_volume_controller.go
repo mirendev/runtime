@@ -951,8 +951,13 @@ func (c *DiskVolumeController) Shutdown() {
 		}
 
 		if strings.HasPrefix(am.Device, "/dev/lbd") {
+			backing, berr := c.mntOps.DeviceBacking(am.Device)
 			if err := c.mntOps.LbdDetach(context.Background(), am.Device); err != nil {
 				c.log.Warn("failed to detach lbd on shutdown", "device", am.Device, "error", err)
+			} else if berr != nil {
+				c.log.Warn("detached lbd of unknown backing; no checkpoint from it", "device", am.Device, "error", berr)
+			} else if err := c.state.MarkCheckpointDue(am.Device, backing); err != nil {
+				c.log.Warn("failed to record clean lbd detach", "device", am.Device, "error", err)
 			}
 		} else if strings.HasPrefix(am.Device, "/dev/loop") {
 			if err := c.mntOps.LoopDetach(am.Device); err != nil {
