@@ -142,6 +142,13 @@ can't be replayed against yours.
 The `service` claim isn't part of `sub`, so trust configurations already
 written against the subject keep working.
 
+`service` keeps an app's services apart only as long as none of them can act
+as another. Under the default `app-readonly` role they can't. Roles that can
+deploy the app or exec into its sandboxes (`app-deployer`, `app-debugger`,
+`app-admin`, and every cluster role except `cluster-readonly`) can run code as any service in the app, so
+don't rely on `service` to separate services of an app that has one of those.
+See [In-Cluster API Access](./in-cluster-api.md) for the roles.
+
 The `sub` (subject) encodes the workload's identity as a path-like string, omitting any empty parts:
 
 ```
