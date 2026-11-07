@@ -705,6 +705,38 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return nil
 	}
 	cloudID := c.cloudVolumeIdFor(mountState)
+	// A record that outlived a crash or reboot may name a device that is gone
+	// or now backs another volume's image. Drop that claim before the upload
+	// gate below: the claim alone would block both this cleanup and the
+	// uploader parking a fenced tail, each waiting on the other.
+	if mountState.Mode == storage_v1alpha.VM_ACCELERATOR && mountState.DevicePath != "" && mountState.BackingPath != "" {
+		backing, err := c.ops.DeviceBacking(mountState.DevicePath)
+		if err != nil {
+			return fmt.Errorf("inspect device before cleanup: %w", err)
+		}
+		expected := mountState.BackingPath
+		if backing != expected {
+			if canonical, err := filepath.EvalSymlinks(expected); err == nil {
+				if canonical, err := filepath.Abs(canonical); err == nil {
+					expected = canonical
+				}
+			}
+		}
+		if backing != expected {
+			if mountState.MountPath != "" {
+				if dev, err := c.ops.MountDevice(mountState.MountPath); err != nil {
+					return fmt.Errorf("inspect mount before cleanup: %w", err)
+				} else if dev == mountState.DevicePath {
+					return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", dev)
+				}
+			}
+			c.log.Info("dropping stale lbd device claim", "entity_id", entityId, "device", mountState.DevicePath)
+			mountState.DevicePath, mountState.Mounted, mountState.MountPath, mountState.CheckpointDue = "", false, "", false
+			if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+				return err
+			}
+		}
+	}
 	if c.state.MountSuperseded(entityId) {
 		// Draining here would upload the live mount's segments under a dead
 		// nonce, and its failure would gate the live mount's own detach.
