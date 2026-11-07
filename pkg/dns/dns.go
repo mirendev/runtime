@@ -836,31 +836,31 @@ func NewTestServer() *Server {
 	}
 }
 
-// LookupSandboxByIP returns the sandbox entity ID and app name for a given IP.
-// On a cache miss, falls back to an entity store lookup to handle watcher lag.
-func (s *Server) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+// LookupSandboxByIP returns the sandbox entity ID, app name, and service for a
+// given IP. On a cache miss, falls back to an entity store lookup to handle
+// watcher lag.
+func (s *Server) LookupSandboxByIP(ip string) (sandboxID, appName, service string, ok bool) {
 	s.mu.RLock()
 	sandboxID, ok = s.ipToSandbox[ip]
 	if ok {
-		appName = s.ipToApp[ip]
+		appName, service = s.ipToApp[ip], s.ipToService[ip]
 		s.mu.RUnlock()
-		return sandboxID, appName, true
+		return sandboxID, appName, service, true
 	}
 	s.mu.RUnlock()
 
 	// Cache miss — try resolving via entity store (populates the maps on success)
 	if !s.resolveUnknownIP(ip) {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sandboxID, ok = s.ipToSandbox[ip]
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
-	appName = s.ipToApp[ip]
-	return sandboxID, appName, true
+	return sandboxID, s.ipToApp[ip], s.ipToService[ip], true
 }
 
 // AddSandboxMapping registers a sandbox's IP address for DNS resolution.
@@ -1025,18 +1025,18 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 // It is deliberately non-destructive: if the store cannot answer, the existing mapping is
 // left in place rather than dropped, so a transient entity-store failure during a request
 // that was already going to be rejected cannot also blank out an address's DNS.
-func (s *Server) RefreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+func (s *Server) RefreshSandboxByIP(ip string) (sandboxID, appName, service string, ok bool) {
 	if !s.resolveIPFromStore(ip) {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sandboxID, ok = s.ipToSandbox[ip]
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
-	return sandboxID, s.ipToApp[ip], true
+	return sandboxID, s.ipToApp[ip], s.ipToService[ip], true
 }
 
 // resolveIPFromStore scans the sandbox index for the address's rightful owner and

@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 func sandboxIDs(entries []tokenEntry) []string {
@@ -23,8 +25,8 @@ func TestTokenRefresher_RegisterUnregister(t *testing.T) {
 
 	assert.Empty(t, tr.snapshot())
 
-	tr.register("sandbox/one", "/tmp/one/identity-token", "myapp", "")
-	tr.register("sandbox/two", "/tmp/two/identity-token", "otherapp", "")
+	tr.register("sandbox/one", "/tmp/one/identity-token", "myapp", "", "")
+	tr.register("sandbox/two", "/tmp/two/identity-token", "otherapp", "", "")
 
 	entries := tr.snapshot()
 	require.Len(t, entries, 2)
@@ -50,7 +52,7 @@ func TestReleaseTokenState_ClearsBothRegistries(t *testing.T) {
 	c.tokenRefresher = newTokenRefresher()
 
 	id := entity.Id(testSandboxID)
-	c.tokenRefresher.register(testSandboxID, "/tmp/identity-token", "myapp", "")
+	c.tokenRefresher.register(testSandboxID, "/tmp/identity-token", "myapp", "", "")
 	persistTestTokenSecret(t, c, testSandboxID, testSecret)
 	require.Len(t, c.tokenRefresher.snapshot(), 1)
 	require.True(t, c.tokenSecrets.verify(testSandboxID, testSecret))
@@ -80,13 +82,21 @@ func TestRefreshTokens_RewritesLiveTokens(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "identity-token")
 	require.NoError(t, os.WriteFile(tokenPath, []byte("stale"), 0644))
 
-	c.tokenRefresher.register(testSandboxID, tokenPath, "myapp", "")
+	c.tokenRefresher.register(testSandboxID, tokenPath, "myapp", "agents", "")
 	c.refreshTokens()
 
 	data, err := os.ReadFile(tokenPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, "stale", string(data))
-	assert.NotEmpty(t, data)
+
+	// A refreshed token must keep the service it was first minted with, or a
+	// verifier that authorizes by service would lock the sandbox out after 45
+	// minutes.
+	var claims workloadidentity.WorkloadClaims
+	_, _, err = jwt.NewParser().ParseUnverified(string(data), &claims)
+	require.NoError(t, err)
+	assert.Equal(t, "myapp", claims.App)
+	assert.Equal(t, "agents", claims.Service)
 
 	// A live sandbox stays registered for the next tick.
 	assert.Len(t, c.tokenRefresher.snapshot(), 1)
@@ -106,8 +116,8 @@ func TestRefreshTokens_DropsDepartedSandboxes(t *testing.T) {
 	goneDir := filepath.Join(t.TempDir(), "removed-sandbox")
 	gonePath := filepath.Join(goneDir, "identity-token")
 
-	c.tokenRefresher.register("sandbox/live", livePath, "myapp", "")
-	c.tokenRefresher.register("sandbox/gone", gonePath, "deadapp", "")
+	c.tokenRefresher.register("sandbox/live", livePath, "myapp", "", "")
+	c.tokenRefresher.register("sandbox/gone", gonePath, "deadapp", "", "")
 
 	// Both sandboxes still hold a token-request secret. The departed one's has to
 	// go with it, or the backstop leaves a dead sandbox authorized.

@@ -46,9 +46,9 @@ func (r *remoteIssuer) IssueToken(app, sandboxID string) (string, error) {
 	return r.IssueTokenWithOptions(app, sandboxID, workloadidentity.TokenOptions{})
 }
 
-// IssueTokenWithOptions mints a token via the coordinator. The app argument is
-// ignored: the coordinator derives the app identity from the sandbox itself so
-// a runner cannot forge it.
+// IssueTokenWithOptions mints a token via the coordinator. The app argument and
+// opts.Role and opts.Service are ignored: the coordinator derives all three from
+// the sandbox itself so a runner cannot forge them.
 func (r *remoteIssuer) IssueTokenWithOptions(_, sandboxID string, opts workloadidentity.TokenOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(r.ctx, remoteTokenTimeout)
 	defer cancel()
