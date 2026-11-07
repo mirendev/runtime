@@ -788,8 +788,15 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce st
 	if err != nil {
 		return nil, err
 	}
-	if manifest.Status == "unsupported" {
+	// "legacy": the volume never acknowledged a checkpoint stream, so cloud
+	// retains its whole log and the caller replays it from the start.
+	if manifest.Status == "unsupported" || manifest.Status == "legacy" {
 		return nil, errRecoveryUnsupported
+	}
+	// No history at all, so there is no stream to name either. Callers that
+	// expected history treat this as lost history, never as an empty volume.
+	if manifest.Status == "never_backed_up" {
+		return nil, errNeverBackedUp
 	}
 	if !manifest.ExpiresAt.Equal(session.ExpiresAt) {
 		return nil, fmt.Errorf("update listing does not match restore protection")

@@ -163,8 +163,22 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions"):
 		s.selection = s.manifest
 		s.selection.Segments = append([]RecoverySegment(nil), s.manifest.Segments...)
-		s.sessionExpiry = s.manifest.ExpiresAt
-		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: "vol", SessionID: "session", ExpiresAt: s.manifest.ExpiresAt})
+		if s.manifest.StreamID == "" || s.manifest.Status == "never_backed_up" {
+			// No acknowledged stream: cloud retains the whole log, or has
+			// nothing at all, and names no stream either way.
+			status := "never_backed_up"
+			s.mockCloudServer.mu.Lock()
+			for _, object := range s.segments {
+				if object.Complete && object.Kind == string(KindLBDLog) {
+					status = "legacy"
+				}
+			}
+			s.mockCloudServer.mu.Unlock()
+			s.selection = RecoveryManifest{Version: 1, VolumeID: "vol", Status: status, SessionID: "session",
+				ExpiresAt: time.Now().Add(time.Minute), Complete: true}
+		}
+		s.sessionExpiry = s.selection.ExpiresAt
+		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: "vol", SessionID: "session", ExpiresAt: s.selection.ExpiresAt})
 	case strings.Contains(r.URL.Path, "/restore-sessions/") && strings.HasSuffix(r.URL.Path, "/renew"):
 		if s.stallRenewal {
 			s.stallRenewal = false
@@ -410,6 +424,64 @@ func TestAcceleratorCheckpointFreshNodeRecovery(t *testing.T) {
 	actual, err = os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
+}
+
+// A node that has never applied anything of the volume (a new cluster
+// adopting it, or a host that lost its copy) has no stream file, horizon or
+// image. Mounting must rebuild it from the protected checkpoint and tail and
+// adopt the cloud's stream, not replay a retired log onto a blank image.
+func TestAcceleratorMountAdoptsCloudStreamOnFreshNode(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	data := bytes.Repeat([]byte{0x5D}, 4096)
+	cloud.addTail(t, []lbd.Entry{{Op: "W", Sequence: 41, Block: 3, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}})
+	copy(expected[3*4096:], data)
+	cloud.mockCloudServer.mu.Lock()
+	for id, object := range cloud.segments {
+		if object.Kind == string(KindLBDLog) && object.Label <= cloud.manifest.Checkpoint.ThroughLabel {
+			delete(cloud.segments, id)
+		}
+	}
+	cloud.mockCloudServer.mu.Unlock()
+
+	v.DiskPath = t.TempDir()
+	mountAndDetach(t, c, v)
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoError(t, err)
+	require.Equal(t, "stream", string(stream))
+	horizon, err := readLogHorizon(v.DiskPath)
+	require.NoError(t, err)
+	require.Equal(t, cloud.manifest.Head, horizon)
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile))
+}
+
+// A brand-new volume: the cloud has no history and names no stream.
+func TestAcceleratorNewVolumeMountsWithoutHistory(t *testing.T) {
+	_, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, v.SizeBytes), 0600))
+	mountAndDetach(t, c, v)
+}
+
+// A legacy volume (no checkpoint stream) whose image is gone replays its
+// whole retained log onto a new blank image instead of failing every mount.
+func TestAcceleratorLegacyVolumeRebuildsMissingImage(t *testing.T) {
+	_, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	data := bytes.Repeat([]byte{0x6E}, 4096)
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(2, data)})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+
+	mountAndDetach(t, c, v)
+	image, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Len(t, image, int(v.SizeBytes))
+	require.Equal(t, data, image[2*4096:3*4096])
 }
 
 func TestAcceleratorMountRequiresCompleteRecovery(t *testing.T) {
@@ -984,9 +1056,12 @@ func TestAcceleratorStreamConflictStopsCheckpoints(t *testing.T) {
 			cloud.completeOnlyStreamCheck = refusedAt == "complete"
 			seedRecoveryCheckpoint(t, c, v)
 			require.Equal(t, 1, checkpointClaims(cloud))
-			// A legacy copy of the same volume proposes its own stream.
+			// A legacy copy of the same volume, which has applied history of
+			// its own, proposes its own stream. (A copy with nothing applied
+			// adopts the cloud's stream instead.)
 			v.DiskPath = t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+			require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000001"))
 			mountAndDetach(t, c, v)
 			uploaded := 1
 			if refusedAt == "complete" {
