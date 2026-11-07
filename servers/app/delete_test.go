@@ -112,6 +112,25 @@ func TestDeleteAppTransitive(t *testing.T) {
 		require.False(t, entityExists(routeID), "http_route should be deleted (has dev.miren.app_ref tag)")
 	})
 
+	t.Run("soft-deletes the disks the app created", func(t *testing.T) {
+		appID, err := client.Create(ctx, "app-with-own-disk", &core_v1alpha.App{})
+		require.NoError(t, err)
+		diskID, err := client.Create(ctx, "app-own-disk", &storage_v1alpha.Disk{
+			Name: "data", SizeGb: 1, Status: storage_v1alpha.PROVISIONED, CreatedBy: appID})
+		require.NoError(t, err)
+
+		require.NoError(t, DeleteAppTransitive(ctx, client, log, appID))
+
+		// The disk controller, not app deletion, removes it, moving its
+		// volume to the deleted-volumes area where undelete can find it.
+		require.False(t, entityExists(appID), "app should be deleted")
+		ent, err := inmem.Store.GetEntity(ctx, diskID)
+		require.NoError(t, err, "the disk must outlive the app until the disk controller deletes it")
+		var disk storage_v1alpha.Disk
+		disk.Decode(ent)
+		require.Equal(t, storage_v1alpha.DELETING, disk.Status)
+	})
+
 	t.Run("deletes app with disk_lease", func(t *testing.T) {
 		// Create app
 		app := &core_v1alpha.App{}
