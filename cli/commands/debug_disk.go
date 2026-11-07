@@ -97,6 +97,68 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	return nil
 }
 
+// DebugDiskAdopt creates a disk bound to an existing miren.cloud volume, such
+// as one written by another (possibly lost) cluster in the same organization.
+// Its first mount rebuilds the image from the cloud's protected checkpoint and
+// log tail and continues that volume's stream.
+func DebugDiskAdopt(ctx *Context, opts struct {
+	ConfigCentric
+	Name        string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
+	CloudVolume string `long:"cloud-volume" description:"miren.cloud volume ID to adopt (vol-...)" required:"true"`
+	Size        int    `short:"s" long:"size" description:"Size of the cloud volume in GB" required:"true"`
+	Filesystem  string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
+	Node        string `long:"node" description:"Node the volume lives on" default:"node/miren"`
+}) error {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return err
+	}
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
+
+	var fs storage_v1alpha.DiskFilesystem
+	switch opts.Filesystem {
+	case "ext4":
+		fs = storage_v1alpha.EXT4
+	case "xfs":
+		fs = storage_v1alpha.XFS
+	case "btrfs":
+		fs = storage_v1alpha.BTRFS
+	default:
+		return fmt.Errorf("unsupported filesystem type: %s", opts.Filesystem)
+	}
+	// RESTORING keeps the disk controller from provisioning a fresh volume
+	// until the bound one exists; the volume must reference an existing disk.
+	diskId, err := ec.Create(ctx, idgen.GenNS("disk"), &storage_v1alpha.Disk{
+		Name:       opts.Name,
+		SizeGb:     int64(opts.Size),
+		Filesystem: fs,
+		Status:     storage_v1alpha.RESTORING,
+		Mode:       storage_v1alpha.ACCELERATOR,
+	})
+	if err != nil {
+		return fmt.Errorf("creating disk: %w", err)
+	}
+	volume := &storage_v1alpha.DiskVolume{
+		Name:          opts.Name,
+		DiskId:        diskId,
+		SizeGb:        int64(opts.Size),
+		Filesystem:    opts.Filesystem,
+		VolumeMode:    storage_v1alpha.VM_ACCELERATOR,
+		DesiredState:  storage_v1alpha.DV_PRESENT,
+		ActualState:   storage_v1alpha.DV_PENDING,
+		NodeId:        entity.Id(opts.Node),
+		CloudVolumeId: opts.CloudVolume,
+	}
+	if _, err := ec.Create(ctx, idgen.GenNS("disk-vol"), volume); err != nil {
+		return fmt.Errorf("creating disk_volume: %w", err)
+	}
+	if err := ec.UpdateAttrs(ctx, diskId, entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisioningId)); err != nil {
+		return fmt.Errorf("releasing disk to provisioning: %w", err)
+	}
+	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
+	return nil
+}
+
 // DebugDiskList lists all disk entities
 func DebugDiskList(ctx *Context, opts struct {
 	ConfigCentric
