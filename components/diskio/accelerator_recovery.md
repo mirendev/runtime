@@ -102,7 +102,11 @@ Existing `POST /upload` includes `recovery_version: 1` for checkpoints. Its
 response must explicitly acknowledge the same version before runtime sends bytes
 or completion. Runtime reads a 400, 404 or 501 on checkpoint begin as an old
 cloud and stops checkpointing for the rest of the process, so a v1 cloud must
-reject an invalid checkpoint claim with another status, such as 409 or 422. Existing `POST /{update}/complete` carries the normal checksum,
+reject an invalid checkpoint claim with another status. A conflicting stream is
+409 with body `{"code": "stream_conflict"}`; other invalid claims use 422. The
+code keeps it apart from the existing lease-fencing 409. **MIR-2185 should
+refuse a conflicting stream at upload begin, before any bytes are sent**; the
+runtime also handles the same refusal at completion. Existing `POST /{update}/complete` carries the normal checksum,
 size and lease fields plus a typed `checkpoint` (`CheckpointPublication`), binding
 volume, stream, update ID, payload size/SHA-256, inclusive boundary and image
 size/SHA-256. Completion must:
@@ -129,7 +133,23 @@ nothing while cloud retains logs. Staged bytes and intent survive for the next
 detach, which reuses the same claim if the boundary is unchanged and restages
 otherwise. An old cloud's refusal (unknown kind, 404, or no version
 acknowledgement) discards the staged checkpoint and disables checkpoints for the
-rest of the process. Neither upload completion nor publication deletes any cloud
+rest of the process.
+
+A stream conflict discards the staged checkpoint and records the refused local
+stream (empty for a legacy volume) in `accelerator-checkpoint-conflict`. Later
+detaches skip checkpoints while the stream file still matches it, including
+after a restart, so a full image is not uploaded on every detach only to be
+refused. The marker clears when the local stream changes, such as after a
+successful protected recovery writes the stream file.
+
+The detach checkpoint holds the writer lease, so it is capped by a timeout
+(default 120 seconds; `accelerator_checkpoint_timeout` in server config or
+runner config, or `MIREN_SERVER_ACCELERATOR_CHECKPOINT_TIMEOUT`). Compression and
+upload both stop at the deadline. The staged bytes are discarded and the lease
+is released. The intent is kept, because it carries a legacy volume's proposed
+stream, which cloud may already have accepted; the next detach restages under
+it. Hourly checkpoints while the disk is attached (MIR-2213) cover the gap left
+by detach checkpoints that time out. Neither upload completion nor publication deletes any cloud
 history; cloud retirement remains MIR-2185's transaction.
 
 ## Installation, compatibility, and cost

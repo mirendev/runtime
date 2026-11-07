@@ -38,8 +38,10 @@ type recoveryCloud struct {
 	publicationFail bool
 	losePublication bool
 	uploadFail      bool
-	downloadDelay   time.Duration
-	renewFail       bool
+	// stallUpload holds checkpoint PUTs open until the client gives up.
+	stallUpload   bool
+	downloadDelay time.Duration
+	renewFail     bool
 	// stallRenewal holds the next renewal open until its request is cancelled.
 	stallRenewal    bool
 	renewals        int
@@ -111,7 +113,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		for id, previous := range s.claims {
 			if previous.OrderingKey == claim.OrderingKey {
 				if previous != claim {
-					w.WriteHeader(http.StatusConflict)
+					w.WriteHeader(http.StatusUnprocessableEntity)
 					return
 				}
 				s.mockCloudServer.mu.Lock()
@@ -231,8 +233,13 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.manifest.Status != "ready" {
 			s.manifest.StreamID = p.StreamID
 		}
-		if !valid || p.StreamID != s.manifest.StreamID || p.VolumeID != s.manifest.VolumeID || p.Base.ThroughLabel != head {
+		if valid && p.StreamID != s.manifest.StreamID {
 			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"code":"stream_conflict"}`))
+			return
+		}
+		if !valid || p.VolumeID != s.manifest.VolumeID || p.Base.ThroughLabel != head {
+			w.WriteHeader(http.StatusUnprocessableEntity)
 			return
 		}
 		s.publications = append(s.publications, p)
@@ -269,11 +276,18 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"update_id": p.Base.UpdateID, "checkpoint": p})
 		}
 	default:
-		if s.uploadFail && r.Method == http.MethodPut {
+		if (s.uploadFail || s.stallUpload) && r.Method == http.MethodPut {
 			s.mockCloudServer.mu.Lock()
 			object := s.segments[strings.TrimPrefix(r.URL.Path, "/upload/")]
 			checkpoint := object != nil && object.Kind == string(KindLBDCheckpoint)
 			s.mockCloudServer.mu.Unlock()
+			if checkpoint && s.stallUpload {
+				s.mu.Unlock()
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+				s.mu.Lock()
+				return
+			}
 			if checkpoint {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -941,4 +955,70 @@ func TestAcceleratorNoCheckpointWithoutLbdDetach(t *testing.T) {
 	cloud.mockCloudServer.mu.Lock()
 	require.Empty(t, cloud.leases)
 	cloud.mockCloudServer.mu.Unlock()
+}
+
+func TestAcceleratorStreamConflictStopsCheckpoints(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	require.Equal(t, 1, checkpointClaims(cloud))
+	// A legacy copy of the same volume proposes its own stream, which the
+	// cloud refuses at completion after the image is already uploaded.
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	mountAndDetach(t, c, v)
+	require.Equal(t, 2, checkpointClaims(cloud))
+	require.FileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile))
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointIntentFile))
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointPayloadFile))
+
+	// New writes would restage a new image. After a restart, the next detach
+	// still must not upload one the cloud will refuse again.
+	const label = "400000000000000000000002"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(2, bytes.Repeat([]byte{0x4D}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	restarted := NewDiskMountController(slog.Default(), c.dataPath, compute.NewNodeId("fresh-node"), c.state, newMockDiskMountOps())
+	restarted.SetUpdatesClient(c.updatesClient)
+	restarted.SetCloudClient(c.cloudClient)
+	mountAndDetach(t, restarted, v)
+	horizon, err := readLogHorizon(v.DiskPath)
+	require.NoError(t, err)
+	require.Equal(t, label, horizon)
+	require.Equal(t, 2, checkpointClaims(cloud), "a refused stream must not upload again")
+	cloud.mockCloudServer.mu.Lock()
+	require.Empty(t, cloud.leases)
+	cloud.mockCloudServer.mu.Unlock()
+}
+
+func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x2B}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.stallUpload = true
+	c.SetCheckpointTimeout(500 * time.Millisecond)
+	started := time.Now()
+	mountAndDetach(t, c, v)
+	require.Less(t, time.Since(started), 10*time.Second, "the lease must not wait on a stalled checkpoint")
+	cloud.mockCloudServer.mu.Lock()
+	require.Empty(t, cloud.leases)
+	cloud.mockCloudServer.mu.Unlock()
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointPayloadFile), "abandoned bytes are discarded")
+	require.NoFileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+
+	// The kept intent retries the same proposed stream once the cloud recovers.
+	intent, err := os.ReadFile(filepath.Join(v.DiskPath, checkpointIntentFile))
+	require.NoError(t, err)
+	var staged checkpointIntent
+	require.NoError(t, json.Unmarshal(intent, &staged))
+	cloud.mu.Lock()
+	cloud.stallUpload = false
+	cloud.mu.Unlock()
+	mountAndDetach(t, c, v)
+	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoError(t, err)
+	require.Equal(t, staged.Publication.StreamID, string(stream))
 }

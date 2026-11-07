@@ -222,7 +222,20 @@ var errPreparationUnsupported = errors.New("cloud does not support ordered uploa
 var (
 	errCheckpointUnsupported = errors.New("cloud does not support accelerator checkpoints")
 	errRecoveryUnsupported   = errors.New("cloud does not support protected accelerator recovery")
+	// errCheckpointStreamConflict means the cloud already has another stream
+	// for the volume. Retrying the same local stream can never succeed.
+	errCheckpointStreamConflict = errors.New("cloud refused the checkpoint's stream")
 )
+
+// streamConflict reports a 409 that names a stream conflict. The code keeps it
+// apart from the existing lease-fencing 409, which a later attach can resolve.
+func streamConflict(err error) error {
+	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok &&
+		httpErr.status == http.StatusConflict && httpErr.code == "stream_conflict" {
+		return fmt.Errorf("%w: %v", errCheckpointStreamConflict, err)
+	}
+	return err
+}
 
 // unsupportedStatus reports a refusal of an unknown route, or with
 // unknownKind also of an unknown update kind.
@@ -234,6 +247,7 @@ func unsupportedStatus(err error, unknownKind bool) bool {
 
 type cloudUpdateHTTPError struct {
 	status     int
+	code       string
 	message    string
 	retryAfter time.Duration
 }
@@ -251,7 +265,11 @@ func updateHTTPError(resp *http.Response) error {
 	} else if until, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
 		delay = max(0, time.Until(until))
 	}
-	return &cloudUpdateHTTPError{status: resp.StatusCode, retryAfter: delay,
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	return &cloudUpdateHTTPError{status: resp.StatusCode, code: body.Code, retryAfter: delay,
 		message: fmt.Sprintf("%s %s failed with status %d: %s", resp.Request.Method, apiURL.Redacted(), resp.StatusCode, payload)}
 }
 
@@ -425,6 +443,9 @@ func (c *cloudUpdatesClient) CompleteUpload(ctx context.Context, prepared *prepa
 		out = &response
 	}
 	if err := c.doJSON(ctx, "POST", prepared.completeURL, prepared.completion, out); err != nil {
+		if prepared.completion.Checkpoint != nil {
+			return "", streamConflict(err)
+		}
 		return "", err
 	}
 	if prepared.completion.Checkpoint != nil && (response.Checkpoint == nil || *response.Checkpoint != *prepared.completion.Checkpoint) {
@@ -493,6 +514,9 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 	err = c.doJSON(ctx, "POST", beginURL, claim, &begun)
 	if req.Checkpoint != nil && unsupportedStatus(err, true) {
 		return nil, fmt.Errorf("%w: %v", errCheckpointUnsupported, err)
+	}
+	if req.Checkpoint != nil && err != nil {
+		return nil, streamConflict(err)
 	}
 	if err != nil {
 		return nil, err

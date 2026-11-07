@@ -208,6 +208,11 @@ func (c *SecretsConfig) Validate() error {
 // Validate validates ServerConfig
 func (c *ServerConfig) Validate() error {
 
+	// Validate accelerator_checkpoint_timeout minimum
+	if c.AcceleratorCheckpointTimeout != nil && *c.AcceleratorCheckpointTimeout < 1 {
+		return fmt.Errorf("accelerator_checkpoint_timeout must be at least 1, got %d", *c.AcceleratorCheckpointTimeout)
+	}
+
 	// Validate address
 	if c.Address != nil && *c.Address != "" {
 		if _, _, err := net.SplitHostPort(*c.Address); err != nil {

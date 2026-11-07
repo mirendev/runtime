@@ -381,6 +381,10 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	if err := writeRecoveryFile(v.DiskPath, acceleratorStreamFile, []byte(m.StreamID)); err != nil {
 		return err
 	}
+	// The cloud just confirmed this stream, so an earlier conflict is stale.
+	if err := os.Remove(filepath.Join(v.DiskPath, checkpointConflictFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return os.Remove(filepath.Join(v.DiskPath, acceleratorInstallFile))
 }
 

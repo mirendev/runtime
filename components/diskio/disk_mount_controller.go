@@ -47,6 +47,8 @@ type DiskMountController struct {
 	// checkpointsUnsupported remembers an old cloud's refusal for this
 	// process, so later detaches do not compress an image just to be refused.
 	checkpointsUnsupported atomic.Bool
+	// checkpointTimeout bounds a detach checkpoint, which holds the lease.
+	checkpointTimeout time.Duration
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -65,6 +67,16 @@ func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.No
 		nodeId:   nodeId,
 		state:    state,
 		ops:      ops,
+
+		checkpointTimeout: DefaultCheckpointTimeout,
+	}
+}
+
+// SetCheckpointTimeout bounds the full-image checkpoint taken at detach, which
+// delays lease release and so failover. Non-positive values keep the default.
+func (c *DiskMountController) SetCheckpointTimeout(d time.Duration) {
+	if d > 0 {
+		c.checkpointTimeout = d
 	}
 }
 

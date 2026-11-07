@@ -210,6 +210,17 @@ configs:
         validation:
           enum: ["", auto, universal, accelerator]
 
+      accelerator_checkpoint_timeout:
+        type: int
+        default: 120
+        cli:
+          long: accelerator-checkpoint-timeout
+          description: Seconds an accelerator disk may spend uploading its checkpoint at detach before the writer lease is released anyway
+        env: MIREN_SERVER_ACCELERATOR_CHECKPOINT_TIMEOUT
+        toml: accelerator_checkpoint_timeout
+        validation:
+          min: 1
+
   IngressConfig:
     description: HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
     fields:

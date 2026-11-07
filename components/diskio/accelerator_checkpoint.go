@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/snapshot"
 )
 
 const checkpointIntentFile = "accelerator-checkpoint.json"
@@ -24,9 +25,27 @@ const checkpointPayloadFile = "accelerator-checkpoint.snapshot"
 // a detach with no new writes does not upload the same image again.
 const checkpointPublishedFile = "accelerator-checkpoint-published"
 
-// checkpointMinBudget is the least remaining deadline worth spending on a
-// full-image checkpoint before releasing the lease.
-const checkpointMinBudget = 5 * time.Minute
+// checkpointConflictFile holds the local stream (empty for a legacy volume)
+// that the cloud refused as a conflict. While the stream file still matches,
+// detach skips checkpoints instead of uploading an image that cannot publish.
+const checkpointConflictFile = "accelerator-checkpoint-conflict"
+
+// DefaultCheckpointTimeout caps a detach checkpoint, which runs while the
+// writer lease is held and so delays failover. A missed detach checkpoint loses
+// nothing: the drained tail is durable and attached checkpoints cover the gap.
+const DefaultCheckpointTimeout = 2 * time.Minute
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r ctxReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
 
 type checkpointIntent struct {
 	Publication CheckpointPublication `json:"publication"`
@@ -48,17 +67,32 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	if v == nil || v.CloudVolumeId == "" {
 		return
 	}
-	// Compression and upload can outlast a bounded caller such as Shutdown,
-	// whose lease release must still fit in the same context.
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < checkpointMinBudget {
+	// A bounded caller such as Shutdown must still fit the lease release in
+	// the same context after a full checkpoint timeout.
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < c.checkpointTimeout+jsonRequestTimeout {
 		c.log.Info("skipping accelerator checkpoint under a short deadline", "volume_id", v.CloudVolumeId)
 		return
 	}
-	err := c.publishAcceleratorCheckpoint(ctx, v, mount.LeaseNonce)
-	if errors.Is(err, errCheckpointUnsupported) {
+	checkpointCtx, cancel := context.WithTimeout(ctx, c.checkpointTimeout)
+	defer cancel()
+	err := c.publishAcceleratorCheckpoint(checkpointCtx, v, mount.LeaseNonce)
+	switch {
+	case err == nil:
+	case errors.Is(err, errCheckpointUnsupported):
 		c.checkpointsUnsupported.Store(true)
 		c.log.Info("cloud does not support accelerator checkpoints; keeping full log history", "volume_id", v.CloudVolumeId)
-	} else if err != nil {
+	case errors.Is(err, errCheckpointStreamConflict):
+		c.log.Warn("cloud refused the checkpoint stream; skipping checkpoints until the stream changes",
+			"volume_id", v.CloudVolumeId, "error", err)
+	case checkpointCtx.Err() != nil && ctx.Err() == nil:
+		// The staged bytes go, but the intent stays: it holds a legacy
+		// volume's proposed stream, which the cloud may already have accepted.
+		if rmErr := os.Remove(filepath.Join(v.DiskPath, checkpointPayloadFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+			c.log.Warn("failed to discard abandoned checkpoint", "volume_id", v.CloudVolumeId, "error", rmErr)
+		}
+		c.log.Warn("accelerator checkpoint exceeded its timeout; abandoned", "volume_id", v.CloudVolumeId,
+			"timeout", c.checkpointTimeout)
+	default:
 		c.log.Warn("accelerator checkpoint failed; will retry at next detach", "volume_id", v.CloudVolumeId, "error", err)
 	}
 }
@@ -87,6 +121,17 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	conflictPath := filepath.Join(v.DiskPath, checkpointConflictFile)
+	if conflict, err := os.ReadFile(conflictPath); err == nil && string(conflict) == string(stream) {
+		return nil
+	} else if err == nil {
+		if err := os.Remove(conflictPath); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	localStream := stream
 	if len(stream) > 0 {
 		published, err := os.ReadFile(filepath.Join(v.DiskPath, checkpointPublishedFile))
 		if err == nil && strings.TrimSpace(string(published)) == horizon {
@@ -106,8 +151,10 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 			return fmt.Errorf("staged checkpoint belongs to another stream/volume")
 		}
 		// Once the log has moved past its boundary, the boundary can no longer
-		// equal the cloud's head; restage, but keep the proposed stream.
-		if intent.Publication.Base.ThroughLabel != horizon {
+		// equal the cloud's head; restage, but keep the proposed stream. An
+		// abandoned checkpoint keeps only its intent, so it restages too.
+		_, statErr := os.Stat(payloadPath)
+		if intent.Publication.Base.ThroughLabel != horizon || os.IsNotExist(statErr) {
 			if len(stream) == 0 {
 				stream = []byte(intent.Publication.StreamID)
 			}
@@ -131,7 +178,7 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 			}
 			stream = []byte(hex.EncodeToString(id))
 		}
-		if intent, err = c.stageCheckpoint(v, string(stream), horizon, payloadPath); err != nil {
+		if intent, err = c.stageCheckpoint(ctx, v, string(stream), horizon, payloadPath); err != nil {
 			return err
 		}
 	}
@@ -158,10 +205,15 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 		Metadata: map[string]any{"accelerator_recovery_version": AcceleratorRecoveryVersion,
 			"stream_id": intent.Publication.StreamID, "through_label": intent.Publication.Base.ThroughLabel},
 	}, f, n)
-	if errors.Is(err, errCheckpointUnsupported) {
-		// Nothing was sent; staged bytes would only be refused again.
+	if errors.Is(err, errCheckpointUnsupported) || errors.Is(err, errCheckpointStreamConflict) {
+		// Staged bytes would only be refused again.
 		_ = os.Remove(intentPath)
 		_ = os.Remove(payloadPath)
+		if errors.Is(err, errCheckpointStreamConflict) {
+			if markErr := writeRecoveryFile(v.DiskPath, checkpointConflictFile, localStream); markErr != nil {
+				return errors.Join(err, markErr)
+			}
+		}
 		return err
 	}
 	if err != nil {
@@ -188,19 +240,31 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 
 // stageCheckpoint durably writes the compressed image and its intent before
 // any remote call, so retries reuse the same checksum-bound claim.
-func (c *DiskMountController) stageCheckpoint(v *VolumeState, stream, horizon, payloadPath string) (checkpointIntent, error) {
-	req := SnapshotRequest{VolumeID: v.CloudVolumeId, ImagePath: filepath.Join(v.DiskPath, "disk.img"),
-		Name: v.Name, Filesystem: v.Filesystem}
-	info, err := os.Stat(req.ImagePath)
+// Compression reads the whole image, so it stops when ctx does.
+func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeState, stream, horizon, payloadPath string) (checkpointIntent, error) {
+	img, err := os.Open(filepath.Join(v.DiskPath, "disk.img"))
 	if err != nil {
 		return checkpointIntent{}, err
 	}
-	staged, checksum, err := NewImageSnapshotter(c.log, c.updatesClient).stage(req, info)
+	defer img.Close()
+	info, err := img.Stat()
+	if err != nil {
+		return checkpointIntent{}, err
+	}
+	staged, err := os.CreateTemp(v.DiskPath, ".image-snapshot-*")
 	if err != nil {
 		return checkpointIntent{}, err
 	}
 	defer staged.Close()
 	defer os.Remove(staged.Name())
+	name := v.Name
+	if name == "" {
+		name = v.CloudVolumeId
+	}
+	checksum, err := snapshot.Backup(staged, ctxReader{ctx, img}, name, info.Size(), v.Filesystem)
+	if err != nil {
+		return checkpointIntent{}, fmt.Errorf("compress image: %w", err)
+	}
 	if err := staged.Sync(); err != nil {
 		return checkpointIntent{}, err
 	}

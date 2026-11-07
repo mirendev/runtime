@@ -27,6 +27,8 @@ type Config struct {
 	EtcdEndpoints []string `yaml:"etcd_endpoints,omitempty" json:"etcd_endpoints,omitempty"`
 	EtcdPrefix    string   `yaml:"etcd_prefix,omitempty" json:"etcd_prefix,omitempty"`
 	DiskMode      string   `yaml:"disk_mode,omitempty" json:"disk_mode,omitempty"`
+	// AcceleratorCheckpointTimeout is in seconds; zero uses the default.
+	AcceleratorCheckpointTimeout int `yaml:"accelerator_checkpoint_timeout,omitempty" json:"accelerator_checkpoint_timeout,omitempty"`
 	// Observability endpoints for metrics and logs
 	VictoriametricsAddress string `yaml:"victoriametrics_address,omitempty" json:"victoriametrics_address,omitempty"`
 	VictorialogsAddress    string `yaml:"victorialogs_address,omitempty" json:"victorialogs_address,omitempty"`

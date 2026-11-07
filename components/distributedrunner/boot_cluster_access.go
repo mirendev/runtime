@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/runner"
@@ -21,6 +22,8 @@ type clusterAccessBootInputs struct {
 	listenAddress string
 	dataPath      string
 	diskMode      string
+
+	checkpointTimeout time.Duration
 }
 
 type clusterAccessBootOutput struct {
@@ -44,6 +47,8 @@ func clusterAccessInputs(options StartOptions) clusterAccessBootInputs {
 		listenAddress: options.ListenAddr,
 		dataPath:      options.DataPath,
 		diskMode:      options.Config.DiskMode,
+
+		checkpointTimeout: time.Duration(options.Config.AcceleratorCheckpointTimeout) * time.Second,
 	}
 }
 
@@ -66,6 +71,8 @@ func (b *clusterAccessBoot) start(ctx context.Context) (clusterAccessBootOutput,
 		DataPath:      b.inputs.dataPath,
 		Config:        b.inputs.clientConfig,
 		DiskMode:      b.inputs.diskMode,
+
+		AcceleratorCheckpointTimeout: b.inputs.checkpointTimeout,
 	}
 	var err error
 	b.value, err = runner.NewClusterAccess(b.inputs.log, runner.RunnerDeps{}, config)
