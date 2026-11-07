@@ -330,6 +330,9 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	if c.state.HasPendingCloudUpload(volState.CloudVolumeId) {
 		return fmt.Errorf("volume %s has a pending cloud upload", volumeId)
 	}
+	if adopted, err := c.adoptAttachedLbd(ctx, mount, volState); adopted || err != nil {
+		return err
+	}
 	// Recovery must finish the old attachment/release before acquiring a new
 	// lease or overwriting its cleanup credentials.
 	if previous := c.state.GetMount(entityId); previous != nil &&
@@ -498,6 +501,57 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	return nil
+}
+
+// adoptAttachedLbd takes back an lbd device that outlived the server process.
+// Stopping the server unmounts its own path but cannot detach a device an app
+// container still has mounted, and detaching it now would fail the same way
+// forever. The device still logs under this mount's lease, so remounting it
+// is all that is missing. Nothing here formats or fscks: the filesystem is live.
+func (c *DiskMountController) adoptAttachedLbd(ctx context.Context, mount *storage_v1alpha.DiskMount, volState *VolumeState) (bool, error) {
+	entityId := string(mount.ID)
+	ms := c.state.GetMount(entityId)
+	imagePath := filepath.Join(volState.DiskPath, "disk.img")
+	if ms == nil || ms.Mode != storage_v1alpha.VM_ACCELERATOR || ms.DevicePath == "" || ms.LeaseNonce == "" ||
+		ms.BackingPath != imagePath || mount.MountPath == "" {
+		return false, nil
+	}
+	backing, err := c.ops.DeviceBacking(ms.DevicePath)
+	if err != nil {
+		return false, fmt.Errorf("inspect lbd device before adopting it: %w", err)
+	}
+	if backing != imagePath {
+		return false, nil
+	}
+	c.log.Info("adopting lbd device that outlived the previous server",
+		"entity_id", entityId, "device", ms.DevicePath, "volume_id", volState.CloudVolumeId)
+	if mounted, err := c.ops.MountDevice(mount.MountPath); err != nil {
+		return true, fmt.Errorf("inspect mount before adopting lbd: %w", err)
+	} else if mounted != ms.DevicePath {
+		if mounted != "" {
+			return true, fmt.Errorf("mount path %s holds %s, not adopted %s", mount.MountPath, mounted, ms.DevicePath)
+		}
+		if err := c.ops.CreateDir(mount.MountPath, 0755); err != nil {
+			return true, fmt.Errorf("failed to create mount point: %w", err)
+		}
+		filesystem := volState.Filesystem
+		if filesystem == "" {
+			filesystem = "ext4"
+		}
+		if err := c.ops.Mount(ms.DevicePath, mount.MountPath, filesystem, mount.ReadOnly); err != nil {
+			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to remount adopted lbd: %v", err))
+			return true, fmt.Errorf("failed to remount adopted lbd: %w", err)
+		}
+	}
+	ms.MountPath, ms.Mounted, ms.CheckpointDue = mount.MountPath, true, false
+	if err := c.state.SetMountAndSave(entityId, ms); err != nil {
+		return true, err
+	}
+	devicePath := ms.DevicePath
+	if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_MOUNTED, &devicePath, &devicePath, nil); err != nil {
+		c.log.Warn("failed to update mount state to mounted", "error", err)
+	}
+	return true, nil
 }
 
 func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1alpha.DiskMount) error {

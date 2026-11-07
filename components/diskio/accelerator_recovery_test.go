@@ -1434,3 +1434,37 @@ func TestAcceleratorCheckpointAfterShutdownDetach(t *testing.T) {
 	require.Nil(t, c.state.GetMount("mount"))
 	require.Equal(t, 1, checkpointClaims(cloud), "a clean shutdown detach is a checkpoint")
 }
+
+// A server restart cannot detach an lbd device an app container still has
+// mounted. The next process must adopt that device under the lease it still
+// holds rather than retry the detach forever.
+func TestAcceleratorAdoptsLbdThatOutlivedServer(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(diskMountBasePath, "hill-adopt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	before := *c.state.GetMount("mount")
+	ops := c.ops.(*mockDiskMountOps)
+	ops.lbdDetachErr = fmt.Errorf("LBD_CTL_REMOVE failed: Device or resource busy")
+	NewDiskVolumeController(slog.Default(), v.DiskPath, compute.NewNodeId("fresh-node"), c.state, nil, ops).Shutdown()
+	require.False(t, ops.IsMounted(mount.MountPath))
+
+	restarted, err := LoadState(filepath.Dir(c.state.path))
+	require.NoError(t, err)
+	c.state = restarted
+	mount.ActualState = storage_v1alpha.DM_MOUNTED
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	after := c.state.GetMount("mount")
+	require.True(t, after.Mounted)
+	require.Equal(t, before.DevicePath, after.DevicePath)
+	require.Equal(t, before.LeaseNonce, after.LeaseNonce, "the device keeps logging under its lease")
+	require.True(t, ops.IsMounted(mount.MountPath))
+	require.Len(t, ops.attachedLbds, 1, "no second device for the same image")
+	require.Zero(t, checkpointClaims(cloud))
+	cloud.mockCloudServer.mu.Lock()
+	require.Len(t, cloud.leases, 1)
+	cloud.mockCloudServer.mu.Unlock()
+}
