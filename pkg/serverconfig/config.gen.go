@@ -447,17 +447,31 @@ func (c *SecretsConfig) SetKeyRotationPeriod(v string) {
 
 // ServerConfig Core server settings
 type ServerConfig struct {
-	AcceleratorCheckpointTimeout *int    `toml:"accelerator_checkpoint_timeout" env:"MIREN_SERVER_ACCELERATOR_CHECKPOINT_TIMEOUT"`
-	Address                      *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
-	ConfigClusterName            *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
-	DataPath                     *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
-	DiskMode                     *string `toml:"disk_mode" env:"MIREN_DISK_MODE"`
-	HTTPRequestTimeout           *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
-	ReleasePath                  *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
-	RunnerAddress                *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
-	RunnerID                     *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
-	SkipClientConfig             *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
-	StopSandboxesOnShutdown      *bool   `toml:"stop_sandboxes_on_shutdown" env:"MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN"`
+	AcceleratorCheckpointInterval *int    `toml:"accelerator_checkpoint_interval" env:"MIREN_SERVER_ACCELERATOR_CHECKPOINT_INTERVAL"`
+	AcceleratorCheckpointTimeout  *int    `toml:"accelerator_checkpoint_timeout" env:"MIREN_SERVER_ACCELERATOR_CHECKPOINT_TIMEOUT"`
+	Address                       *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
+	ConfigClusterName             *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
+	DataPath                      *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
+	DiskMode                      *string `toml:"disk_mode" env:"MIREN_DISK_MODE"`
+	HTTPRequestTimeout            *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	ReleasePath                   *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
+	RunnerAddress                 *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
+	RunnerID                      *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
+	SkipClientConfig              *bool   `toml:"skip_client_config" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
+	StopSandboxesOnShutdown       *bool   `toml:"stop_sandboxes_on_shutdown" env:"MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN"`
+}
+
+// GetAcceleratorCheckpointInterval returns the value of AcceleratorCheckpointInterval or its zero value if nil
+func (c *ServerConfig) GetAcceleratorCheckpointInterval() int {
+	if c.AcceleratorCheckpointInterval != nil {
+		return *c.AcceleratorCheckpointInterval
+	}
+	return 0
+}
+
+// SetAcceleratorCheckpointInterval sets the value of AcceleratorCheckpointInterval
+func (c *ServerConfig) SetAcceleratorCheckpointInterval(v int) {
+	c.AcceleratorCheckpointInterval = &v
 }
 
 // GetAcceleratorCheckpointTimeout returns the value of AcceleratorCheckpointTimeout or its zero value if nil

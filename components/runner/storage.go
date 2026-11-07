@@ -95,6 +95,7 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	s.dmc = diskio.NewDiskMountController(log, dataPath, s.nodeId(), diskioState, mntOps)
 	s.dmc.SetEAC(eas)
 	s.dmc.SetCheckpointTimeout(s.config.AcceleratorCheckpointTimeout)
+	s.dmc.SetAttachedCheckpointInterval(s.config.AcceleratorCheckpointInterval)
 	s.diskGC = &diskio.DeletedVolumeGC{
 		Log:      log.With("module", "deleted-volume-gc"),
 		DataPath: dataPath,
@@ -147,6 +148,7 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 		}
 	}()
 	s.closers = append(s.closers, waitCloser{watcher})
+	go s.dmc.RunAttachedCheckpoints(ctx)
 
 	volumeHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](s.dvc)
 	manager.AddController(controller.NewReconcileController(

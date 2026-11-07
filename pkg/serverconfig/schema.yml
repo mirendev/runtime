@@ -221,6 +221,17 @@ configs:
         validation:
           min: 1
 
+      accelerator_checkpoint_interval:
+        type: int
+        default: 3600
+        cli:
+          long: accelerator-checkpoint-interval
+          description: Seconds between checkpoints of an accelerator disk that stays attached, each rebuilt from its cloud history without pausing the disk
+        env: MIREN_SERVER_ACCELERATOR_CHECKPOINT_INTERVAL
+        toml: accelerator_checkpoint_interval
+        validation:
+          min: 60
+
   IngressConfig:
     description: HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
     fields:

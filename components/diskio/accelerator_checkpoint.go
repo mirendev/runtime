@@ -179,28 +179,7 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 		}
 	}
 
-	f, err := os.Open(payloadPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	hash := sha256.New()
-	n, err := io.Copy(hash, f)
-	if err != nil {
-		return err
-	}
-	if n != intent.Publication.Base.Size || hex.EncodeToString(hash.Sum(nil)) != intent.Publication.Base.SHA256 {
-		return fmt.Errorf("staged checkpoint payload changed")
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	id, err := c.updatesClient.Upload(ctx, v.CloudVolumeId, UploadRequest{
-		Kind: KindLBDCheckpoint, OrderingKey: intent.OrderingKey, LeaseNonce: nonce,
-		Checkpoint: &intent.Publication,
-		Metadata: map[string]any{"accelerator_recovery_version": AcceleratorRecoveryVersion,
-			"stream_id": intent.Publication.StreamID, "through_label": intent.Publication.Base.ThroughLabel},
-	}, f, n)
+	id, err := c.uploadCheckpoint(ctx, v, nonce, intent, payloadPath)
 	if errors.Is(err, errCheckpointUnsupported) || errors.Is(err, errCheckpointStreamConflict) {
 		// Staged bytes would only be refused again.
 		_ = os.Remove(intentPath)
@@ -238,49 +217,13 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 // any remote call, so retries reuse the same checksum-bound claim.
 // Compression reads the whole image, so it stops when ctx does.
 func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeState, stream, horizon, payloadPath string) (checkpointIntent, error) {
-	img, err := os.Open(filepath.Join(v.DiskPath, "disk.img"))
+	staged, intent, err := c.compressCheckpoint(ctx, v, filepath.Join(v.DiskPath, "disk.img"), stream, horizon)
+	if staged != "" {
+		defer os.Remove(staged)
+	}
 	if err != nil {
 		return checkpointIntent{}, err
 	}
-	defer img.Close()
-	info, err := img.Stat()
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	staged, err := os.CreateTemp(v.DiskPath, ".image-snapshot-*")
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	defer staged.Close()
-	defer os.Remove(staged.Name())
-	name := v.Name
-	if name == "" {
-		name = v.CloudVolumeId
-	}
-	checksum, err := snapshot.Backup(staged, ctxReader{ctx, img}, name, info.Size(), v.Filesystem)
-	if err != nil {
-		return checkpointIntent{}, fmt.Errorf("compress image: %w", err)
-	}
-	if err := staged.Sync(); err != nil {
-		return checkpointIntent{}, err
-	}
-	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		return checkpointIntent{}, err
-	}
-	hash := sha256.New()
-	size, err := io.Copy(hash, staged)
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	// Bind the stable update key to both bytes and boundary. Retrying a
-	// lost response reuses the exact original checksum-bound claim.
-	key := sha256.Sum256([]byte(stream + ":" + horizon + ":" + digest))
-	intent := checkpointIntent{OrderingKey: hex.EncodeToString(key[:8]), Publication: CheckpointPublication{
-		Version: AcceleratorRecoveryVersion, VolumeID: v.CloudVolumeId, StreamID: stream,
-		Base: RecoveryCheckpoint{RecoveryObject: RecoveryObject{Size: size, SHA256: digest},
-			ThroughLabel: horizon, ImageSize: info.Size(), ImageSHA256: checksum},
-	}}
 	data, err := json.Marshal(intent)
 	if err != nil {
 		return checkpointIntent{}, err
@@ -294,8 +237,83 @@ func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeStat
 	if err := writeRecoveryFile(v.DiskPath, checkpointIntentFile, data); err != nil {
 		return checkpointIntent{}, err
 	}
-	if err := os.Rename(staged.Name(), payloadPath); err != nil {
+	if err := os.Rename(staged, payloadPath); err != nil {
 		return checkpointIntent{}, err
 	}
 	return intent, syncRecoveryDir(v.DiskPath)
+}
+
+// compressCheckpoint writes image as a durable miren snapshot in a temporary
+// file under the volume directory and returns its name with the claim that
+// binds those bytes to boundary horizon. The caller removes the file.
+func (c *DiskMountController) compressCheckpoint(ctx context.Context, v *VolumeState, image, stream, horizon string) (string, checkpointIntent, error) {
+	img, err := os.Open(image)
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	defer img.Close()
+	info, err := img.Stat()
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	staged, err := os.CreateTemp(v.DiskPath, ".image-snapshot-*")
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	defer staged.Close()
+	name := v.Name
+	if name == "" {
+		name = v.CloudVolumeId
+	}
+	checksum, err := snapshot.Backup(staged, ctxReader{ctx, img}, name, info.Size(), v.Filesystem)
+	if err != nil {
+		return staged.Name(), checkpointIntent{}, fmt.Errorf("compress image: %w", err)
+	}
+	if err := staged.Sync(); err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, staged)
+	if err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	// Bind the stable update key to both bytes and boundary. Retrying a
+	// lost response reuses the exact original checksum-bound claim.
+	key := sha256.Sum256([]byte(stream + ":" + horizon + ":" + digest))
+	return staged.Name(), checkpointIntent{OrderingKey: hex.EncodeToString(key[:8]), Publication: CheckpointPublication{
+		Version: AcceleratorRecoveryVersion, VolumeID: v.CloudVolumeId, StreamID: stream,
+		Base: RecoveryCheckpoint{RecoveryObject: RecoveryObject{Size: size, SHA256: digest},
+			ThroughLabel: horizon, ImageSize: info.Size(), ImageSHA256: checksum},
+	}}, nil
+}
+
+// uploadCheckpoint sends the staged payload under its claim, after checking
+// the bytes still match it, and returns the activated update's ID.
+func (c *DiskMountController) uploadCheckpoint(ctx context.Context, v *VolumeState, nonce string, intent checkpointIntent, payloadPath string) (string, error) {
+	f, err := os.Open(payloadPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	n, err := io.Copy(hash, f)
+	if err != nil {
+		return "", err
+	}
+	if n != intent.Publication.Base.Size || hex.EncodeToString(hash.Sum(nil)) != intent.Publication.Base.SHA256 {
+		return "", fmt.Errorf("staged checkpoint payload changed")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return c.updatesClient.Upload(ctx, v.CloudVolumeId, UploadRequest{
+		Kind: KindLBDCheckpoint, OrderingKey: intent.OrderingKey, LeaseNonce: nonce,
+		Checkpoint: &intent.Publication,
+		Metadata: map[string]any{"accelerator_recovery_version": AcceleratorRecoveryVersion,
+			"stream_id": intent.Publication.StreamID, "through_label": intent.Publication.Base.ThroughLabel},
+	}, f, n)
 }

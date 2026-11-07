@@ -49,6 +49,8 @@ type DiskMountController struct {
 	checkpointsUnsupported atomic.Bool
 	// checkpointTimeout bounds a detach checkpoint, which holds the lease.
 	checkpointTimeout time.Duration
+	// attachedCheckpointInterval spaces checkpoints of attached disks.
+	attachedCheckpointInterval time.Duration
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -68,7 +70,16 @@ func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.No
 		state:    state,
 		ops:      ops,
 
-		checkpointTimeout: DefaultCheckpointTimeout,
+		checkpointTimeout:          DefaultCheckpointTimeout,
+		attachedCheckpointInterval: DefaultAttachedCheckpointInterval,
+	}
+}
+
+// SetAttachedCheckpointInterval spaces the checkpoints taken while a disk
+// stays attached. Non-positive values keep the default.
+func (c *DiskMountController) SetAttachedCheckpointInterval(d time.Duration) {
+	if d > 0 {
+		c.attachedCheckpointInterval = d
 	}
 }
 

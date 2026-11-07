@@ -208,6 +208,11 @@ func (c *SecretsConfig) Validate() error {
 // Validate validates ServerConfig
 func (c *ServerConfig) Validate() error {
 
+	// Validate accelerator_checkpoint_interval minimum
+	if c.AcceleratorCheckpointInterval != nil && *c.AcceleratorCheckpointInterval < 60 {
+		return fmt.Errorf("accelerator_checkpoint_interval must be at least 60, got %d", *c.AcceleratorCheckpointInterval)
+	}
+
 	// Validate accelerator_checkpoint_timeout minimum
 	if c.AcceleratorCheckpointTimeout != nil && *c.AcceleratorCheckpointTimeout < 1 {
 		return fmt.Errorf("accelerator_checkpoint_timeout must be at least 1, got %d", *c.AcceleratorCheckpointTimeout)

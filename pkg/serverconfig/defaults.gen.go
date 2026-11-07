@@ -115,17 +115,18 @@ func DefaultSecretsConfig() SecretsConfig {
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		AcceleratorCheckpointTimeout: new(120),
-		Address:                      new(":8443"),
-		ConfigClusterName:            new("local"),
-		DataPath:                     new("/var/lib/miren"),
-		DiskMode:                     new(""),
-		HTTPRequestTimeout:           new(60),
-		ReleasePath:                  new(""),
-		RunnerAddress:                new("localhost:8444"),
-		RunnerID:                     new("miren"),
-		SkipClientConfig:             new(false),
-		StopSandboxesOnShutdown:      new(false),
+		AcceleratorCheckpointInterval: new(3600),
+		AcceleratorCheckpointTimeout:  new(120),
+		Address:                       new(":8443"),
+		ConfigClusterName:             new("local"),
+		DataPath:                      new("/var/lib/miren"),
+		DiskMode:                      new(""),
+		HTTPRequestTimeout:            new(60),
+		ReleasePath:                   new(""),
+		RunnerAddress:                 new("localhost:8444"),
+		RunnerID:                      new("miren"),
+		SkipClientConfig:              new(false),
+		StopSandboxesOnShutdown:       new(false),
 	}
 }
 

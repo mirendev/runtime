@@ -67,6 +67,9 @@ type CheckpointPublication struct {
 	VolumeID string             `json:"volume_id"`
 	StreamID string             `json:"stream_id"`
 	Base     RecoveryCheckpoint `json:"checkpoint"`
+	// Basis is checkpointBasisReplayed for an image rebuilt from committed
+	// history while the writer stays attached; empty for a detached image.
+	Basis string `json:"basis,omitempty"`
 }
 
 // protectedUpdatesClient extends update listing with renewable restore
