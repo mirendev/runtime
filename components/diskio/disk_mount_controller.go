@@ -186,7 +186,7 @@ func (c *DiskMountController) cloudVolumeIdFor(ms *MountState) string {
 
 func (c *DiskMountController) reconcileMount(ctx context.Context, mount *storage_v1alpha.DiskMount) error {
 	entityId := string(mount.ID)
-	c.log.Info("reconciling disk mount",
+	c.log.Debug("reconciling disk mount",
 		"entity_id", entityId,
 		"desired_state", mount.DesiredState,
 		"actual_state", mount.ActualState,

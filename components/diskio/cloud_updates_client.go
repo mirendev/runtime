@@ -446,7 +446,7 @@ func (c *cloudUpdatesClient) PublishPrepared(ctx context.Context, head *publicat
 	if response.Terminal != response.Entries[len(prepared)-1] {
 		return nil, fmt.Errorf("cloud acknowledged a different publication boundary")
 	}
-	c.log.Info("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
+	c.log.Debug("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
 	return &response.Terminal, nil
 }
 

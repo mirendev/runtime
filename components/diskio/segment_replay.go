@@ -65,7 +65,7 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 		}
 
 		lastLabel = seg.Label
-		c.log.Info("replayed log segment", "segment_id", seg.SegmentID, "label", seg.Label, "volume_id", volState.VolumeId)
+		c.log.Debug("replayed log segment", "segment_id", seg.SegmentID, "label", seg.Label, "volume_id", volState.VolumeId)
 	}
 
 	if err := img.Sync(); err != nil {

@@ -116,7 +116,7 @@ func (c *DiskVolumeController) Index() entity.Attr {
 
 func (c *DiskVolumeController) reconcileVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
 	entityId := string(volume.ID)
-	c.log.Info("reconciling disk volume",
+	c.log.Debug("reconciling disk volume",
 		"entity_id", entityId,
 		"desired_state", volume.DesiredState,
 		"actual_state", volume.ActualState,
