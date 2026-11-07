@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +33,7 @@ type CloudSegmentUploader struct {
 }
 
 type leaseHolderReader interface {
-	LeaseHolder(ctx context.Context, volumeID string) (string, error)
+	ActiveLease(ctx context.Context, volumeID string) (bool, error)
 }
 
 // SetLeaseReader lets the uploader recognize a tail fenced by a takeover.
@@ -113,7 +114,8 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 		}
 		err = u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
 	}
-	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok && httpErr.status == http.StatusForbidden {
+	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok && httpErr.status == http.StatusForbidden &&
+		strings.Contains(httpErr.message, "lease nonce") {
 		if parked, parkErr := u.parkFencedTail(ctx, volumeID, diskPath); parkErr != nil {
 			return errors.Join(err, parkErr)
 		} else if parked {
@@ -164,11 +166,15 @@ func (u *CloudSegmentUploader) parkFencedTail(ctx context.Context, volumeID, dis
 	if len(names) == 0 {
 		return false, nil
 	}
-	holder, err := u.leases.LeaseHolder(ctx, volumeID)
+	// The cloud never reveals a lease's nonce, only that one is active. The
+	// caller holds the volume lock, so no lease acquired here can have
+	// replaced the nonce the cloud just refused: an active lease is another
+	// writer's.
+	active, err := u.leases.ActiveLease(ctx, volumeID)
 	if err != nil {
 		return false, err
 	}
-	if holder == "" || holder == u.leaseNonceFor(volumeID) {
+	if !active {
 		head, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
 		if err != nil || len(head) == 0 || head[0].OrderingKey <= lbd.LabelFromLogPath(names[len(names)-1]) {
 			return false, err

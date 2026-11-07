@@ -1224,10 +1224,6 @@ func TestUploadPipelineCoalescesSegments(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
-type stubLeaseHolder struct{ nonce string }
-
-func (s stubLeaseHolder) LeaseHolder(context.Context, string) (string, error) { return s.nonce, nil }
-
 // A tail refused because another writer took the volume over can never
 // publish. It is moved aside with the image it was applied to, so the volume
 // can mount (from the cloud) or be deleted here again; with no other holder,
@@ -1250,6 +1246,15 @@ func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
 				head = "400000000000000200000000"
 			}
 			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/lease") {
+					if c.holder == "" {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					// As the cloud answers: the holder's nonce is never revealed.
+					json.NewEncoder(w).Encode(map[string]any{"lease_id": "lease-other", "volume_id": "vol-test", "nonce": ""})
+					return
+				}
 				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/updates") {
 					json.NewEncoder(w).Encode(map[string]any{"updates": []map[string]any{{"update_id": "volup-head",
 						"kind": "lbd_log", "ordering_key": head, "size": 1}}})
@@ -1278,7 +1283,7 @@ func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
 			require.NoError(t, writeLogHorizon(diskPath, "400000000000000000000009"))
 
 			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
-			u.leases = stubLeaseHolder{c.holder}
+			u.SetLeaseReader(NewCloudDiskClient(slog.Default(), ts.URL, auth))
 			err := u.UploadSegments(context.Background(), "vol-test", diskPath, []string{path}, func(string) error { return nil })
 			parked, globErr := filepath.Glob(filepath.Join(diskPath, "fenced-*"))
 			require.NoError(t, globErr)
