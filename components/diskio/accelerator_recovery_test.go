@@ -52,6 +52,10 @@ type recoveryCloud struct {
 	pageFault       string
 	checkpointFault string
 	oldCloud        bool
+	// completeOnlyStreamCheck models a cloud that refuses a stream only at
+	// completion, after the payload is uploaded.
+	completeOnlyStreamCheck bool
+	begins                  int
 }
 
 func newRecoveryCloud(t *testing.T) (*recoveryCloud, *DiskMountController, *VolumeState) {
@@ -107,6 +111,17 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(encoded))
 		if claim.Kind != string(KindLBDCheckpoint) {
 			s.ServeHTTP(w, r)
+			return
+		}
+		s.begins++
+		if claim.StreamID == "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		if !s.completeOnlyStreamCheck && s.manifest.Status == "ready" && claim.StreamID != s.manifest.StreamID {
+			// Matches MIR-2185: a plain 409 with no code, before any upload URL.
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"volume has a different accelerator stream"}`))
 			return
 		}
 		var response beginUploadResponseJSON
@@ -958,36 +973,54 @@ func TestAcceleratorNoCheckpointWithoutLbdDetach(t *testing.T) {
 }
 
 func TestAcceleratorStreamConflictStopsCheckpoints(t *testing.T) {
-	cloud, c, v := newRecoveryCloud(t)
-	seedRecoveryCheckpoint(t, c, v)
-	require.Equal(t, 1, checkpointClaims(cloud))
-	// A legacy copy of the same volume proposes its own stream, which the
-	// cloud refuses at completion after the image is already uploaded.
-	v.DiskPath = t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
-	mountAndDetach(t, c, v)
-	require.Equal(t, 2, checkpointClaims(cloud))
-	require.FileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile))
-	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointIntentFile))
-	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointPayloadFile))
+	// A current cloud refuses the stream at begin; an earlier one only at
+	// completion, after the image is uploaded. Both must stop checkpoints.
+	for _, refusedAt := range []string{"begin", "complete"} {
+		t.Run(refusedAt, func(t *testing.T) {
+			cloud, c, v := newRecoveryCloud(t)
+			cloud.completeOnlyStreamCheck = refusedAt == "complete"
+			seedRecoveryCheckpoint(t, c, v)
+			require.Equal(t, 1, checkpointClaims(cloud))
+			// A legacy copy of the same volume proposes its own stream.
+			v.DiskPath = t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+			mountAndDetach(t, c, v)
+			uploaded := 1
+			if refusedAt == "complete" {
+				uploaded = 2
+			}
+			require.Equal(t, uploaded, checkpointClaims(cloud), "a begin refusal sends no bytes")
+			require.Equal(t, 2, checkpointBegins(cloud))
+			require.FileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile))
+			require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointIntentFile))
+			require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointPayloadFile))
 
-	// New writes would restage a new image. After a restart, the next detach
-	// still must not upload one the cloud will refuse again.
-	const label = "400000000000000000000002"
-	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(2, bytes.Repeat([]byte{0x4D}, 4096))})
-	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
-	require.NoError(t, err)
-	restarted := NewDiskMountController(slog.Default(), c.dataPath, compute.NewNodeId("fresh-node"), c.state, newMockDiskMountOps())
-	restarted.SetUpdatesClient(c.updatesClient)
-	restarted.SetCloudClient(c.cloudClient)
-	mountAndDetach(t, restarted, v)
-	horizon, err := readLogHorizon(v.DiskPath)
-	require.NoError(t, err)
-	require.Equal(t, label, horizon)
-	require.Equal(t, 2, checkpointClaims(cloud), "a refused stream must not upload again")
-	cloud.mockCloudServer.mu.Lock()
-	require.Empty(t, cloud.leases)
-	cloud.mockCloudServer.mu.Unlock()
+			// New writes would restage a new image. After a restart, the next
+			// detach must not even ask the cloud again.
+			const label = "400000000000000000000002"
+			segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(2, bytes.Repeat([]byte{0x4D}, 4096))})
+			_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+			require.NoError(t, err)
+			restarted := NewDiskMountController(slog.Default(), c.dataPath, compute.NewNodeId("fresh-node"), c.state, newMockDiskMountOps())
+			restarted.SetUpdatesClient(c.updatesClient)
+			restarted.SetCloudClient(c.cloudClient)
+			mountAndDetach(t, restarted, v)
+			horizon, err := readLogHorizon(v.DiskPath)
+			require.NoError(t, err)
+			require.Equal(t, label, horizon)
+			require.Equal(t, uploaded, checkpointClaims(cloud), "a refused stream must not upload again")
+			require.Equal(t, 2, checkpointBegins(cloud), "a refused stream must not be staged or claimed again")
+			cloud.mockCloudServer.mu.Lock()
+			require.Empty(t, cloud.leases)
+			cloud.mockCloudServer.mu.Unlock()
+		})
+	}
+}
+
+func checkpointBegins(cloud *recoveryCloud) int {
+	cloud.mu.Lock()
+	defer cloud.mu.Unlock()
+	return cloud.begins
 }
 
 func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
@@ -1014,6 +1047,12 @@ func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
 	require.NoError(t, err)
 	var staged checkpointIntent
 	require.NoError(t, json.Unmarshal(intent, &staged))
+	// A restage that fails (here, under an already-expired deadline) must
+	// not drop the proposed stream along with it.
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, c.publishAcceleratorCheckpoint(expired, v, "nonce"), context.Canceled)
+	require.FileExists(t, filepath.Join(v.DiskPath, checkpointIntentFile))
 	cloud.mu.Lock()
 	cloud.stallUpload = false
 	cloud.mu.Unlock()

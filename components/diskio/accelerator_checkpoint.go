@@ -152,17 +152,13 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 		}
 		// Once the log has moved past its boundary, the boundary can no longer
 		// equal the cloud's head; restage, but keep the proposed stream. An
-		// abandoned checkpoint keeps only its intent, so it restages too.
+		// abandoned checkpoint keeps only its intent, so it restages too. The
+		// old intent stays until staging replaces it, so a failed restage
+		// still keeps a legacy volume's proposed stream.
 		_, statErr := os.Stat(payloadPath)
 		if intent.Publication.Base.ThroughLabel != horizon || os.IsNotExist(statErr) {
 			if len(stream) == 0 {
 				stream = []byte(intent.Publication.StreamID)
-			}
-			if err := os.Remove(intentPath); err != nil {
-				return err
-			}
-			if err := syncRecoveryDir(v.DiskPath); err != nil {
-				return err
 			}
 			err = os.ErrNotExist
 		}
@@ -285,12 +281,21 @@ func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeStat
 		Base: RecoveryCheckpoint{RecoveryObject: RecoveryObject{Size: size, SHA256: digest},
 			ThroughLabel: horizon, ImageSize: info.Size(), ImageSHA256: checksum},
 	}}
-	if err := os.Rename(staged.Name(), payloadPath); err != nil {
-		return checkpointIntent{}, err
-	}
 	data, err := json.Marshal(intent)
 	if err != nil {
 		return checkpointIntent{}, err
 	}
-	return intent, writeRecoveryFile(v.DiskPath, checkpointIntentFile, data)
+	// Retire the old payload, replace the intent, then install the payload. A
+	// crash at any step leaves either the old pair or an intent without its
+	// payload, which restages under the same stream; never a mismatched pair.
+	if err := os.Remove(payloadPath); err != nil && !os.IsNotExist(err) {
+		return checkpointIntent{}, err
+	}
+	if err := writeRecoveryFile(v.DiskPath, checkpointIntentFile, data); err != nil {
+		return checkpointIntent{}, err
+	}
+	if err := os.Rename(staged.Name(), payloadPath); err != nil {
+		return checkpointIntent{}, err
+	}
+	return intent, syncRecoveryDir(v.DiskPath)
 }

@@ -15,7 +15,10 @@ Legacy replay is unsafe only once cloud retires log prefixes, which does not
 exist yet. Protected recovery is used only when the volume already has an
 `accelerator-stream` file **and** the cloud supports restore sessions; a 404/501
 on `restore-sessions` or a `status: "unsupported"` listing falls back to legacy
-replay. Other errors from a v1 cloud still fail closed.
+replay. Other errors from a v1 cloud still fail closed. MIR-2185's first cloud
+change accepts checkpoints but does not yet build restore sessions or the
+`recovery_version=1` listing; those return 404, so stream volumes take the
+legacy replay fallback until they exist.
 
 **Deferred to a later change:** removing the legacy fallback for stream volumes,
 enabling prefix retirement, and using protected recovery on a node with no
@@ -98,21 +101,29 @@ the existing checksum-bound `updates` upload protocol with kind
 identity, **not a chronological timestamp**. This kind must be excluded from
 full-image selection and ordinary full-image retirement.
 
-Existing `POST /upload` includes `recovery_version: 1` for checkpoints. Its
-response must explicitly acknowledge the same version before runtime sends bytes
-or completion. Runtime reads a 400, 404 or 501 on checkpoint begin as an old
-cloud and stops checkpointing for the rest of the process, so a v1 cloud must
-reject an invalid checkpoint claim with another status. A conflicting stream is
-409 with body `{"code": "stream_conflict"}`; other invalid claims use 422. The
-code keeps it apart from the existing lease-fencing 409. **MIR-2185 should
-refuse a conflicting stream at upload begin, before any bytes are sent**; the
-runtime also handles the same refusal at completion. Existing `POST /{update}/complete` carries the normal checksum,
+Existing `POST /upload` includes `recovery_version: 1` and `stream_id` for
+checkpoints: the volume's recorded stream, or the stream a legacy volume
+proposes in its first checkpoint. Its response must explicitly acknowledge the
+same version before runtime sends bytes or completion. Runtime reads a 400, 404
+or 501 on checkpoint begin as an old cloud and stops checkpointing for the rest
+of the process, so a v1 cloud must reject an invalid checkpoint claim with
+another status, such as 422. Lease refusals are 403.
+
+**Cloud refuses a conflicting `stream_id` with 409 at upload begin, before any
+upload URL exists**, so no bytes are sent. Runtime treats any 409 at checkpoint
+begin as a stream conflict. At completion a 409 also covers stale boundaries and
+payload mismatches, so runtime treats it as a stream conflict only when the body
+carries `{"code": "stream_conflict"}`; any other completion 409 is an ordinary
+failure retried at the next detach. Existing `POST /{update}/complete` carries the normal checksum,
 size and lease fields plus a typed `checkpoint` (`CheckpointPublication`), binding
 volume, stream, update ID, payload size/SHA-256, inclusive boundary and image
 size/SHA-256. Completion must:
 
 1. Authenticate the same writer lease and stream incarnation.
-2. Verify the uploaded payload's kind, size, SHA-256 and snapshot identity.
+2. Verify the uploaded payload's kind, size, MD5/CRC32C, and the snapshot
+   header's image size and SHA-256. The payload SHA-256 is the writer's claim:
+   cloud does not hash the whole payload within the completion deadline, so
+   runtime re-checks it on every download before using the bytes.
 3. Verify the inclusive boundary equals the committed stream head, with no
    unresolved upload or log gap. A local `log_horizon` is not sufficient proof.
 4. Activate the update and its recovery relationship atomically, preserving all
@@ -135,7 +146,7 @@ otherwise. An old cloud's refusal (unknown kind, 404, or no version
 acknowledgement) discards the staged checkpoint and disables checkpoints for the
 rest of the process.
 
-A stream conflict discards the staged checkpoint and records the refused local
+A stream conflict at begin or completion discards the staged checkpoint and records the refused local
 stream (empty for a legacy volume) in `accelerator-checkpoint-conflict`. Later
 detaches skip checkpoints while the stream file still matches it, including
 after a restart, so a full image is not uploaded on every detach only to be

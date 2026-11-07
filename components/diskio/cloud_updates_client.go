@@ -157,6 +157,9 @@ type beginUploadRequestJSON struct {
 	CRC32C          string `json:"crc32c,omitempty"`
 	Size            int64  `json:"size,omitempty"`
 	RecoveryVersion int    `json:"recovery_version,omitempty"`
+	// StreamID lets cloud refuse a conflicting checkpoint stream before any
+	// bytes are sent. It is set only for lbd_checkpoint.
+	StreamID string `json:"stream_id,omitempty"`
 }
 
 type beginUploadResponseJSON struct {
@@ -227,11 +230,13 @@ var (
 	errCheckpointStreamConflict = errors.New("cloud refused the checkpoint's stream")
 )
 
-// streamConflict reports a 409 that names a stream conflict. The code keeps it
-// apart from the existing lease-fencing 409, which a later attach can resolve.
-func streamConflict(err error) error {
+// streamConflict reports a checkpoint stream refusal. At begin, a 409 can only
+// mean the claimed stream_id conflicts: lease refusals are 403, and the ordering
+// key binds stream, boundary and bytes. A 409 at completion also covers stale
+// boundaries and payload mismatches, so there it counts only with the code.
+func streamConflict(err error, atBegin bool) error {
 	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok &&
-		httpErr.status == http.StatusConflict && httpErr.code == "stream_conflict" {
+		httpErr.status == http.StatusConflict && (atBegin || httpErr.code == "stream_conflict") {
 		return fmt.Errorf("%w: %v", errCheckpointStreamConflict, err)
 	}
 	return err
@@ -444,7 +449,7 @@ func (c *cloudUpdatesClient) CompleteUpload(ctx context.Context, prepared *prepa
 	}
 	if err := c.doJSON(ctx, "POST", prepared.completeURL, prepared.completion, out); err != nil {
 		if prepared.completion.Checkpoint != nil {
-			return "", streamConflict(err)
+			return "", streamConflict(err, false)
 		}
 		return "", err
 	}
@@ -480,6 +485,7 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 			return nil, fmt.Errorf("checkpoint upload requires recovery coverage and an owned lease")
 		}
 		claim.RecoveryVersion = AcceleratorRecoveryVersion
+		claim.StreamID = req.Checkpoint.StreamID
 	} else if req.Checkpoint != nil {
 		return nil, fmt.Errorf("checkpoint coverage requires lbd_checkpoint kind")
 	}
@@ -516,7 +522,7 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 		return nil, fmt.Errorf("%w: %v", errCheckpointUnsupported, err)
 	}
 	if req.Checkpoint != nil && err != nil {
-		return nil, streamConflict(err)
+		return nil, streamConflict(err, true)
 	}
 	if err != nil {
 		return nil, err
