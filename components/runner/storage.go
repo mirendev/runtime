@@ -94,6 +94,7 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	}
 	s.dmc = diskio.NewDiskMountController(log, dataPath, s.nodeId(), diskioState, mntOps)
 	s.dmc.SetEAC(eas)
+	s.dmc.SetCheckpointTimeout(s.config.AcceleratorCheckpointTimeout)
 	s.diskGC = &diskio.DeletedVolumeGC{
 		Log:      log.With("module", "deleted-volume-gc"),
 		DataPath: dataPath,

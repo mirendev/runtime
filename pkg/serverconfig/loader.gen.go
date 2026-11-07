@@ -218,6 +218,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Secrets.KeyRotationPeriod = flags.SecretsConfigKeyRotationPeriod
 	}
 
+	if flags.ServerConfigAcceleratorCheckpointTimeout != nil {
+		cfg.Server.AcceleratorCheckpointTimeout = flags.ServerConfigAcceleratorCheckpointTimeout
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}

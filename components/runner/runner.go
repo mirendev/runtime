@@ -66,6 +66,10 @@ type RunnerConfig struct {
 
 	// DiskMode configures disk I/O mode ("", "auto", "universal", "accelerator")
 	DiskMode string `json:"disk_mode,omitempty" cbor:"disk_mode,omitempty" yaml:"disk_mode,omitempty"`
+
+	// AcceleratorCheckpointTimeout bounds the checkpoint an accelerator disk
+	// uploads at detach while it holds the writer lease. Zero uses the default.
+	AcceleratorCheckpointTimeout time.Duration `json:"accelerator_checkpoint_timeout,omitempty" cbor:"accelerator_checkpoint_timeout,omitempty" yaml:"accelerator_checkpoint_timeout,omitempty"`
 }
 
 // RunnerDeps holds dependencies needed by the Runner to construct controllers.

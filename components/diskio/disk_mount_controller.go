@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,11 @@ type DiskMountController struct {
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
 	cloudClient   CloudDiskClient
 	updatesClient CloudUpdatesClient
+	// checkpointsUnsupported remembers an old cloud's refusal for this
+	// process, so later detaches do not compress an image just to be refused.
+	checkpointsUnsupported atomic.Bool
+	// checkpointTimeout bounds a detach checkpoint, which holds the lease.
+	checkpointTimeout time.Duration
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -61,6 +67,16 @@ func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.No
 		nodeId:   nodeId,
 		state:    state,
 		ops:      ops,
+
+		checkpointTimeout: DefaultCheckpointTimeout,
+	}
+}
+
+// SetCheckpointTimeout bounds the full-image checkpoint taken at detach, which
+// delays lease release and so failover. Non-positive values keep the default.
+func (c *DiskMountController) SetCheckpointTimeout(d time.Duration) {
+	if d > 0 {
+		c.checkpointTimeout = d
 	}
 }
 
@@ -362,7 +378,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		}
 		leaseNonce, acquisitionID = intent.LeaseNonce, intent.LeaseAcquisitionID
 
-		if rerr := c.replayMissingSegments(ctx, volState); rerr != nil {
+		if rerr := c.replayAccelerator(ctx, volState, leaseNonce); rerr != nil {
 			_ = c.cleanupMount(ctx, c.state.GetMount(entityId))
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to replay segments: %v", rerr))
 			return fmt.Errorf("failed to replay segments: %w", rerr)
@@ -755,6 +771,10 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 
 	// Detach device based on mode (use persisted mode from MountState)
 	var detachErr error
+	// Only an LBD detach in this call proves the image holds every logged
+	// write. A device that vanished (for example after a reboot) proves
+	// nothing about the local image, so it must not become a checkpoint.
+	lbdDetached := false
 	if mountState.DevicePath != "" {
 		mounted, err := c.ops.IsDeviceMounted(mountState.DevicePath)
 		if err != nil {
@@ -765,6 +785,8 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach lbd device", "error", err)
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
+			} else {
+				lbdDetached = true
 			}
 		} else {
 			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
@@ -789,6 +811,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	}
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
 		return err
+	}
+	if lbdDetached {
+		c.checkpointDetachedMount(ctx, mountState)
 	}
 
 	// Release cloud lease if one was acquired
