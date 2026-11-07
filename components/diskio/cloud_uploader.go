@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"hash/crc32"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"miren.dev/lbd"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -26,6 +28,16 @@ type CloudSegmentUploader struct {
 	log     *slog.Logger
 	updates CloudUpdatesClient
 	state   *State
+	leases  leaseHolderReader
+}
+
+type leaseHolderReader interface {
+	LeaseHolder(ctx context.Context, volumeID string) (string, error)
+}
+
+// SetLeaseReader lets the uploader recognize a tail fenced by a takeover.
+func (u *CloudSegmentUploader) SetLeaseReader(client CloudDiskClient) {
+	u.leases, _ = client.(leaseHolderReader)
 }
 
 func NewCloudSegmentUploader(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient, state *State) *CloudSegmentUploader {
@@ -92,7 +104,83 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 		}
 		defer unlock()
 	}
-	return u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
+	err := u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
+	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok && httpErr.status == http.StatusForbidden {
+		if parked, parkErr := u.parkFencedTail(ctx, volumeID, diskPath); parkErr != nil {
+			return errors.Join(err, parkErr)
+		} else if parked {
+			return nil
+		}
+	}
+	return err
+}
+
+// parkFencedTail handles a tail the cloud refused under this node's lease.
+// When another writer holds the volume's lease, the tail can never publish:
+// that writer took over from the cloud's history without it. Retrying would
+// only repeat the refusal forever and, through the pending-upload gate, keep
+// the volume from ever mounting or being deleted here.
+//
+// The tail is moved aside with the local image, which already holds its
+// writes, and the horizon and stream that describe that image. Nothing is
+// deleted, and a later mount here rebuilds from the cloud like a node with no
+// local history. A device still attached is left alone.
+//
+// The tail is also fenced with no current holder once the cloud's head is
+// past its newest segment: another writer published after all of it (and
+// has since released), and the cloud never activates a log below its head.
+// A tail this node itself left half published never meets that test, since
+// the head can only reach its own newest segment. Otherwise nothing changes:
+// the lease may only have been released, and the tail may still publish.
+func (u *CloudSegmentUploader) parkFencedTail(ctx context.Context, volumeID, diskPath string) (bool, error) {
+	if u.leases == nil {
+		return false, nil
+	}
+	if u.state != nil {
+		for _, mount := range u.state.ListMounts() {
+			if mount.CloudVolumeId == volumeID && (mount.DevicePath != "" || mount.Mounted) {
+				return false, nil
+			}
+		}
+	}
+	names, err := oldestSegments(ctx, filepath.Join(diskPath, "logs"))
+	if err != nil || len(names) == 0 {
+		return false, err
+	}
+	holder, err := u.leases.LeaseHolder(ctx, volumeID)
+	if err != nil {
+		return false, err
+	}
+	if holder == "" || holder == u.leaseNonceFor(volumeID) {
+		head, err := u.updates.List(ctx, volumeID, ListOptions{Kind: KindLBDLog, Descending: true, Limit: 1})
+		if err != nil || len(head) == 0 || head[0].OrderingKey <= lbd.LabelFromLogPath(names[len(names)-1]) {
+			return false, err
+		}
+	}
+	parked := filepath.Join(diskPath, "fenced-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.Mkdir(parked, 0o755); err != nil {
+		return false, err
+	}
+	for _, name := range []string{"logs", "disk.img", logHorizonFile, acceleratorStreamFile, checkpointIntentFile,
+		checkpointPayloadFile, checkpointPublishedFile, checkpointConflictFile, uploadTurnFile} {
+		if err := os.Rename(filepath.Join(diskPath, name), filepath.Join(parked, name)); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	if err := os.Mkdir(filepath.Join(diskPath, "logs"), 0o755); err != nil {
+		return false, err
+	}
+	if err := syncRecoveryDir(diskPath); err != nil {
+		return false, err
+	}
+	if u.state != nil {
+		if err := u.state.SetPendingCloudUpload(volumeID, ""); err != nil {
+			return false, err
+		}
+	}
+	u.log.Warn("another writer took over this volume; moved its unpublished local tail and image aside",
+		"volume_id", volumeID, "segments", len(names), "kept_in", parked)
+	return true, nil
 }
 
 func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {

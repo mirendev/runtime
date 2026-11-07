@@ -1223,3 +1223,83 @@ func TestUploadPipelineCoalescesSegments(t *testing.T) {
 	_, err = os.Stat(filepath.Join(diskPath, coalesceDir))
 	require.True(t, os.IsNotExist(err))
 }
+
+type stubLeaseHolder struct{ nonce string }
+
+func (s stubLeaseHolder) LeaseHolder(context.Context, string) (string, error) { return s.nonce, nil }
+
+// A tail refused because another writer took the volume over can never
+// publish. It is moved aside with the image it was applied to, so the volume
+// can mount (from the cloud) or be deleted here again; with no other holder,
+// or a device still attached, nothing is touched.
+func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
+	for _, c := range []struct {
+		name, holder string
+		attached     bool
+		parked       bool
+	}{
+		{"taken over", "other-writer", false, true},
+		{"lease released", "", false, false},
+		{"released after another writer published past the tail", "", false, true},
+		{"still attached", "other-writer", true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			head := "400000000000000100000001" // this node's own segment, half published
+			if strings.HasPrefix(c.name, "released after") {
+				head = "400000000000000200000000"
+			}
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/updates") {
+					json.NewEncoder(w).Encode(map[string]any{"updates": []map[string]any{{"update_id": "volup-head",
+						"kind": "lbd_log", "ordering_key": head, "size": 1}}})
+					return
+				}
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"error":"Invalid lease nonce"}`))
+			}
+			diskPath := t.TempDir()
+			logDir := filepath.Join(diskPath, "logs")
+			require.NoError(t, os.Mkdir(logDir, 0755))
+			state := NewState()
+			state.SetPath(diskPath)
+			require.NoError(t, state.SetVolumeAndSave("disk_volume/test", &VolumeState{DiskPath: diskPath, CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR}))
+			mount := &MountState{EntityId: "mount", VolumeId: "disk_volume/test", CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "mine", LeaseOwned: true}
+			if c.attached {
+				mount.DevicePath = "/dev/lbd0"
+			}
+			require.NoError(t, state.SetMountAndSave("mount", mount))
+			label := "400000000000000100000001"
+			path := filepath.Join(logDir, "disk."+label+".log")
+			require.NoError(t, os.WriteFile(path, buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(0, make([]byte, 4096))}), 0644))
+			for _, name := range []string{"disk.img", acceleratorStreamFile} {
+				require.NoError(t, os.WriteFile(filepath.Join(diskPath, name), []byte(name), 0644))
+			}
+			require.NoError(t, writeLogHorizon(diskPath, "400000000000000000000009"))
+
+			u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+			u.leases = stubLeaseHolder{c.holder}
+			err := u.UploadSegments(context.Background(), "vol-test", diskPath, []string{path}, func(string) error { return nil })
+			parked, globErr := filepath.Glob(filepath.Join(diskPath, "fenced-*"))
+			require.NoError(t, globErr)
+			if !c.parked {
+				require.Error(t, err)
+				require.Empty(t, parked)
+				require.FileExists(t, path)
+				require.True(t, state.HasPendingCloudUpload("vol-test"), "the tail is still owed to the cloud")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, parked, 1)
+			require.FileExists(t, filepath.Join(parked[0], "logs", "disk."+label+".log"), "the tail is kept, not deleted")
+			for _, name := range []string{"disk.img", acceleratorStreamFile, logHorizonFile} {
+				require.FileExists(t, filepath.Join(parked[0], name))
+				require.NoFileExists(t, filepath.Join(diskPath, name))
+			}
+			require.False(t, state.HasPendingCloudUpload("vol-test"), "the volume can mount or be deleted again")
+			fresh, err := freshAcceleratorVolume(context.Background(), state.GetVolume("disk_volume/test"))
+			require.NoError(t, err)
+			require.True(t, fresh, "the next mount rebuilds from the cloud, not the fenced image")
+		})
+	}
+}

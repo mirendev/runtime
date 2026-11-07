@@ -129,7 +129,9 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 				s.dmc.SetUpdatesClient(updates)
 				s.dvc.SetUpdatesClient(updates)
 				s.dvc.SetCloudVolumeRegistrar(diskio.NewCloudVolumeRegistrar(log, cloudURL, authClient), auth.ClusterID)
-				logUploader = diskio.NewCloudSegmentUploaderWithClient(log, updates, diskioState)
+				uploader := diskio.NewCloudSegmentUploaderWithClient(log, updates, diskioState)
+				uploader.SetLeaseReader(diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updates))
+				logUploader = uploader
 			}
 		}
 	}

@@ -173,6 +173,49 @@ func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitio
 	return leaseResp.Nonce, nil
 }
 
+// LeaseHolder returns the nonce of the volume's active lease, or "" when no
+// lease is active.
+func (c *cloudDiskClient) LeaseHolder(ctx context.Context, volumeID string) (string, error) {
+	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/volumes", volumeID, "lease")
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	token, err := c.authClient.Authenticate(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return "", nil
+	case http.StatusOK:
+	default:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("get lease failed with status %d: %s", resp.StatusCode, body)
+	}
+	var lease struct {
+		VolumeID string `json:"volume_id"`
+		Nonce    string `json:"nonce"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&lease); err != nil {
+		return "", err
+	}
+	if lease.VolumeID != volumeID || lease.Nonce == "" {
+		return "", fmt.Errorf("lease response does not describe volume %s", volumeID)
+	}
+	return lease.Nonce, nil
+}
+
 func (c *cloudDiskClient) ReleaseLease(ctx context.Context, volumeID string, nonce string) error {
 	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/volumes", volumeID, "lease")
 	if err != nil {
