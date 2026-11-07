@@ -1303,3 +1303,45 @@ func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
 		})
 	}
 }
+
+// A runtime from before coalescing may have begun a segment alone. The turn
+// holding it then uploads one segment at a time, matching the existing claim,
+// rather than conflicting with it forever under a coalesced object.
+func TestUploadPipelineCoalescingYieldsToEarlierClaims(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	h.handler = remote.ServeHTTP
+	diskPath := t.TempDir()
+	logDir := filepath.Join(diskPath, "logs")
+	require.NoError(t, os.Mkdir(logDir, 0755))
+	state := NewState()
+	state.SetPath(diskPath)
+	require.NoError(t, state.SetVolumeAndSave("disk_volume/test", &VolumeState{DiskPath: diskPath, CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR}))
+	a, b := "400000000000000100000001", "400000000000000100000002"
+	for i, label := range []string{a, b} {
+		e := makeWriteEntry(uint64(i), bytes.Repeat([]byte{byte(i + 1)}, 4096))
+		e.Sequence = uint64(i)
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+label+".log"), buildSegmentData(t, 4096, label, []lbd.Entry{e}), 0644))
+	}
+	u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+	_, err := u.UploadSegment(context.Background(), "vol-test", filepath.Join(logDir, "disk."+b+".log"))
+	require.NoError(t, err)
+
+	NewLogWatcher(slog.Default(), state, u, time.Second).scanAndUpload(context.Background())
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	require.Len(t, remote.rows, 2)
+	for _, label := range []string{a, b} {
+		_, err := os.Stat(filepath.Join(logDir, "disk."+label+".log"))
+		require.True(t, os.IsNotExist(err), "retired")
+		require.True(t, remote.rows[label].active, label)
+		rd, err := lbd.NewReader(bytes.NewReader(remote.rows[label].data))
+		require.NoError(t, err)
+		entries, err := rd.ReadAll()
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "each segment uploaded alone")
+	}
+	horizon, err := readLogHorizon(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, b, horizon)
+}

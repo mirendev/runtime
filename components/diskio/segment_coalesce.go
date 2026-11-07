@@ -30,6 +30,16 @@ import (
 // as a second, overlapping object.
 const uploadTurnFile = "accelerator-upload-turn"
 
+// singleTurnMarker, the first line of uploadTurnFile, makes a turn upload
+// each segment alone. A cloud object begun one segment at a time, as before
+// coalescing, conflicts with a coalesced object under its key; that turn
+// then uploads as it was begun.
+const singleTurnMarker = "single"
+
+// errCoalescedConflict means the cloud already holds a different object
+// under a coalesced object's key.
+var errCoalescedConflict = errors.New("coalesced segment conflicts with an existing cloud object")
+
 // coalesceDir holds coalesced objects while they upload.
 const coalesceDir = "upload-staging"
 
@@ -92,7 +102,7 @@ func scanSegment(path string) (*segmentScan, error) {
 // as one segment file under dir. Anything it cannot parse uploads alone, as
 // before. Grouping depends only on the segments, so a retried turn, or its
 // unretired suffix, produces the same objects.
-func coalesceSegments(dir string, paths []string) ([]uploadUnit, error) {
+func coalesceSegments(dir string, paths []string, single bool) ([]uploadUnit, error) {
 	var units []uploadUnit
 	var group []string
 	var scans []*segmentScan
@@ -126,6 +136,10 @@ func coalesceSegments(dir string, paths []string) ([]uploadUnit, error) {
 		return nil
 	}
 	for _, path := range paths {
+		if single {
+			units = append(units, uploadUnit{path: path, sources: []string{path}})
+			continue
+		}
 		s, err := scanSegment(path)
 		if err != nil || s.count == 0 || s.header.SegmentLabel != lbd.LabelFromLogPath(path) {
 			if err := flush(); err != nil {
@@ -153,39 +167,57 @@ func coalesceSegments(dir string, paths []string) ([]uploadUnit, error) {
 }
 
 // pinUploadTurn restricts paths to the turn recorded before a crash, if any
-// of it is still unretired, and records the turn otherwise.
-func pinUploadTurn(diskPath string, paths []string) ([]string, error) {
+// of it is still unretired, and records the turn otherwise. It reports
+// whether the turn uploads each segment alone.
+func pinUploadTurn(diskPath string, paths []string) ([]string, bool, error) {
 	file := filepath.Join(diskPath, uploadTurnFile)
 	data, err := os.ReadFile(file)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, err
+		return nil, false, err
 	}
 	if err == nil {
 		horizon, err := readLogHorizon(diskPath)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		fields := strings.Fields(string(data))
+		single := len(fields) > 0 && fields[0] == singleTurnMarker
+		if single {
+			fields = fields[1:]
 		}
 		var pinned []string
-		for _, label := range strings.Fields(string(data)) {
+		for _, label := range fields {
 			if label > horizon {
 				pinned = append(pinned, label)
 			}
 		}
 		if len(pinned) > 0 {
 			if len(paths) < len(pinned) {
-				return nil, fmt.Errorf("upload turn %v is missing local segments", pinned)
+				return nil, false, fmt.Errorf("upload turn %v is missing local segments", pinned)
 			}
 			for i, label := range pinned {
 				if lbd.LabelFromLogPath(paths[i]) != label {
-					return nil, fmt.Errorf("upload turn %v does not match local segments", pinned)
+					return nil, false, fmt.Errorf("upload turn %v does not match local segments", pinned)
 				}
 			}
-			return paths[:len(pinned)], nil
+			return paths[:len(pinned)], single, nil
 		}
 	}
 	labels := make([]string, len(paths))
 	for i, path := range paths {
 		labels[i] = lbd.LabelFromLogPath(path)
 	}
-	return paths, writeRecoveryFile(diskPath, uploadTurnFile, []byte(strings.Join(labels, "\n")))
+	return paths, false, writeRecoveryFile(diskPath, uploadTurnFile, []byte(strings.Join(labels, "\n")))
+}
+
+// markUploadTurnSingle makes the recorded turn upload each segment alone.
+func markUploadTurnSingle(diskPath string) error {
+	data, err := os.ReadFile(filepath.Join(diskPath, uploadTurnFile))
+	if err != nil {
+		return err
+	}
+	if fields := strings.Fields(string(data)); len(fields) > 0 && fields[0] == singleTurnMarker {
+		return nil
+	}
+	return writeRecoveryFile(diskPath, uploadTurnFile, append([]byte(singleTurnMarker+"\n"), data...))
 }

@@ -105,6 +105,14 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 		defer unlock()
 	}
 	err := u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
+	if errors.Is(err, errCoalescedConflict) {
+		u.log.Info("cloud already holds this turn's segments begun one at a time; uploading them that way",
+			"volume_id", volumeID, "error", err)
+		if err := markUploadTurnSingle(diskPath); err != nil {
+			return err
+		}
+		err = u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
+	}
 	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok && httpErr.status == http.StatusForbidden {
 		if parked, parkErr := u.parkFencedTail(ctx, volumeID, diskPath); parkErr != nil {
 			return errors.Join(err, parkErr)
@@ -143,9 +151,18 @@ func (u *CloudSegmentUploader) parkFencedTail(ctx context.Context, volumeID, dis
 			}
 		}
 	}
-	names, err := oldestSegments(ctx, filepath.Join(diskPath, "logs"))
-	if err != nil || len(names) == 0 {
+	entries, err := os.ReadDir(filepath.Join(diskPath, "logs"))
+	if err != nil {
 		return false, err
+	}
+	var names []string
+	for _, e := range entries {
+		if isValidTAI64NLabel(lbd.LabelFromLogPath(e.Name())) {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		return false, nil
 	}
 	holder, err := u.leases.LeaseHolder(ctx, volumeID)
 	if err != nil {
@@ -223,10 +240,11 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		if len(paths) == 0 {
 			return false, nil
 		}
-		if paths, err = pinUploadTurn(diskPath, paths); err != nil {
+		var single bool
+		if paths, single, err = pinUploadTurn(diskPath, paths); err != nil {
 			return false, err
 		}
-		units, err = coalesceSegments(diskPath, paths)
+		units, err = coalesceSegments(diskPath, paths, single)
 		if err != nil {
 			return false, err
 		}
@@ -319,6 +337,9 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 						}
 					}
 					return nil
+				}
+				if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](r.err); ok && httpErr.status == http.StatusConflict && len(units[i].sources) > 1 {
+					return fmt.Errorf("%w: preparing %s: %w", errCoalescedConflict, paths[i], r.err)
 				}
 				return fmt.Errorf("preparing %s: %w", paths[i], r.err)
 			}
