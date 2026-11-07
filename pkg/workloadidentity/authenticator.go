@@ -91,6 +91,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, creds *rpc.Credentials
 			"app":             boundApp,
 			"role":            claims.Role,
 			"workload_app":    claims.App,
+			"service":         claims.Service,
 			"sandbox_id":      claims.SandboxID,
 			"organization_id": claims.OrganizationID,
 			"cluster_id":      claims.ClusterID,

@@ -237,7 +237,7 @@ func (c *SandboxController) metricsPushEnabled() bool {
 }
 
 func (c *SandboxController) relayAuthenticator(remoteHost, secret string) (string, string, bool) {
-	sandboxID, appName, err := c.authenticateSandbox(remoteHost, secret)
+	sandboxID, appName, _, err := c.authenticateSandbox(remoteHost, secret)
 	return sandboxID, appName, err == nil
 }
 
@@ -271,9 +271,9 @@ func (c *SandboxController) repairTokenSecret(sandboxID string) bool {
 // refreshSandboxByIP re-derives an address's owner from the entity store, subject to the
 // per-address cooldown: a container retrying a bad token request in a loop must not turn
 // every failure into an entity-store scan.
-func (c *SandboxController) refreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+func (c *SandboxController) refreshSandboxByIP(ip string) (sandboxID, appName, service string, ok bool) {
 	if c.NetServ == nil || !c.lookupRefresh.allow(ip) {
-		return "", "", false
+		return "", "", "", false
 	}
 	return c.NetServ.RefreshSandboxByIP(ip)
 }
@@ -287,10 +287,10 @@ var (
 // address and the per-sandbox secret it presented. Every endpoint on the bridge
 // router that acts for a sandbox goes through here, so they all get the same
 // stale-mapping recovery rather than each deciding identity its own way.
-func (c *SandboxController) authenticateSandbox(remoteHost, secret string) (sandboxID, appName string, err error) {
-	sandboxID, appName, ok := c.NetServ.LookupSandboxByIP(remoteHost)
+func (c *SandboxController) authenticateSandbox(remoteHost, secret string) (sandboxID, appName, service string, err error) {
+	sandboxID, appName, service, ok := c.NetServ.LookupSandboxByIP(remoteHost)
 	if !ok {
-		return "", "", errUnknownSource
+		return "", "", "", errUnknownSource
 	}
 
 	if !c.verifyTokenSecret(sandboxID, secret) {
@@ -303,23 +303,23 @@ func (c *SandboxController) authenticateSandbox(remoteHost, secret string) (sand
 		// from, because nothing else would ever correct the mapping (MIR-1511). Re-derive
 		// the owner from the entity store and try once more, so a mapping that has gone
 		// wrong costs one rejected request instead of the life of the sandbox.
-		corrected, correctedApp, refreshed := c.refreshSandboxByIP(remoteHost)
+		corrected, correctedApp, correctedService, refreshed := c.refreshSandboxByIP(remoteHost)
 		if refreshed && corrected != sandboxID && !c.verifyTokenSecret(corrected, secret) {
 			c.repairTokenSecret(corrected)
 		}
 		if !refreshed || corrected == sandboxID || !c.verifyTokenSecret(corrected, secret) {
 			c.Log.Warn("sandbox request failed secret verification",
 				"source_ip", remoteHost, "resolved_sandbox", sandboxID, "resolved_app", appName)
-			return "", "", errBadSecret
+			return "", "", "", errBadSecret
 		}
 
 		c.Log.Warn("corrected stale sandbox address mapping",
 			"source_ip", remoteHost,
 			"stale_sandbox", sandboxID, "stale_app", appName,
 			"sandbox", corrected, "app", correctedApp)
-		sandboxID, appName = corrected, correctedApp
+		sandboxID, appName, service = corrected, correctedApp, correctedService
 	}
-	return sandboxID, appName, nil
+	return sandboxID, appName, service, nil
 }
 
 func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +341,7 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 	}
 	bearerToken := strings.TrimPrefix(authHeader, "Bearer ")
 
-	sandboxID, appName, err := c.authenticateSandbox(remoteHost, bearerToken)
+	sandboxID, appName, service, err := c.authenticateSandbox(remoteHost, bearerToken)
 	switch {
 	case errors.Is(err, errUnknownSource):
 		writeTokenError(w, http.StatusForbidden, "unknown source address")
@@ -351,7 +351,10 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	opts := workloadidentity.TokenOptions{}
+	// The service comes from the same address mapping as the app, never from
+	// the request: the audience parameter below is the only thing the caller
+	// chooses, and it names who the token is for, not who is holding it.
+	opts := workloadidentity.TokenOptions{Service: service}
 
 	if auds := r.URL.Query()["audience"]; len(auds) > 0 {
 		opts.Audience = auds

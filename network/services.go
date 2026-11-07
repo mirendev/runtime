@@ -181,35 +181,35 @@ func (sm *ServiceManager) RemoveSandboxMapping(sandboxID string) {
 }
 
 // LookupSandboxByIP searches across all bridge DNS servers for a sandbox matching the given IP.
-func (sm *ServiceManager) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+func (sm *ServiceManager) LookupSandboxByIP(ip string) (sandboxID, appName, service string, ok bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	for _, bs := range sm.bridges {
 		for _, server := range bs.dns {
-			if sandboxID, appName, ok = server.LookupSandboxByIP(ip); ok {
-				return sandboxID, appName, true
+			if sandboxID, appName, service, ok = server.LookupSandboxByIP(ip); ok {
+				return sandboxID, appName, service, true
 			}
 		}
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // RefreshSandboxByIP re-derives an address's owner from the entity store on every DNS
 // server, ignoring what they have cached, and returns the corrected answer. Every server
 // is refreshed rather than stopping at the first hit, so a mapping that has gone stale
 // cannot survive on one of them.
-func (sm *ServiceManager) RefreshSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+func (sm *ServiceManager) RefreshSandboxByIP(ip string) (sandboxID, appName, service string, ok bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	for _, bs := range sm.bridges {
 		for _, server := range bs.dns {
-			id, app, found := server.RefreshSandboxByIP(ip)
+			id, app, svc, found := server.RefreshSandboxByIP(ip)
 			if found && !ok {
-				sandboxID, appName, ok = id, app, true
+				sandboxID, appName, service, ok = id, app, svc, true
 			}
 		}
 	}
-	return sandboxID, appName, ok
+	return sandboxID, appName, service, ok
 }

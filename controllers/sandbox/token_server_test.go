@@ -99,6 +99,7 @@ func TestTokenServer_DefaultToken(t *testing.T) {
 
 	claims := token.Claims.(*workloadidentity.WorkloadClaims)
 	assert.Equal(t, "myapp", claims.App)
+	assert.Equal(t, "web", claims.Service, "service comes from the caller's address mapping")
 	assert.Equal(t, testSandboxID, claims.SandboxID)
 	assert.Equal(t, "org-test", claims.OrganizationID)
 	assert.Equal(t, jwt.ClaimStrings{"miren"}, claims.Audience)
