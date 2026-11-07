@@ -11,12 +11,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // These assert the wire shapes the cloud actually expects, so a drift on either
@@ -216,6 +219,46 @@ func TestCloudUpdatesClientUploadSurfacesServerFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "409")
 	assert.Contains(t, err.Error(), "already exists")
+}
+
+// After cloud rotates its signing key, the cached token is refused until a
+// fresh one is fetched. A 401 must drop it so the next request re-authenticates
+// instead of failing until the old token expires.
+func TestCloudUpdatesClientReauthenticatesAfterUnauthorized(t *testing.T) {
+	var authentications, apiCalls atomic.Int32
+	auth := &testAPIHandler{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/auth/service-account/complete") {
+			authentications.Add(1)
+		}
+		if strings.HasPrefix(r.URL.Path, "/auth/") {
+			auth.ServeHTTP(w, r)
+			return
+		}
+		apiCalls.Add(1)
+		// Only tokens issued after the rotation (the second authentication) are valid.
+		if authentications.Load() < 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"UNAUTHORIZED"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{})
+	}))
+	t.Cleanup(ts.Close)
+	kp, err := cloudauth.GenerateKeyPair()
+	require.NoError(t, err)
+	authClient, err := cloudauth.NewAuthClient(ts.URL, kp)
+	require.NoError(t, err)
+
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+	_, err = client.List(context.Background(), "vol-1", ListOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+
+	_, err = client.List(context.Background(), "vol-1", ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), authentications.Load())
+	assert.Equal(t, int32(2), apiCalls.Load())
 }
 
 func TestCloudUpdatesClientListFiltersAndPaginates(t *testing.T) {

@@ -304,6 +304,16 @@ func (c *cloudUpdatesClient) authorize(ctx context.Context, req *http.Request) e
 	return nil
 }
 
+// invalidateOnUnauthorized drops the cached token when cloud rejects it, so the
+// caller's next retry authenticates again. Without this a token cloud no longer
+// accepts, such as after a signing-key rotation, is reused until it expires and
+// every disk upload, lease and registration fails in the meantime.
+func invalidateOnUnauthorized(authClient *cloudauth.AuthClient, resp *http.Response) {
+	if resp.StatusCode == http.StatusUnauthorized && authClient != nil {
+		authClient.InvalidateToken()
+	}
+}
+
 // jsonRequestTimeout bounds each small control request. Payload bytes travel
 // only through the PUT, which is bounded by uploadStallTimeout instead.
 const jsonRequestTimeout = 2 * time.Minute
@@ -358,6 +368,7 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 		return fmt.Errorf("request to %s failed: %w", apiURL, err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		return updateHTTPError(resp)

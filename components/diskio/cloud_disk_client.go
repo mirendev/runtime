@@ -124,6 +124,7 @@ func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitio
 		return "", fmt.Errorf("failed to acquire lease: %w", err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -179,6 +180,7 @@ func (c *cloudDiskClient) ReleaseLease(ctx context.Context, volumeID string, non
 		return fmt.Errorf("failed to release lease: %w", err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
