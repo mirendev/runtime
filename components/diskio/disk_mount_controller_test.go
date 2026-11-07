@@ -1439,3 +1439,30 @@ func TestDiskMountCleanupDropsStaleLbdClaim(t *testing.T) {
 	require.Empty(t, ops.detachedLbds, "the other volume's device stays attached")
 	require.Empty(t, ops.unmounts)
 }
+
+// Hard kill, reboot, redeploy: the old mount entity's record still names
+// /dev/lbd0, which no longer exists, while another node's takeover left this
+// node's tail pending and fenced. Attaching drops the dead claim before its
+// upload gate, so the uploader can park the tail instead of both waiting
+// forever (hill A, vol-h36ckcotfyzf, soak1).
+func TestDiskMountAttachDropsStaleLbdClaim(t *testing.T) {
+	dir := t.TempDir()
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	image := filepath.Join(dir, "c", "disk.img")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "c", "logs"), 0755))
+	state.SetVolume("volume", &VolumeState{EntityId: "volume", CloudVolumeId: "cloud", DiskPath: filepath.Dir(image), Mode: storage_v1alpha.VM_ACCELERATOR})
+	state.SetMount("crashed", &MountState{EntityId: "crashed", VolumeId: "volume", CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR,
+		DevicePath: "/dev/lbd0", BackingPath: image, MountPath: "/var/lib/miren/disks/c", Mounted: true, LeaseNonce: "dead", LeaseOwned: true})
+	require.NoError(t, state.SetPendingCloudUpload("cloud", "uploading"))
+	ops := newMockDiskMountOps()
+	controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+	controller.SetCloudClient(&mockCloudDiskClient{})
+
+	mount := &storage_v1alpha.DiskMount{ID: "redeployed", VolumeId: "volume", MountPath: "/var/lib/miren/disks/c", DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.ErrorContains(t, controller.Reconcile(t.Context(), mount, nil), "pending cloud upload", "the tail is still unresolved")
+	ms := state.GetMount("crashed")
+	require.Empty(t, ms.DevicePath, "the rebooted-away device is no longer claimed")
+	require.False(t, ms.Mounted)
+	require.Equal(t, "dead", ms.LeaseNonce, "cleanup still owes the old lease its release")
+}

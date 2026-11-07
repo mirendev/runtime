@@ -327,6 +327,16 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		return fmt.Errorf("volume %s changed while waiting for cloud lock", volumeId)
 	}
 	volState = current
+	// A crashed attachment's record, for this or an older mount entity, can
+	// claim a device the reboot removed; that claim would keep the uploader
+	// from parking a fenced tail and so hold the gate below shut forever.
+	for _, ms := range c.state.ListMounts() {
+		if c.cloudVolumeIdFor(ms) == volState.CloudVolumeId {
+			if err := c.dropStaleLbdClaim(ms); err != nil {
+				return err
+			}
+		}
+	}
 	if c.state.HasPendingCloudUpload(volState.CloudVolumeId) {
 		return fmt.Errorf("volume %s has a pending cloud upload", volumeId)
 	}
@@ -694,21 +704,13 @@ func (c *DiskMountController) unmountAndDetach(ctx context.Context, mount *stora
 	return c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHED, &clearPath, &clearPath, &clearErr)
 }
 
-// cleanupMount persists each successful step independently so retries, orphan
-// cleanup and attach rollback cannot repeat a completed release or detach.
-// The caller holds the cloud-volume lock.
-func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *MountState) error {
+// dropStaleLbdClaim clears an accelerator mount record's claim on a device
+// that is gone or now backs another image. A record that outlived a crash or
+// reboot keeps naming its old device; the claim alone would block both the
+// pending-upload gates (cleanup and attach) and the uploader parking a fenced
+// tail, each waiting on the other.
+func (c *DiskMountController) dropStaleLbdClaim(mountState *MountState) error {
 	entityId := mountState.EntityId
-	// The record may have progressed while this caller waited for an upload.
-	mountState = c.state.GetMount(entityId)
-	if mountState == nil {
-		return nil
-	}
-	cloudID := c.cloudVolumeIdFor(mountState)
-	// A record that outlived a crash or reboot may name a device that is gone
-	// or now backs another volume's image. Drop that claim before the upload
-	// gate below: the claim alone would block both this cleanup and the
-	// uploader parking a fenced tail, each waiting on the other.
 	if mountState.Mode == storage_v1alpha.VM_ACCELERATOR && mountState.DevicePath != "" && mountState.BackingPath != "" {
 		backing, err := c.ops.DeviceBacking(mountState.DevicePath)
 		if err != nil {
@@ -736,6 +738,23 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// cleanupMount persists each successful step independently so retries, orphan
+// cleanup and attach rollback cannot repeat a completed release or detach.
+// The caller holds the cloud-volume lock.
+func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *MountState) error {
+	entityId := mountState.EntityId
+	// The record may have progressed while this caller waited for an upload.
+	mountState = c.state.GetMount(entityId)
+	if mountState == nil {
+		return nil
+	}
+	cloudID := c.cloudVolumeIdFor(mountState)
+	if err := c.dropStaleLbdClaim(mountState); err != nil {
+		return err
 	}
 	if c.state.MountSuperseded(entityId) {
 		// Draining here would upload the live mount's segments under a dead
