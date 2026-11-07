@@ -214,8 +214,12 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 	}
 	selected := paths
 	var units []uploadUnit
+	// A turn pinned before a restart may cover only a prefix of paths. The
+	// rest follows in later turns of this call: callers treat a nil return as
+	// every path published, and advance past all of them.
+	var rest []string
 	defer os.RemoveAll(filepath.Join(diskPath, coalesceDir))
-	return u.withCloudUploadLocked(volumeID, func() (bool, error) {
+	err := u.withCloudUploadLocked(volumeID, func() (bool, error) {
 		// Mount replay may have advanced the horizon while this batch waited
 		// for the volume lock. Never publish writes now covered by replay.
 		horizon, err := readLogHorizon(diskPath)
@@ -241,9 +245,11 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 			return false, nil
 		}
 		var single bool
+		all := paths
 		if paths, single, err = pinUploadTurn(diskPath, paths); err != nil {
 			return false, err
 		}
+		rest = all[len(paths):]
 		units, err = coalesceSegments(diskPath, paths, single)
 		if err != nil {
 			return false, err
@@ -444,6 +450,10 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		}
 		return nil
 	})
+	if err != nil || len(rest) == 0 {
+		return err
+	}
+	return u.uploadSegmentsLocked(ctx, volumeID, diskPath, rest, committed)
 }
 
 func (u *CloudSegmentUploader) withCloudUpload(ctx context.Context, volumeID string, preflight func() (bool, error), upload func() error, retire func() error) error {

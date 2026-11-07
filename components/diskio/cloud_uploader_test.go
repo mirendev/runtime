@@ -1345,3 +1345,53 @@ func TestUploadPipelineCoalescingYieldsToEarlierClaims(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, b, horizon)
 }
+
+// A restarted server resumes the turn it recorded before stopping, which may
+// cover only the start of the watcher's batch. The rest of that batch must
+// still publish: once a later batch moves the horizon past it, it can never
+// be uploaded again (r08c lost 34 entries this way across a restart).
+func TestUploadPipelineResumedTurnPublishesRestOfBatch(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	h.handler = remote.ServeHTTP
+	diskPath := t.TempDir()
+	logDir := filepath.Join(diskPath, "logs")
+	require.NoError(t, os.Mkdir(logDir, 0755))
+	state := NewState()
+	state.SetPath(diskPath)
+	require.NoError(t, state.SetVolumeAndSave("disk_volume/test", &VolumeState{DiskPath: diskPath, CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR}))
+	const n = uploadWindow + 8
+	labels := make([]string, n)
+	for i := range n {
+		labels[i] = fmt.Sprintf("4000000000000001%08x", i+1)
+		e := makeWriteEntry(uint64(i), bytes.Repeat([]byte{byte(i + 1)}, 4096))
+		e.Sequence = uint64(i)
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+labels[i]+".log"), buildSegmentData(t, 4096, labels[i], []lbd.Entry{e}), 0644))
+	}
+	// The previous process recorded a turn of the first two segments only.
+	require.NoError(t, writeRecoveryFile(diskPath, uploadTurnFile, []byte(labels[0]+"\n"+labels[1])))
+
+	u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+	for range 4 {
+		NewLogWatcher(slog.Default(), state, u, time.Second).scanAndUpload(context.Background())
+	}
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	seen := map[uint64]bool{}
+	for key, row := range remote.rows {
+		require.True(t, row.active, key)
+		rd, err := lbd.NewReader(bytes.NewReader(row.data))
+		require.NoError(t, err)
+		entries, err := rd.ReadAll()
+		require.NoError(t, err)
+		for _, e := range entries {
+			seen[e.Sequence] = true
+		}
+	}
+	for i := range uint64(n) {
+		require.True(t, seen[i], "sequence %d never reached the cloud", i)
+	}
+	left, err := os.ReadDir(logDir)
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
