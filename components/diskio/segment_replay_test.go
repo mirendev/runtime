@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 
@@ -48,6 +49,10 @@ func (m *mockCloudDiskClient) AcquireLease(_ context.Context, volumeID string) (
 }
 
 func (m *mockCloudDiskClient) AcquireLeaseWithIdentity(ctx context.Context, volumeID, _ string) (string, error) {
+	return m.AcquireLease(ctx, volumeID)
+}
+
+func (m *mockCloudDiskClient) TakeOverLease(ctx context.Context, volumeID, _ string, _ time.Time) (string, error) {
 	return m.AcquireLease(ctx, volumeID)
 }
 

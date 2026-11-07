@@ -630,6 +630,7 @@ const (
 	DiskVolumeErrorMessageId            = entity.Id("dev.miren.storage/disk_volume.error_message")
 	DiskVolumeFilesystemId              = entity.Id("dev.miren.storage/disk_volume.filesystem")
 	DiskVolumeImagePathId               = entity.Id("dev.miren.storage/disk_volume.image_path")
+	DiskVolumeLeaseTakeoverBeforeId     = entity.Id("dev.miren.storage/disk_volume.lease_takeover_before")
 	DiskVolumeMountIdId                 = entity.Id("dev.miren.storage/disk_volume.mount_id")
 	DiskVolumeNameId                    = entity.Id("dev.miren.storage/disk_volume.name")
 	DiskVolumeNodeIdId                  = entity.Id("dev.miren.storage/disk_volume.node_id")
@@ -643,22 +644,23 @@ const (
 )
 
 type DiskVolume struct {
-	ID                entity.Id              `json:"id"`
-	ActualState       DiskVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
-	CloudVolumeId     string                 `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
-	DesiredState      DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
-	DiskId            entity.Id              `cbor:"disk_id" json:"disk_id"`
-	ErrorMessage      string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Filesystem        string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	ImagePath         string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
-	MountId           string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
-	Name              string                 `cbor:"name,omitempty" json:"name,omitempty"`
-	NodeId            entity.Id              `cbor:"node_id" json:"node_id"`
-	RestoreFromVolume string                 `cbor:"restore_from_volume,omitempty" json:"restore_from_volume,omitempty"`
-	RestoreUntil      string                 `cbor:"restore_until,omitempty" json:"restore_until,omitempty"`
-	SizeGb            int64                  `cbor:"size_gb" json:"size_gb"`
-	VolumeId          string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
-	VolumeMode        DiskVolumeVolumeMode   `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
+	ID                  entity.Id              `json:"id"`
+	ActualState         DiskVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
+	CloudVolumeId       string                 `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
+	DesiredState        DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
+	DiskId              entity.Id              `cbor:"disk_id" json:"disk_id"`
+	ErrorMessage        string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	Filesystem          string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	ImagePath           string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
+	LeaseTakeoverBefore string                 `cbor:"lease_takeover_before,omitempty" json:"lease_takeover_before,omitempty"`
+	MountId             string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
+	Name                string                 `cbor:"name,omitempty" json:"name,omitempty"`
+	NodeId              entity.Id              `cbor:"node_id" json:"node_id"`
+	RestoreFromVolume   string                 `cbor:"restore_from_volume,omitempty" json:"restore_from_volume,omitempty"`
+	RestoreUntil        string                 `cbor:"restore_until,omitempty" json:"restore_until,omitempty"`
+	SizeGb              int64                  `cbor:"size_gb" json:"size_gb"`
+	VolumeId            string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
+	VolumeMode          DiskVolumeVolumeMode   `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
 }
 
 type DiskVolumeActualState string
@@ -717,6 +719,9 @@ func (o *DiskVolume) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(DiskVolumeImagePathId); ok && a.Value.Kind() == entity.KindString {
 		o.ImagePath = a.Value.String()
+	}
+	if a, ok := e.Get(DiskVolumeLeaseTakeoverBeforeId); ok && a.Value.Kind() == entity.KindString {
+		o.LeaseTakeoverBefore = a.Value.String()
 	}
 	if a, ok := e.Get(DiskVolumeMountIdId); ok && a.Value.Kind() == entity.KindString {
 		o.MountId = a.Value.String()
@@ -782,6 +787,9 @@ func (o *DiskVolume) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ImagePath) {
 		attrs = append(attrs, entity.String(DiskVolumeImagePathId, o.ImagePath))
 	}
+	if !entity.Empty(o.LeaseTakeoverBefore) {
+		attrs = append(attrs, entity.String(DiskVolumeLeaseTakeoverBeforeId, o.LeaseTakeoverBefore))
+	}
 	if !entity.Empty(o.MountId) {
 		attrs = append(attrs, entity.String(DiskVolumeMountIdId, o.MountId))
 	}
@@ -830,6 +838,9 @@ func (o *DiskVolume) Empty() bool {
 	if !entity.Empty(o.ImagePath) {
 		return false
 	}
+	if !entity.Empty(o.LeaseTakeoverBefore) {
+		return false
+	}
 	if !entity.Empty(o.MountId) {
 		return false
 	}
@@ -873,6 +884,7 @@ func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("error_message", "dev.miren.storage/disk_volume.error_message", schema.Doc("Error details if actual_state is error"))
 	sb.String("filesystem", "dev.miren.storage/disk_volume.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs)"))
 	sb.String("image_path", "dev.miren.storage/disk_volume.image_path", schema.Doc("Path to backing image file"))
+	sb.String("lease_takeover_before", "dev.miren.storage/disk_volume.lease_takeover_before", schema.Doc("RFC 3339 time an operator decided this volume's previous writer is gone; acquiring its cloud lease breaks a lease granted before then (empty for none)"))
 	sb.String("mount_id", "dev.miren.storage/disk_volume.mount_id", schema.Doc("Override for the mount point directory name (defaults to entity suffix if empty)"))
 	sb.String("name", "dev.miren.storage/disk_volume.name", schema.Doc("Human-readable name for the volume (from parent disk)"))
 	sb.Ref("node_id", "dev.miren.storage/disk_volume.node_id", schema.Doc("Node where this volume should be provisioned"), schema.Required, schema.Indexed)
@@ -900,5 +912,5 @@ func init() {
 		(&DiskMount{}).InitSchema(sb)
 		(&DiskVolume{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacX͒\xe3&\x10~\x90\xcd\xcf\xcedw\x93\xccl45Uy\x1f\n\x9b\x96\x8c%\xc0#\xb0\xa2\xc95\x97T.y\x87\x1dצ\xf2\x829\xa7h@\xc22F\xcc\xd6^\\\xfc|\xdfGC7\xdd\x16'&\xa9\x80'\x06C%x\x0f\xb2\xd2F\xf5\xb4\x01h\xb9d\xfa4\xbe\xb9\x98y\xb03\x15\xe3\xba\xfd\x8c\xdc\xe1\x12a'\x9d\xc0\x7f5S\x82ry\xb9@]s\xe8\x98\xfe\xf3e\xc3\xd9x\x93֨\xb6=P\x03\x8cl\x9eq\xa9}\xd47\xcf\a\xd8pv\xca\xd1kށ~\xd6\x06\x84\xa3G}Kg \x8f\xa2\xb5?d\xa0\xdd\x11\xf4\xcbv\xac\xf5\xf8\xf6Rm&Vc\xad\x19\x8c\xe6\xd7\xf1&\v\xb3\x10ؘ\xbe\xd6\xe3m\x16\x88\x18\xdcE\xe2\xa8\xf1\x10\x84b\x80\xf63l%-\xffď\x92\x0f\xd0kڥ\xec\xb7\xc4jB\xb4t\xbb\x85\x0ezjT\x9f\xb2\x0e\xd1\x11\xe6%g\x1d\x1a6\xffX\xebjmz.\x1b\xa4%\xe4\x91փP\x06\x88\x92\x9dsm\x1b\x0fX\x11\xb6Q\xaaC\x89\xef\xaeHh\xfe;\x90f\x83\xf4&t,u˥\xc1\x13\xfd\xf6\x1a\xd3Ps\xd4H\xac};y\xaa\xff\x00\xf4\xbd\xeaS\x168Z\x85\xf3;j\f\xdd\xee \x19\x88\x1e\x18 ;\x06\x1d\x18.\x9b\f6@v\fVu\x03\x84\xf7`g\xac\xf0\xedU\xf0\x84i\x0f\xbd\x1a\xb8\xe6J\x02\x1b\xdf]\xc5G\xa8nj\xdb%ޯSB\x00$\xa2\x11}0\xa8\xee(\x80p\x86n\xe0s7\x8a\xa0\xc6F4W\xb2\x19\x1eiw\xd8\xd1\xee\xd0sA\xfbgbs\v\xb32\xe3M&?\x91\x0e\xa8\x06\x97\xa5\xc6o\xd2v8̫\x92\xd5O9\xa5\x8an\x9f\x8e\xbc\aF\xa8\xc1\x85\xdbx\xc0\xee\x8d\x19.\x00\x85~\xc8\v\x1d\x0e\xe1tj\xdf\xf69\x0f\xc9\xef\xb2d\xd4\xf1\xec&tb\xfa]\x96\x8eaM\x04hM\x1b\x97{\xc4\xf9P\xe4\xa4S\xe6\x9a{9\xa1\x8eҝ\x06\xb8\xa6\xa5\xf3\xad\x12\a%A\x9a\xb9\xe5}u\xa9\x16\xf9\xb3B\x89B\x8f\xfd\x81g\xf5\xfd\xc5\xf4\x03\x8aT\xea`\xb8\x92.\x134\xa1\x13\xed\rى\xc8q\xec\x035;\xa42l-y\x89\xd0t\xbc\x1e(\x9b3\x1f\x9f\xbbS\xde\xcb\x06\xbe;Â \x90\x8aM\x17\xac\t\x9d8\b~\xcc\xd25\x95l\xa3Ơ\xb0\x8f\xfa^\xe4\xb4\x1eť\xa9\xf6\x04\x1bu\x94\xc9d\xef3\v\xce\xd75\xe5\x1d$=\xeaa\x0e\xd0\x1c@2\x9b\xa9\xde^\x05zĮ\a\f\xab\\\x92\r\x90\xac[\xf6\xf3\xae\xf3Y\tݷ\x92\x95^\x13\xe3\x7f\xa1\x1b~\xce)Utk\x8e\xb4#\xf6\x8c\xdc}\xee\xceF\x92.\xf9w\xc7\x04\xc1k\x9f\n\x94\x98_\x05\xe0\x9e\t\xb7 $\rZr<Բ\x82\xbf\nX\x1e\xda2A\xa6\xc2{\xb7N\vX\xcbcP\xce\v\xd86\x18l\xcd,\xe0\x05l7\xadm\x89\xf7\xeb\xc4\t\xdcM\xab\x172'\xb0`\x82\x1c\xe5d\xed\xc7u\xea\x8c>\xe5\xca\x03\x82*\x06\x1a+\xda\x1cN\xe2|(\x19O\x9f\x14\x13\xe47*\xcd\x14\"\x0f\x89Ub\x9djAx\n}o-\xb0\xf1\xb1Tb\xa2dkx\xd8\xdf\xc0\xb7@\xa6\xfc\xde\xc6\x03\xcb4\xbfrTSR\byT\xccyb\x99\x8f\xf3R\xaf)\xca\x05\x9b\xec\x94:\x10\xb71\xb7\xc9x`)u\xadR8\xcb\xf0w>\xae}\xd4_\n]\xabXHY\xafX\x1f\xb2\xf4\xf5\xc2Z \x92\xfdc\xba\xe1%E\x0073\xde技[\xc5W\x81+\xdf)\x1eTX\x06\xfe\xce^\\'\xf5Eu\xe0\xf3\x8e\r\xa5u\xc0\x03-\xc3:㹄\x81\xc0=\x1b\b~\xf7\x94T\x8e\tjYŕc\x82\xb6l \xf8\x92P\x94\xc9gl\x1b\x16.\xe4\x05,\x06\xdd/y\xc7l;ud\xe4<\xf6\xd4r0\xbaL\xe8\xec\xfb\xbc\xe6\x17\xa6i\xce\x06B7\x1a\xa4I\x9d\xe9\x99B5A\xd1\x13=\xd8\xe6xW\xc0\xf2X<\x9a\xf7+\xdbX\xfb\x96Y9\x86\xaf\x967\xbd\xdeʫ\xd2+\x94\xb8\xa0MTf\xf6Q\x7f\xa9\xf4!\xaf\x84\x19'\x1c\xd2n\xea-Un\xf3*+o9+~ZMޏy\xbe{\x9d\x00R\xf7J\xf814F\xa7&\x96\xb6ݗiۿ8\x1d\xaa\x8a\xf3\xa1W\xee5\xfb\xf6\x94\xad\x98^ [e\xbc!\xd9\xff\xf5\xe7:\xd3\x1ba\x1b\x0f\xa4\xefw7\b2\xbd\x05\xa6.k$Q\xc5X9\b\x12?\x1d~\\\xa5F\xe8l\xd9l\xa3--\x81\xadީ\xde L\x9fܣϛLe-\xfe\fCH\\\xaf\xd7?\xdab3K\xca\xfb\xff\x00\x00\x00\xff\xff\x03\x00e\xacT\x11]\x17\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacX\xcdr\xe4&\x10~\x90\xcd\xcf\xda\xd9\xdd$\xf6F.W\xf2>\x143\xb44\x8c\x04Ȁ\x149\xd7\\R9\xe5\x19\xd6S\x9b\xca\v朢\x11\x12\xa3a\x90\xbc\x95\x8b\x8a\x9f\xef\xfbh\xe8V\xb7ĉI*\xe0\x89A_\b\xaeA\x16\xc6*M+\x80\x9aKfNÛ\x8b\x99\a7S0n\xea\xcf\xc8\xed/\x11n\xd2\v\xfc[2%(\x97\x97\v\x94%\x87\x86\x99?^v\x9c\r7i\x8db\xaf\x81Z`d\xf7\x8cK\x1d\xa3\xbe}na\xc7\xd9)G/y\x03\xe6\xd9X\x10\x9e\x1e\xf5\x1d\x9d\x81\xecD\xed\x1e\xa4\xa7M\a\xe6e?\x94fx{\xa96\x13\x8b\xa14\f\x06\xfb\xcbp\x93\x859\b\xec\xac.\xcdp\x9b\x05\"\x06w\x918j<\x04\xa1\x18\xa0\xfd\f[I\xcb?\xf1N\xf2\x1e\xb4\xa1M\xca~G,&DM\xf7{h@S\xabt\xca:DG\x98\x97\x9cuh\xd8\xfcp֕\xc6j.+\xa4%䑦A(\vD\xc9ƻ\xb6\x8e\a\x9c\b\xdb)ՠ\xc47W$\f\xff\rH\xb5Cz\x15:\x8e\xba\xe7\xd2\xe2\x89~}\x8di\xa9\xed\f\x12˱\x9d<տ\x01\xb4V:e\x81\xa7\x158\x7f\xa0\xd6\xd2\xfd\x01\x92\x818\x02\x03\xe4\xc0\xa0\x01\xcbe\x95\xc1\x06ȁ\xc1\xaan\x80p\rn\xc6\t\xdf^\x05O\x98\xbaժ\xe7\x86+\tlxw\x15\x1f\xa1\x9a\xa9\xed\x96x\xbfN\t\x01\x90\x88F\xf4A\xaf\x9aN\x00\xe1\f\xdd\xc0\xe7n\x14A\x95\x8bh\xaed\xd5?Ҧ=Ц\xd5\\P\xfdL\\naNf\xb8\xc9\xe4'\xd2\x005\xe0\xb3\xd4\xf0U\xda\x0e\x8fyU\xb2\xfa!\xa7T\xd0\xfdS\xc750B-.\\\xc7\x03no\xccr\x01(\xf4]^\xa8m\xc3\xe9\x94c{\xccyH~\x97%\xa3\xceȮB'\xa6\xdfe\xe9\x18\xd6D\x801\xb4\xf2\xb9G\x9c\x0fEN:e^\xf3QN\xa8N\xfa\xd3\x00\xdftt\xbeW\xa2U\x12\xa4\x9d[\xa3\xaf.\xd5\"\x7f\x16(\xb1\xd1c\xbf\xe3Y}{1\xfd\x80\"\x85j-W\xd2g\x82*t\xa2\xbd!;\x119\x9e\xddR{@*\xc3֒\x97\bM\xcf\xd3@ٜ\xf9\xf8ܝ\xf2^6\xf0\xfd\x19n\b\x02\xa9\xd8\xf4\x82U\xa1\x13\a\xc1\xf7Y\xba\xa1\x92\xed\xd4\x10\x14\x8eQ\x7f\x149\xadG\xf1\xd6T{\x82\x9d\xead2ُ\x99\x05\xe7˒\xf2\x06\x92\x1e\x1da\x1eP\xb5 \x99\xcbTo\xaf\x02G\xc4A\x03\x86U.\xc9\x06H\xd6-\xc7y\xd7\xf9\xac\x84\xee[\xc9J\xaf\x89\xf1?\xd1\r?\xe6\x94\n\xba\xb7\x1dm\x88;#\xff>7g#I\x97\xfcs`\x82\xe0k\x9f\n\x94\x98_\x04\xe0\x91\t\xbf $\rZrF\xa8c\x05\x7fm`\x8dК\t2\x15\u07bbuZ\xc0:\x1e\x83\xed\xbc\x80\xad\x83\xc1\xce\xcc\r\xbc\x80m\xa6\xb5\x1d\xf1~\x9d8\x81\x9bi\xf5\x8d\xcc\t,\x98 \x9d\x9c\xac\xfd\xb8N\x9dѧ\\y@P\xc1\xc0`E\x9b\xc3I\x9c\x0f%\xe3\xe9\x93b\x82\xfcJ\xa5\x9dB\xe4!\xb1J\xacS,\bO\xa1?Z\vlx\xdc*1Q\xb25<\xec\xaf\xe7{ S~\xaf\xe3\x81e\x9a_9\xaa))\x84<*\xe6<\xb1\xcc\xc7y\xa9\xd7\x14\xe5\r\x9bl\x94j\x89ߘ\xdfd<\xb0\x94\xbaV)\xbce\xf8\x9c\x8f\xeb\x18\xf5\x97B\xd7*\x16R\xd6+և,}\xbd\xb0n\x10\xc9~\x98\xee\xf8\x96\"\x80\x9b\x19nsE\xc0\xaf2V\x81+\xff)#hc\x19\xf8+\xfb\xe2z\xa9/\xaa\x03\x9f\x0f\xac\xdfZ\aF\xa0c8g<oa \xf0\xc8z\x82\xff=[*\xc7\x04u\xac͕c\x82֬'x\x93\xb0)\x93\xcf\xd8:,\xbc\x91\x17\xb0\x18t?\xe5\x1d\xb3oT\xc7\xc8y\xec\xa9\xe5`\xf42\xa1\xb3\xef\xf3\x9a_\x98\xa69\xeb\t\xdd\x19\x906u\xa6g\n\xc5\x04EOhp\xcd\xe1n\x03k\xc4\xe2Ѽ_\xd9\xc6ڿ\xcc\xca1\xfcoys\xd4[\xb9Uz\x85\x12\x17\xb4\x8a\xca\xcc1\xea/\x95~\xce+\xf9\nci\r\xaa\aMvP*\xed\xf7ڥ\xa7\x96\xfa\x1f\xf2\xfa\x98т\x13\x0eSo\xa9r\x9bWY\xb9+Z\x89\x83\xd5\xe2\xf0\x98\xe7\xfb\xdb\x0f \xa5Vb\x1cCcLjbi\xdb\xfd6m\xf7\tՠ\xaa8\x1fz\xe5^\xb3w[ي<\nd\xab\xd8hH\xf6\xbf\xe1\\g\xba\x83\xac\xe3\x81t\xfehzA\xa6\xbb\xc6T2\x88$\x8a\x18+{A\xe2\xabɏ\xab\xd4\b\x9d-\xcbu\xb4\xa5%\xb06\a\xa5-\xc2\xcc\xc9_*\xbd\xc9T\xeeͿy\b\x89\xbf\a\xd6\x7f\nc3\xb7|>\xfc\a\x00\x00\xff\xff\x03\x00\x1b%G\x8d\xbd\x17\x00\x00"))
 }

@@ -871,7 +871,17 @@ func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountSt
 	if err := c.state.SetMountAndSave(ms.EntityId, ms); err != nil {
 		return err
 	}
-	nonce, err := c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
+	var nonce string
+	var err error
+	if v := c.state.GetVolume(ms.VolumeId); v != nil && v.TakeOverBefore != "" {
+		before, perr := time.Parse(time.RFC3339Nano, v.TakeOverBefore)
+		if perr != nil {
+			return fmt.Errorf("invalid lease takeover time %q: %w", v.TakeOverBefore, perr)
+		}
+		nonce, err = c.cloudClient.TakeOverLease(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID, before)
+	} else {
+		nonce, err = c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
+	}
 	if errors.Is(err, ErrLeaseAcquisitionEnded) {
 		ms.LeaseAcquisitionID = ""
 		if saveErr := c.state.SetMountAndSave(ms.EntityId, ms); saveErr != nil {

@@ -66,6 +66,11 @@ type VolumeState struct {
 	RestoreFrom  string `json:"restore_from,omitempty"`
 	RestoreUntil string `json:"restore_until,omitempty"`
 
+	// TakeOverBefore is when an operator decided the volume's previous
+	// writer is gone (RFC 3339). Acquiring the cloud lease then breaks a lease
+	// granted before it, never one granted after.
+	TakeOverBefore string `json:"take_over_before,omitempty"`
+
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
 

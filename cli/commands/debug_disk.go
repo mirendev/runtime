@@ -103,6 +103,10 @@ func DebugDiskCreate(ctx *Context, opts struct {
 // as one written by another (possibly lost) cluster in the same organization.
 // Its first mount rebuilds the image from the cloud's protected checkpoint and
 // log tail and continues that volume's stream.
+//
+// --takeover declares the volume's current writer gone: the mount breaks a
+// cloud lease granted before now, fencing that writer, instead of waiting for
+// a release that will never come. Use it only when the old cluster is lost.
 func DebugDiskAdopt(ctx *Context, opts struct {
 	ConfigCentric
 	Name        string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
@@ -110,14 +114,23 @@ func DebugDiskAdopt(ctx *Context, opts struct {
 	Size        int    `short:"s" long:"size" description:"Size of the cloud volume in GB" required:"true"`
 	Filesystem  string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
 	Node        string `long:"node" description:"Node the volume lives on" default:"node/miren"`
+	Takeover    bool   `long:"takeover" description:"The volume's previous writer is lost: break any cloud lease granted before now, fencing it"`
 }) error {
+	var takeover string
+	if opts.Takeover {
+		takeover = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
 		v.CloudVolumeId = opts.CloudVolume
+		v.LeaseTakeoverBefore = takeover
 	})
 	if err != nil {
 		return err
 	}
 	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
+	if takeover != "" {
+		ctx.Info("Its mount will take over any cloud lease granted before %s", takeover)
+	}
 	return nil
 }
 
