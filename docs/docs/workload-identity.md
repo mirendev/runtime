@@ -148,8 +148,8 @@ its sandboxes can do exactly that: `app-deployer`, `app-debugger`, and
 `app-admin` within their own app, and `cluster-deployer`, `cluster-debugger`,
 and `cluster-admin` in every app on the cluster. So rely on `service` only when
 the app runs as `app-readonly` (the default) or `none`, and no app on the
-cluster runs under a cluster role other than `cluster-readonly`. The same holds
-for `app`.
+cluster runs under a cluster role other than `cluster-readonly`. That last
+condition applies to `app` too, since a cluster role can act as any app.
 See [In-Cluster API Access](./in-cluster-api.md) for the roles.
 
 The `sub` (subject) encodes the workload's identity as a path-like string, omitting any empty parts:
