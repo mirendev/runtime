@@ -1147,3 +1147,79 @@ func TestUploadPipelinePublicationNegotiationAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+// lbd closes a segment per flush. Consecutive segments of one attachment
+// upload as one object under the last label, with their entries intact; a new
+// attachment (sequences restart) starts a new object. A turn retried after a
+// crash rebuilds the same objects, never a wider overlapping one.
+func TestUploadPipelineCoalescesSegments(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	h.handler = remote.ServeHTTP
+	diskPath := t.TempDir()
+	logDir := filepath.Join(diskPath, "logs")
+	require.NoError(t, os.Mkdir(logDir, 0755))
+	state := NewState()
+	state.SetPath(diskPath)
+	require.NoError(t, state.SetVolumeAndSave("disk_volume/test", &VolumeState{DiskPath: diskPath, CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR}))
+	segment := func(label string, first uint64, n int) {
+		var entries []lbd.Entry
+		for i := range n {
+			e := makeWriteEntry(first+uint64(i), bytes.Repeat([]byte{byte(first) + byte(i) + 1}, 4096))
+			e.Sequence, e.TimestampNS = first+uint64(i), first+uint64(i)+1
+			entries = append(entries, e)
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+label+".log"), buildSegmentData(t, 4096, label, entries), 0644))
+	}
+	a, b, c, d := "400000000000000100000001", "400000000000000100000002", "400000000000000100000003", "400000000000000100000004"
+	segment(a, 0, 3)
+	segment(b, 3, 2)
+	segment(c, 0, 1) // a new attachment restarts sequences
+	u := NewCloudSegmentUploader(slog.Default(), ts.URL, auth, state)
+	crash := errors.New("crash before retirement")
+	paths := []string{filepath.Join(logDir, "disk."+a+".log"), filepath.Join(logDir, "disk."+b+".log"), filepath.Join(logDir, "disk."+c+".log")}
+	require.ErrorIs(t, u.UploadSegments(context.Background(), "vol-test", diskPath, paths, func(string) error { return crash }), crash)
+
+	entriesOf := func(key string) []uint64 {
+		remote.mu.Lock()
+		row := remote.rows[key]
+		remote.mu.Unlock()
+		require.NotNil(t, row, key)
+		require.True(t, row.active, key)
+		rd, err := lbd.NewReader(bytes.NewReader(row.data))
+		require.NoError(t, err)
+		require.Equal(t, key, rd.Header.SegmentLabel)
+		var seqs []uint64
+		for {
+			e, err := rd.Next()
+			if err == io.EOF {
+				return seqs
+			}
+			require.NoError(t, err)
+			require.True(t, e.ValidateCRC())
+			seqs = append(seqs, e.Sequence)
+		}
+	}
+	require.Len(t, remote.rows, 2)
+	require.Equal(t, []uint64{0, 1, 2, 3, 4}, entriesOf(b))
+	require.Equal(t, []uint64{0}, entriesOf(c))
+
+	// More of the same attachment arrives before the retry. The retry keeps
+	// the recorded turn; the new segment uploads in a turn of its own.
+	segment(d, 1, 1)
+	NewLogWatcher(slog.Default(), state, u, time.Second).scanAndUpload(context.Background())
+	NewLogWatcher(slog.Default(), state, u, time.Second).scanAndUpload(context.Background())
+	require.Len(t, remote.rows, 3)
+	require.Equal(t, []uint64{0}, entriesOf(c), "the retried turn rebuilt the same object")
+	require.Equal(t, []uint64{1}, entriesOf(d))
+	entries, err := os.ReadDir(logDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	horizon, err := readLogHorizon(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, d, horizon)
+	_, err = os.Stat(filepath.Join(diskPath, uploadTurnFile))
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(diskPath, coalesceDir))
+	require.True(t, os.IsNotExist(err))
+}

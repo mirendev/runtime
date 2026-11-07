@@ -108,6 +108,8 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		previous = label
 	}
 	selected := paths
+	var units []uploadUnit
+	defer os.RemoveAll(filepath.Join(diskPath, coalesceDir))
 	return u.withCloudUploadLocked(volumeID, func() (bool, error) {
 		// Mount replay may have advanced the horizon while this batch waited
 		// for the volume lock. Never publish writes now covered by replay.
@@ -130,7 +132,21 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		if n != len(paths) {
 			return false, fmt.Errorf("upload batch exceeds the preparation byte budget")
 		}
-		return len(paths) > 0, nil
+		if len(paths) == 0 {
+			return false, nil
+		}
+		if paths, err = pinUploadTurn(diskPath, paths); err != nil {
+			return false, err
+		}
+		units, err = coalesceSegments(diskPath, paths)
+		if err != nil {
+			return false, err
+		}
+		paths = make([]string, len(units))
+		for i, unit := range units {
+			paths[i] = unit.path
+		}
+		return true, nil
 	}, func() error {
 		staged, ok := u.updates.(stagedUpdatesClient)
 		if !ok {
@@ -293,10 +309,29 @@ func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeI
 		}
 		return nil
 	}, func() error {
+		// Segments the horizon already covered retire as before.
 		for _, path := range selected {
+			if len(units) > 0 && path >= units[0].sources[0] {
+				break
+			}
 			if err := committed(path); err != nil {
 				return err
 			}
+		}
+		// A unit's last segment advances the horizon over all of it first, so
+		// a crash leaves the rest covered by the horizon, never half retired.
+		for _, unit := range units {
+			if err := committed(unit.last()); err != nil {
+				return err
+			}
+			for _, path := range unit.sources[:len(unit.sources)-1] {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+			}
+		}
+		if err := os.Remove(filepath.Join(diskPath, uploadTurnFile)); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 		return nil
 	})
