@@ -111,6 +111,16 @@ The selection fails closed unless the `recovery` object repeats the requested
 after `until` is flagged `boundary` and ends the tail. A session without
 `until` must flag no row.
 
+The base is not filtered, and its `through_label` is when its last segment
+opened, not when it closed. The cloud only picks a base whose last segment had
+closed by `until`: either a later log opened at or before `until`, or the
+checkpoint, built only from closed segments, was activated by then. The runtime
+can check the first proof (the first tail row is labelled at or before
+`until`) but not the second, because the manifest carries no activation time.
+So it relies on the cloud for this. Requiring the first proof alone would
+refuse valid points, such as one shortly after a detach checkpoint with no
+log after it yet.
+
 ## Checkpoint production and publication
 
 Checkpoints are taken after unmount, successful LBD detach, and final-log drain,
