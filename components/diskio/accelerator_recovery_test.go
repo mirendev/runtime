@@ -133,9 +133,15 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.completeOnlyStreamCheck && s.manifest.Status == "ready" && claim.StreamID != s.manifest.StreamID {
-			// Matches MIR-2185: a plain 409 with no code, before any upload URL.
 			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte(`{"error":"volume has a different accelerator stream"}`))
+			w.Write([]byte(`{"error":"volume has a different accelerator stream","code":"stream_conflict"}`))
+			return
+		}
+		if s.checkpointFault == "plain-409-begin" {
+			// cloud#370 also refuses duplicate keys, constraint violations and
+			// differing payloads or metadata with a plain 409.
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"an update already exists for this ordering key"}`))
 			return
 		}
 		var response beginUploadResponseJSON
@@ -1460,4 +1466,31 @@ func TestAcceleratorAdoptsLbdThatOutlivedServer(t *testing.T) {
 	cloud.mockCloudServer.mu.Lock()
 	require.Len(t, cloud.leases, 1)
 	cloud.mockCloudServer.mu.Unlock()
+}
+
+func TestAcceleratorPlainBeginConflictIsAnOrdinaryFailure(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x5C}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.mu.Lock()
+	cloud.checkpointFault = "plain-409-begin"
+	cloud.mu.Unlock()
+	mountAndDetach(t, c, v)
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile), "a plain 409 is not a stream conflict")
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointPayloadFile), "the refused bytes are discarded")
+	cloud.mockCloudServer.mu.Lock()
+	require.Empty(t, cloud.leases)
+	cloud.mockCloudServer.mu.Unlock()
+
+	// The next detach checkpoints normally once the cloud accepts the claim.
+	cloud.mu.Lock()
+	cloud.checkpointFault = ""
+	cloud.mu.Unlock()
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.Equal(t, 1, checkpointClaims(cloud))
 }

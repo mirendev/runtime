@@ -110,11 +110,13 @@ of the process, so a v1 cloud must reject an invalid checkpoint claim with
 another status, such as 422. Lease refusals are 403.
 
 **Cloud refuses a conflicting `stream_id` with 409 at upload begin, before any
-upload URL exists**, so no bytes are sent. Runtime treats any 409 at checkpoint
-begin as a stream conflict. At completion a 409 also covers stale boundaries and
-payload mismatches, so runtime treats it as a stream conflict only when the body
-carries `{"code": "stream_conflict"}`; any other completion 409 is an ordinary
-failure retried at the next detach. Existing `POST /{update}/complete` carries the normal checksum,
+upload URL exists**, so no bytes are sent. At both begin and completion, runtime
+treats a 409 as a stream conflict only when the body carries
+`{"code": "stream_conflict"}`. A plain 409 also covers duplicate ordering keys or
+snapshot names, constraint violations, and differing payloads or metadata, so it
+is an ordinary best-effort failure: no persistent skip, the lease is released,
+and at begin the staged bytes are discarded so the next detach restages them.
+Existing `POST /{update}/complete` carries the normal checksum,
 size and lease fields plus a typed `checkpoint` (`CheckpointPublication`), binding
 volume, stream, update ID, payload size/SHA-256, inclusive boundary and image
 size/SHA-256. Completion must:
