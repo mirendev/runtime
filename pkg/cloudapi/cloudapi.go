@@ -115,6 +115,40 @@ func (c *Client) ClusterOnline(ctx context.Context, clusterXID string) (bool, er
 	return response.Online, nil
 }
 
+// VolumeLease is a volume lease cloud granted to a cluster on an admin's behalf.
+type VolumeLease struct {
+	LeaseID   string `json:"lease_id"`
+	VolumeID  string `json:"volume_id"`
+	Nonce     string `json:"nonce"`
+	ClusterID string `json:"cluster_id"`
+}
+
+// TakeOverVolumeLease breaks a volume lease granted before `before`, fencing
+// its writer, and grants a new one to the cluster's service account. Only an
+// organization admin may; the caller hands the returned nonce to the cluster,
+// which then writes under it with its own credentials.
+func (c *Client) TakeOverVolumeLease(ctx context.Context, orgXID, volumeXID, clusterXID, acquisitionID string, before time.Time) (*VolumeLease, error) {
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/organizations", orgXID, "volumes", volumeXID, "lease/takeover")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.request(ctx, listTimeout, http.MethodPost, endpoint, map[string]any{
+		"acquisition_id": acquisitionID, "take_over_before": before, "cluster_id": clusterXID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var lease VolumeLease
+	if err := json.NewDecoder(resp.Body).Decode(&lease); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if lease.Nonce == "" || lease.VolumeID != volumeXID || lease.ClusterID != clusterXID {
+		return nil, fmt.Errorf("cloud did not grant volume %s's lease to cluster %s", volumeXID, clusterXID)
+	}
+	return &lease, nil
+}
+
 func (c *Client) get(ctx context.Context, timeout time.Duration, out any, pathParts ...string) error {
 	endpoint, err := url.JoinPath(c.baseURL, pathParts...)
 	if err != nil {

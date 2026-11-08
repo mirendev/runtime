@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -104,9 +106,10 @@ func DebugDiskCreate(ctx *Context, opts struct {
 // Its first mount rebuilds the image from the cloud's protected checkpoint and
 // log tail and continues that volume's stream.
 //
-// --takeover declares the volume's current writer gone: the mount breaks a
-// cloud lease granted before now, fencing that writer, instead of waiting for
-// a release that will never come. Use it only when the old cluster is lost.
+// --takeover declares the volume's current writer gone. As an organization
+// admin, it breaks the cloud lease granted before now, fencing that writer,
+// and has cloud grant the lease to this cluster instead of waiting for a
+// release that will never come. Use it only when the old cluster is lost.
 func DebugDiskAdopt(ctx *Context, opts struct {
 	ConfigCentric
 	Name        string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
@@ -114,24 +117,77 @@ func DebugDiskAdopt(ctx *Context, opts struct {
 	Size        int    `short:"s" long:"size" description:"Size of the cloud volume in GB" required:"true"`
 	Filesystem  string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
 	Node        string `long:"node" description:"Node the volume lives on" default:"node/miren"`
-	Takeover    bool   `long:"takeover" description:"The volume's previous writer is lost: break any cloud lease granted before now, fencing it"`
+	Takeover    bool   `long:"takeover" description:"The volume's previous writer is lost: as an organization admin, break any cloud lease granted before now, fencing it, and grant the lease to this cluster"`
 }) error {
-	var takeover string
+	var nonce string
 	if opts.Takeover {
-		takeover = time.Now().UTC().Format(time.RFC3339Nano)
+		var err error
+		if nonce, err = takeOverVolumeLease(ctx, opts.CloudVolume); err != nil {
+			return fmt.Errorf("taking over the cloud lease of %s: %w", opts.CloudVolume, err)
+		}
 	}
 	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
 		v.CloudVolumeId = opts.CloudVolume
-		v.LeaseTakeoverBefore = takeover
+		v.LeaseTakeoverNonce = nonce
 	})
 	if err != nil {
+		if nonce != "" {
+			ctx.Warn("This cluster now holds the cloud lease of %s; run the command again to adopt it", opts.CloudVolume)
+		}
 		return err
 	}
 	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
-	if takeover != "" {
-		ctx.Info("Its mount will take over any cloud lease granted before %s", takeover)
+	if nonce != "" {
+		ctx.Info("Its mount writes under the cloud lease taken over for this cluster")
 	}
 	return nil
+}
+
+// takeOverVolumeLease has cloud break volume's lease and grant it to the
+// selected cluster, authenticating as the logged-in user, who must be an admin
+// of the cluster's organization. It returns the new lease's nonce.
+func takeOverVolumeLease(ctx *Context, volume string) (string, error) {
+	if ctx.clusterErr != nil {
+		return "", ctx.unknownClusterError()
+	}
+	cluster := ctx.ClusterConfig
+	if cluster == nil || ctx.ClientConfig == nil {
+		return "", fmt.Errorf("--takeover needs a selected cluster; use --cluster or 'miren cluster switch'")
+	}
+	if cluster.XID == "" {
+		return "", fmt.Errorf("cluster %q has no Cloud ID; add a Cloud-registered cluster with 'miren cluster add'", ctx.ClusterName)
+	}
+	identityName, err := pickCloudIdentity(ctx, ctx.ClientConfig, cluster.Identity, "")
+	if err != nil {
+		return "", err
+	}
+	identity, err := lookupIdentity(ctx.ClientConfig, identityName)
+	if err != nil {
+		return "", err
+	}
+	client, err := cloudClient(ctx.ClientConfig, identityName, identity)
+	if err != nil {
+		return "", err
+	}
+	clusters, err := client.ListClusters(ctx)
+	if err != nil {
+		return "", err
+	}
+	var org string
+	for _, c := range clusters {
+		if c.XID == cluster.XID {
+			org = c.OrganizationXID
+		}
+	}
+	if org == "" {
+		return "", fmt.Errorf("cluster %q (%s) is not visible to identity %q", ctx.ClusterName, cluster.XID, identityName)
+	}
+	lease, err := client.TakeOverVolumeLease(ctx, org, volume, cluster.XID, uuid.NewString(), time.Now())
+	if err != nil {
+		return "", err
+	}
+	ctx.Info("Took over the cloud lease of %s for cluster %q (lease %s)", volume, ctx.ClusterName, lease.LeaseID)
+	return lease.Nonce, nil
 }
 
 // DebugDiskRewind creates a new disk holding another accelerator cloud

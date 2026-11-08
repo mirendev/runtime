@@ -66,10 +66,10 @@ type VolumeState struct {
 	RestoreFrom  string `json:"restore_from,omitempty"`
 	RestoreUntil string `json:"restore_until,omitempty"`
 
-	// TakeOverBefore is when an operator decided the volume's previous
-	// writer is gone (RFC 3339). Acquiring the cloud lease then breaks a lease
-	// granted before it, never one granted after.
-	TakeOverBefore string `json:"take_over_before,omitempty"`
+	// TakeOverNonce is a cloud lease an organization admin took over for this
+	// cluster from a lost writer. The next mount writes under it instead of
+	// acquiring a lease, and consumes it: once released, it is never reused.
+	TakeOverNonce string `json:"take_over_nonce,omitempty"`
 
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
@@ -393,6 +393,23 @@ func (s *State) DeleteVolumeAndSave(entityId string) error {
 	defer s.mu.Unlock()
 	delete(s.Volumes, entityId)
 	return s.saveLocked()
+}
+
+// AdoptTakeoverLeaseAndSave gives mount the lease handed to its volume by a
+// takeover and consumes the handoff in the same save, so a crash can neither
+// lose the lease nor reuse its nonce after release. It reports false, without
+// saving, when there is no handoff.
+func (s *State) AdoptTakeoverLeaseAndSave(mount *MountState) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.Volumes[mount.VolumeId]
+	if v == nil || v.TakeOverNonce == "" {
+		return false, nil
+	}
+	mount.LeaseNonce, mount.LeaseOwned = v.TakeOverNonce, true
+	v.TakeOverNonce = ""
+	s.Mounts[mount.EntityId] = mount
+	return true, s.saveLocked()
 }
 
 // GetMount returns a copy of a mount state by entity ID

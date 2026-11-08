@@ -1000,17 +1000,16 @@ func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountSt
 	if err := c.state.SetMountAndSave(ms.EntityId, ms); err != nil {
 		return err
 	}
-	var nonce string
-	var err error
-	if v := c.state.GetVolume(ms.VolumeId); v != nil && v.TakeOverBefore != "" {
-		before, perr := time.Parse(time.RFC3339Nano, v.TakeOverBefore)
-		if perr != nil {
-			return fmt.Errorf("invalid lease takeover time %q: %w", v.TakeOverBefore, perr)
+	// An admin's takeover already granted this cluster the lease; the
+	// cluster's own credentials cannot break another writer's.
+	if adopted, err := c.state.AdoptTakeoverLeaseAndSave(ms); err != nil || adopted {
+		if err == nil {
+			c.log.Info("writing under the cloud lease an admin took over for this cluster", "volume_id", c.cloudVolumeIdFor(ms))
+			c.clearTakeoverHandoff(ctx, ms.VolumeId)
 		}
-		nonce, err = c.cloudClient.TakeOverLease(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID, before)
-	} else {
-		nonce, err = c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
+		return err
 	}
+	nonce, err := c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
 	if errors.Is(err, ErrLeaseAcquisitionEnded) {
 		ms.LeaseAcquisitionID = ""
 		if saveErr := c.state.SetMountAndSave(ms.EntityId, ms); saveErr != nil {
@@ -1023,6 +1022,21 @@ func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountSt
 	}
 	ms.LeaseNonce, ms.LeaseOwned = nonce, true
 	return c.state.SetMountAndSave(ms.EntityId, ms)
+}
+
+// clearTakeoverHandoff removes a consumed takeover nonce from the volume
+// entity, so rebuilding this volume's state from it cannot hand the released
+// lease out again. The local state already consumed it, so failure only warns.
+func (c *DiskMountController) clearTakeoverHandoff(ctx context.Context, volumeEntityID string) {
+	if c.eac == nil {
+		return
+	}
+	if _, err := c.eac.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, entity.Id(volumeEntityID)),
+		entity.String(storage_v1alpha.DiskVolumeLeaseTakeoverNonceId, ""),
+	}, 0); err != nil {
+		c.log.Warn("failed to clear the consumed lease takeover from the volume", "volume", volumeEntityID, "error", err)
+	}
 }
 
 func diskMountActualStateToId(state storage_v1alpha.DiskMountActualState) entity.Id {

@@ -256,17 +256,17 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			return c.createVolume(ctx, volume)
 		}
 		volState := &VolumeState{
-			EntityId:       entityId,
-			VolumeId:       localVolumeID(volume),
-			CloudVolumeId:  volume.CloudVolumeId,
-			Name:           volume.Name,
-			DiskPath:       volumePath,
-			SizeBytes:      units.GigaBytes(volume.SizeGb).Bytes().Int64(),
-			Filesystem:     volume.Filesystem,
-			Mode:           volume.VolumeMode,
-			RestoreFrom:    volume.RestoreFromVolume,
-			RestoreUntil:   volume.RestoreUntil,
-			TakeOverBefore: volume.LeaseTakeoverBefore,
+			EntityId:      entityId,
+			VolumeId:      localVolumeID(volume),
+			CloudVolumeId: volume.CloudVolumeId,
+			Name:          volume.Name,
+			DiskPath:      volumePath,
+			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
+			Filesystem:    volume.Filesystem,
+			Mode:          volume.VolumeMode,
+			RestoreFrom:   volume.RestoreFromVolume,
+			RestoreUntil:  volume.RestoreUntil,
+			TakeOverNonce: volume.LeaseTakeoverNonce,
 		}
 		c.state.SetVolume(entityId, volState)
 		if err := c.state.Save(); err != nil {
@@ -382,15 +382,15 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		// Empty until the disk controller registers this volume in the cloud,
 		// which happens on reconcile so an unreachable cloud does not block
 		// creating the disk.
-		CloudVolumeId:  volume.CloudVolumeId,
-		Name:           volume.Name,
-		DiskPath:       volumePath,
-		SizeBytes:      sizeBytes,
-		Filesystem:     volume.Filesystem,
-		Mode:           volume.VolumeMode,
-		RestoreFrom:    volume.RestoreFromVolume,
-		RestoreUntil:   volume.RestoreUntil,
-		TakeOverBefore: volume.LeaseTakeoverBefore,
+		CloudVolumeId: volume.CloudVolumeId,
+		Name:          volume.Name,
+		DiskPath:      volumePath,
+		SizeBytes:     sizeBytes,
+		Filesystem:    volume.Filesystem,
+		Mode:          volume.VolumeMode,
+		RestoreFrom:   volume.RestoreFromVolume,
+		RestoreUntil:  volume.RestoreUntil,
+		TakeOverNonce: volume.LeaseTakeoverNonce,
 	}
 	c.state.SetVolume(entityId, volState)
 

@@ -62,8 +62,8 @@ type recoveryCloud struct {
 	source *RecoveryManifest
 	// boundaryFault breaks a point-in-time selection's until or boundary.
 	boundaryFault string
-	// takeovers records take_over_before of each lease takeover request.
-	takeovers []time.Time
+	// acquisitions counts lease acquisitions by the runtime.
+	acquisitions int
 }
 
 func newRecoveryCloud(t *testing.T) (*recoveryCloud, *DiskMountController, *VolumeState) {
@@ -88,20 +88,15 @@ func newRecoveryCloud(t *testing.T) (*recoveryCloud, *DiskMountController, *Volu
 }
 
 func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(r.URL.Path, "/lease/acquire") || strings.HasSuffix(r.URL.Path, "/lease/takeover") {
+	if strings.HasSuffix(r.URL.Path, "/lease/acquire") {
 		var request acquireLeaseRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if takeover := strings.HasSuffix(r.URL.Path, "/lease/takeover"); takeover != (request.TakeOverBefore != nil) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		} else if takeover {
-			s.mu.Lock()
-			s.takeovers = append(s.takeovers, *request.TakeOverBefore)
-			s.mu.Unlock()
-		}
+		s.mu.Lock()
+		s.acquisitions++
+		s.mu.Unlock()
 		s.mockCloudServer.mu.Lock()
 		s.leases["vol"] = &activeLease{Nonce: "nonce"}
 		s.mockCloudServer.mu.Unlock()
@@ -1355,18 +1350,27 @@ func TestAcceleratorRewindRefusesUnboundedSelection(t *testing.T) {
 	}
 }
 
-// An adopted volume marked for takeover acquires its lease through the
-// takeover route, carrying the operator's decision time, so a writer that
-// died holding the lease no longer blocks the mount.
-func TestAcceleratorMountTakesOverLeaseWhenMarked(t *testing.T) {
+// An admin's takeover grants this cluster the lease of a volume whose writer
+// is lost; the cluster cannot break it itself. The mount writes under that
+// lease instead of acquiring one, and only once: after it is released, the
+// next mount acquires a lease of its own.
+func TestAcceleratorMountWritesUnderTakenOverLease(t *testing.T) {
 	cloud, c, v := newRecoveryCloud(t)
 	v.DiskPath = t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, v.SizeBytes), 0600))
-	decided := time.Date(2026, 11, 7, 6, 0, 0, 123, time.UTC)
-	v.TakeOverBefore = decided.Format(time.RFC3339Nano)
+	cloud.mockCloudServer.mu.Lock()
+	cloud.leases["vol"] = &activeLease{Nonce: "taken"}
+	cloud.mockCloudServer.mu.Unlock()
+	v.TakeOverNonce = "taken"
 	mountAndDetach(t, c, v)
-	require.Len(t, cloud.takeovers, 1)
-	require.True(t, decided.Equal(cloud.takeovers[0]))
+	require.Zero(t, cloud.acquisitions)
+	require.Empty(t, c.state.GetVolume(v.EntityId).TakeOverNonce)
+	cloud.mockCloudServer.mu.Lock()
+	require.Nil(t, cloud.leases["vol"], "the taken-over lease is released at detach")
+	cloud.mockCloudServer.mu.Unlock()
+
+	mountAndDetach(t, c, c.state.GetVolume(v.EntityId))
+	require.Equal(t, 1, cloud.acquisitions)
 }
 
 // A disk that stays attached gets hourly checkpoints rebuilt from the cloud's

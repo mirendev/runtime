@@ -26,9 +26,6 @@ type LogSegmentInfo struct {
 type CloudDiskClient interface {
 	AcquireLease(ctx context.Context, volumeID string) (nonce string, err error)
 	AcquireLeaseWithIdentity(ctx context.Context, volumeID, acquisitionID string) (nonce string, err error)
-	// TakeOverLease is AcquireLeaseWithIdentity that also breaks a lease
-	// granted before the given time, fencing a writer an operator declared gone.
-	TakeOverLease(ctx context.Context, volumeID, acquisitionID string, before time.Time) (nonce string, err error)
 	ReleaseLease(ctx context.Context, volumeID string, nonce string) error
 	// ListLogSegments returns the volume's log segments whose TAI64N label
 	// sorts after `after`. Passing the caller's replay horizon keeps the server
@@ -69,9 +66,8 @@ func NewCloudDiskClientWithUpdates(log *slog.Logger, baseURL string, authClient 
 }
 
 type acquireLeaseRequest struct {
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	AcquisitionID  string         `json:"acquisition_id,omitempty"`
-	TakeOverBefore *time.Time     `json:"take_over_before,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	AcquisitionID string         `json:"acquisition_id,omitempty"`
 }
 
 type leaseResponse struct {
@@ -84,31 +80,19 @@ type leaseResponse struct {
 var ErrLeaseAcquisitionEnded = errors.New("lease acquisition ended")
 
 func (c *cloudDiskClient) AcquireLease(ctx context.Context, volumeID string) (string, error) {
-	return c.acquireLease(ctx, volumeID, "", nil)
+	return c.acquireLease(ctx, volumeID, "")
 }
 
 func (c *cloudDiskClient) AcquireLeaseWithIdentity(ctx context.Context, volumeID, acquisitionID string) (string, error) {
 	if acquisitionID == "" {
 		return "", fmt.Errorf("lease acquisition identity is required")
 	}
-	return c.acquireLease(ctx, volumeID, acquisitionID, nil)
+	return c.acquireLease(ctx, volumeID, acquisitionID)
 }
 
-func (c *cloudDiskClient) TakeOverLease(ctx context.Context, volumeID, acquisitionID string, before time.Time) (string, error) {
-	if acquisitionID == "" || before.IsZero() {
-		return "", fmt.Errorf("lease takeover requires an acquisition identity and a decision time")
-	}
-	return c.acquireLease(ctx, volumeID, acquisitionID, &before)
-}
-
-func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitionID string, takeOverBefore *time.Time) (string, error) {
+func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitionID string) (string, error) {
 	endpoint := "lease"
-	switch {
-	case takeOverBefore != nil:
-		// Its own route: a cloud without takeover refuses it instead of
-		// treating it as an ordinary acquisition.
-		endpoint = "lease/takeover"
-	case acquisitionID != "":
+	if acquisitionID != "" {
 		// A separate route fails closed on old clouds rather than silently
 		// granting a non-idempotent lease after ignoring an unknown field.
 		endpoint = "lease/acquire"
@@ -118,7 +102,7 @@ func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitio
 		return "", fmt.Errorf("failed to construct lease URL: %w", err)
 	}
 
-	reqBody, err := json.Marshal(acquireLeaseRequest{AcquisitionID: acquisitionID, TakeOverBefore: takeOverBefore})
+	reqBody, err := json.Marshal(acquireLeaseRequest{AcquisitionID: acquisitionID})
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal lease request: %w", err)
 	}

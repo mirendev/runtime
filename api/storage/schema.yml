@@ -178,9 +178,9 @@ kinds:
       type: string
       doc: lbd log label (TAI64N) of the point in time restore_from_volume is restored to; empty restores its latest state
 
-    lease_takeover_before:
+    lease_takeover_nonce:
       type: string
-      doc: RFC 3339 time an operator decided this volume's previous writer is gone; acquiring its cloud lease breaks a lease granted before then (empty for none)
+      doc: Nonce of a cloud lease an organization admin took over for this cluster from a lost writer; the volume's next mount writes under it instead of acquiring a lease, then clears it (empty for none)
 
     node_id:
       type: ref

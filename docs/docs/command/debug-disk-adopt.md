@@ -23,7 +23,7 @@ miren debug disk adopt [flags]
 - `--name, -n` — Name for the new disk
 - `--node` — Node the volume lives on (default: `node/miren`)
 - `--size, -s` — Size of the cloud volume in GB (default: `0`)
-- `--takeover` — The volume's previous writer is lost: break any cloud lease granted before now, fencing it
+- `--takeover` — The volume's previous writer is lost: as an organization admin, break any cloud lease granted before now, fencing it, and grant the lease to this cluster
 
 ## Global Options
 
