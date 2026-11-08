@@ -228,16 +228,25 @@ var (
 	// errCheckpointStreamConflict means the cloud already has another stream
 	// for the volume. Retrying the same local stream can never succeed.
 	errCheckpointStreamConflict = errors.New("cloud refused the checkpoint's stream")
+	// errCheckpointClaimRefused is any other 409 at checkpoint begin, such as a
+	// duplicate key or a differing payload. The staged claim cannot succeed,
+	// but the volume's stream may still be fine.
+	errCheckpointClaimRefused = errors.New("cloud refused the checkpoint claim")
 )
 
-// streamConflict reports a checkpoint stream refusal. At begin, a 409 can only
-// mean the claimed stream_id conflicts: lease refusals are 403, and the ordering
-// key binds stream, boundary and bytes. A 409 at completion also covers stale
-// boundaries and payload mismatches, so there it counts only with the code.
+// streamConflict reports a checkpoint stream refusal. Only the explicit code
+// counts, at begin and completion alike: a plain 409 also covers duplicate
+// keys, constraint violations and differing payloads or metadata, and treating
+// those as a conflict would stop checkpoints for the volume for good.
 func streamConflict(err error, atBegin bool) error {
-	if httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err); ok &&
-		httpErr.status == http.StatusConflict && (atBegin || httpErr.code == "stream_conflict") {
+	httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err)
+	switch {
+	case !ok || httpErr.status != http.StatusConflict:
+		return err
+	case httpErr.code == "stream_conflict":
 		return fmt.Errorf("%w: %v", errCheckpointStreamConflict, err)
+	case atBegin:
+		return fmt.Errorf("%w: %v", errCheckpointClaimRefused, err)
 	}
 	return err
 }

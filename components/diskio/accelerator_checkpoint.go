@@ -212,6 +212,13 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 		}
 		return err
 	}
+	if errors.Is(err, errCheckpointClaimRefused) {
+		// The same staged bytes would be refused again. The intent stays: it
+		// holds a legacy volume's proposed stream, and the next detach
+		// restages under it.
+		_ = os.Remove(payloadPath)
+		return err
+	}
 	if err != nil {
 		return err
 	}
