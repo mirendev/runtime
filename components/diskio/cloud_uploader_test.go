@@ -1233,11 +1233,15 @@ func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
 		name, holder string
 		attached     bool
 		parked       bool
+		// staleRecord adds a device-less record holding an older nonce, so
+		// the nonce lookup is ambiguous and the active lease may be ours.
+		staleRecord bool
 	}{
-		{"taken over", "other-writer", false, true},
-		{"lease released", "", false, false},
-		{"released after another writer published past the tail", "", false, true},
-		{"still attached", "other-writer", true, false},
+		{"taken over", "other-writer", false, true, false},
+		{"lease released", "", false, false, false},
+		{"released after another writer published past the tail", "", false, true, false},
+		{"still attached", "other-writer", true, false, false},
+		{"two local records disagree on the nonce", "other-writer", false, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
@@ -1274,6 +1278,10 @@ func TestUploadPipelineParksTailFencedByTakeover(t *testing.T) {
 				mount.DevicePath = "/dev/lbd0"
 			}
 			require.NoError(t, state.SetMountAndSave("mount", mount))
+			if c.staleRecord {
+				require.NoError(t, state.SetMountAndSave("stale", &MountState{EntityId: "stale", VolumeId: "disk_volume/test",
+					CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "old", LeaseOwned: true}))
+			}
 			label := "400000000000000100000001"
 			path := filepath.Join(logDir, "disk."+label+".log")
 			require.NoError(t, os.WriteFile(path, buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(0, make([]byte, 4096))}), 0644))

@@ -147,8 +147,22 @@ func (u *CloudSegmentUploader) parkFencedTail(ctx context.Context, volumeID, dis
 		return false, nil
 	}
 	if u.state != nil {
+		// Records that disagree on the nonce make the lookup return "", so the
+		// refused upload did not carry this node's own nonce and an active
+		// lease may still be ours. That resolves through cleanup or
+		// MountSuperseded; parking would take unpublished writes off the path.
+		ambiguous := u.leaseNonceFor(volumeID) == ""
 		for _, mount := range u.state.ListMounts() {
-			if mount.CloudVolumeId == volumeID && (mount.DevicePath != "" || mount.Mounted) {
+			id := mount.CloudVolumeId
+			if id == "" {
+				if v := u.state.GetVolume(mount.VolumeId); v != nil {
+					id = v.CloudVolumeId
+				}
+			}
+			if id != volumeID {
+				continue
+			}
+			if mount.DevicePath != "" || mount.Mounted || (ambiguous && mount.LeaseOwned && mount.LeaseNonce != "") {
 				return false, nil
 			}
 		}
