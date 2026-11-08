@@ -32,6 +32,10 @@ type RecoverySegment struct {
 	PreviousLabel string `json:"previous_label"`
 	FirstSequence uint64 `json:"first_sequence"`
 	EntryCount    uint64 `json:"entry_count"`
+	// Boundary marks a point-in-time selection's last object, the first log
+	// labelled after until. Objects are not split at until, so it may hold
+	// entries written at or before until.
+	Boundary bool `json:"boundary,omitempty"`
 }
 
 type RecoveryCheckpoint struct {
@@ -58,6 +62,8 @@ type RecoveryManifest struct {
 	Head          string              `json:"head"`
 	SegmentCount  int                 `json:"segment_count"`
 	Checkpoint    *RecoveryCheckpoint `json:"checkpoint"`
+	// Until repeats a point-in-time selection's label; empty selects the head.
+	Until string `json:"until,omitempty"`
 	// Segments are assembled from the existing paginated update rows.
 	Segments []RecoverySegment `json:"-"`
 }
@@ -115,15 +121,24 @@ func (m *RecoveryManifest) validate(volume string) error {
 	} else if m.CoverageFloor != "" {
 		return fmt.Errorf("accelerator history below %s was retired and no checkpoint covers it", m.CoverageFloor)
 	}
-	for _, label := range []string{previous, m.CoverageFloor, m.Head} {
+	for _, label := range []string{previous, m.CoverageFloor, m.Head, m.Until} {
 		if label != "" && !isValidTAI64NLabel(label) {
 			return fmt.Errorf("invalid accelerator recovery boundary %q", label)
 		}
 	}
-	for _, s := range m.Segments {
+	// Entry filtering can trim the objects at until, never a base past it.
+	if m.Until != "" && previous > m.Until {
+		return fmt.Errorf("accelerator checkpoint through %q is past %q", previous, m.Until)
+	}
+	for i, s := range m.Segments {
 		if !validRecoveryObject(s.RecoveryObject) || !isValidTAI64NLabel(s.Label) || s.Label <= previous ||
 			s.PreviousLabel != previous || seen[s.UpdateID] || s.EntryCount > ^uint64(0)-s.FirstSequence {
 			return fmt.Errorf("incomplete accelerator coverage after %q", previous)
+		}
+		// Exactly the first log after until is the boundary, and it ends the
+		// selection; without until there is none.
+		if s.Boundary != (m.Until != "" && s.Label > m.Until) || (s.Boundary && i != len(m.Segments)-1) {
+			return fmt.Errorf("accelerator selection does not end at the first log after %q", m.Until)
 		}
 		seen[s.UpdateID] = true
 		previous = s.Label
@@ -518,12 +533,13 @@ func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeS
 		return image.Name(), err
 	}
 	defer img.Close()
+	past := false
 	for _, s := range m.Segments {
 		f, err := c.downloadRecoveryObject(ctx, m.VolumeID, v.DiskPath, s.RecoveryObject)
 		if err != nil {
 			return image.Name(), err
 		}
-		err = replayRecoverySegment(f, img, s, m.DeviceSize, cutoff)
+		err = replayRecoverySegment(f, img, s, m.DeviceSize, cutoff, &past)
 		f.Close()
 		os.Remove(f.Name())
 		if err != nil {
@@ -591,9 +607,10 @@ func (c *DiskMountController) commitRecoveryImage(ctx context.Context, client pr
 }
 
 // A non-zero cutoff applies only the entries before the first one written
-// after it. A log prefix is a crash state of the device, so the result is the
-// disk as if it had crashed at the cutoff. The rest is still validated.
-func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64, cutoff uint64) error {
+// after it, which *past carries across segments. A log prefix is a crash state
+// of the device, so the result is the disk as if it had crashed at the cutoff.
+// The rest is still validated.
+func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64, cutoff uint64, past *bool) error {
 	rd, err := lbd.NewReader(src)
 	if err != nil {
 		return err
@@ -603,7 +620,6 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 		return fmt.Errorf("invalid LBD header identity")
 	}
 	var count uint64
-	past := false
 	for {
 		e, err := rd.Next()
 		if err == io.EOF {
@@ -618,7 +634,7 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 			return fmt.Errorf("invalid LBD entry sequence, bounds, operation or CRC")
 		}
 		count++
-		if past = past || (cutoff != 0 && e.TimestampNS > cutoff); past {
+		if *past = *past || (cutoff != 0 && e.TimestampNS > cutoff); *past {
 			continue
 		}
 		offset := int64(e.Block * uint64(h.BlockSize))

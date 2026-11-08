@@ -60,6 +60,8 @@ type recoveryCloud struct {
 	// source is the history of another volume, "src", that a new volume is
 	// restored from.
 	source *RecoveryManifest
+	// boundaryFault breaks a point-in-time selection's until or boundary.
+	boundaryFault string
 	// takeovers records take_over_before of each lease takeover request.
 	takeovers []time.Time
 }
@@ -192,15 +194,26 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.selection.Segments = append([]RecoverySegment(nil), s.selection.Segments...)
 		if request.Until != "" {
 			// Like the cloud: the newest base at or before until, then the
-			// tail through until. These tests keep one base.
+			// tail through the first log after until, flagged as the boundary.
+			// These tests keep one base.
 			kept := s.selection.Segments[:0]
 			for _, segment := range s.selection.Segments {
-				if segment.Label <= request.Until {
-					kept = append(kept, segment)
-					s.selection.Head = segment.Label
+				kept = append(kept, segment)
+				s.selection.Head = segment.Label
+				if segment.Label > request.Until {
+					kept[len(kept)-1].Boundary = true
+					break
 				}
 			}
-			s.selection.Segments, s.selection.SegmentCount = kept, len(kept)
+			s.selection.Segments, s.selection.SegmentCount, s.selection.Until = kept, len(kept), request.Until
+			switch s.boundaryFault {
+			case "until-ignored":
+				s.selection.Until = ""
+			case "unflagged":
+				kept[len(kept)-1].Boundary = false
+			case "early-boundary":
+				kept[0].Boundary = true
+			}
 		}
 		if s.selection.VolumeID == "vol" && (s.manifest.StreamID == "" || s.manifest.Status == "never_backed_up") {
 			// No acknowledged stream: cloud retains the whole log, or has
@@ -251,7 +264,8 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, segment := range s.selection.Segments[start:end] {
 			page.Updates = append(page.Updates, UpdateInfo{UpdateID: segment.UpdateID, Kind: string(KindLBDLog),
 				OrderingKey: segment.Label, Size: segment.Size, SHA256: segment.SHA256,
-				PreviousLabel: segment.PreviousLabel, FirstSequence: segment.FirstSequence, EntryCount: segment.EntryCount})
+				PreviousLabel: segment.PreviousLabel, FirstSequence: segment.FirstSequence, EntryCount: segment.EntryCount,
+				Boundary: segment.Boundary})
 		}
 		if end < len(s.selection.Segments) {
 			page.NextCursor = strconv.Itoa(end)
@@ -1223,30 +1237,21 @@ func TestAcceleratorCheckpointRetryUnderNewLease(t *testing.T) {
 	cloud.mu.Unlock()
 }
 
-// A new volume restored from another volume's history as of a point in time:
-// a segment opened before the time can hold writes after it, which must not
-// appear, and the result must become the new volume's own first checkpoint so
-// its later history never replays onto an empty image.
-func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
-	cloud, c, v := newRecoveryCloud(t)
-	expected := seedRecoveryCheckpoint(t, c, v)
-	entry := func(ts, seq, block uint64, fill byte) lbd.Entry {
-		data := bytes.Repeat([]byte{fill}, 4096)
-		return lbd.Entry{Op: "W", TimestampNS: ts, Sequence: seq, Block: block, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}
-	}
-	// Labels are 2^62 + Unix seconds plus nanoseconds, so label ...02 is 2ns.
-	cloud.addTail(t, []lbd.Entry{entry(2, 41, 3, 0x11), entry(3, 42, 4, 0x22)})
-	cloud.addTail(t, []lbd.Entry{entry(4, 43, 5, 0x33)})
-	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+func rewindEntry(ts, seq, block uint64, fill byte) lbd.Entry {
+	data := bytes.Repeat([]byte{fill}, 4096)
+	return lbd.Entry{Op: "W", TimestampNS: ts, Sequence: seq, Block: block, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}
+}
 
-	// That history now belongs to the source volume; "vol" is brand new.
+// rewindFromSource hands the cloud's history to another volume, "src", and
+// mounts "vol", brand new in v.DiskPath, as that history until the label.
+func rewindFromSource(t *testing.T, cloud *recoveryCloud, c *DiskMountController, v *VolumeState, until string) (*storage_v1alpha.DiskMount, error) {
+	t.Helper()
 	cloud.mu.Lock()
 	source := cloud.manifest
 	source.VolumeID = "src"
 	cloud.source = &source
 	cloud.manifest = RecoveryManifest{Version: 1, VolumeID: "vol", Status: "never_backed_up", SessionID: "session",
 		ExpiresAt: time.Now().Add(time.Minute), Complete: true, DeviceSize: 1024 * 1024}
-	seeded := len(cloud.publications)
 	cloud.mockCloudServer.mu.Lock()
 	for _, object := range cloud.segments {
 		object.VolumeID = "src"
@@ -1254,17 +1259,34 @@ func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
 	cloud.mockCloudServer.mu.Unlock()
 	cloud.mu.Unlock()
 
-	v.DiskPath = t.TempDir()
-	v.RestoreFrom, v.RestoreUntil = "src", "400000000000000000000002"
+	v.RestoreFrom, v.RestoreUntil = "src", until
 	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	return mount, c.Reconcile(t.Context(), mount, nil)
+}
+
+// A new volume restored from another volume's history as of a point in time:
+// a segment opened before the time can hold writes after it, which must not
+// appear, and the result must become the new volume's own first checkpoint so
+// its later history never replays onto an empty image.
+func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	// Labels are 2^62 + Unix seconds plus nanoseconds, so label ...02 is 2ns.
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11), rewindEntry(3, 42, 4, 0x22)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(4, 43, 5, 0x33)})
+	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+	seeded := len(cloud.publications)
+
 	// A failed earlier attempt left a staged checkpoint of another image, at
 	// the same empty boundary. It must not be published over this rebuild.
+	v.DiskPath = t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), bytes.Repeat([]byte{0x99}, 1024*1024), 0600))
 	_, err := c.stageCheckpoint(t.Context(), v, "proposed", "", filepath.Join(v.DiskPath, checkpointPayloadFile))
 	require.NoError(t, err)
-	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
-		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
-	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	mount, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+	require.NoError(t, err)
 	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
@@ -1291,6 +1313,46 @@ func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
 	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
 	require.NoError(t, err)
 	require.Equal(t, seed.StreamID, string(stream))
+}
+
+// The cloud ends a point-in-time selection one log past until, because
+// objects are not split there: a coalesced log labelled after until can still
+// hold writes from before it. Those apply; the later writes in it do not.
+func TestAcceleratorRewindAppliesBoundaryLogUpToUntil(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 42, 4, 0x22), rewindEntry(4, 43, 5, 0x33)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 44, 6, 0x44)})
+	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+	copy(expected[4*4096:], bytes.Repeat([]byte{0x22}, 4096))
+
+	v.DiskPath = t.TempDir()
+	_, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+	require.NoError(t, err)
+	require.Len(t, cloud.selection.Segments, 2, "the selection ends at the boundary log")
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+}
+
+// A selection that does not provably end at until could carry writes past it,
+// so the rewind fails before building anything.
+func TestAcceleratorRewindRefusesUnboundedSelection(t *testing.T) {
+	for _, fault := range []string{"until-ignored", "unflagged", "early-boundary"} {
+		t.Run(fault, func(t *testing.T) {
+			cloud, c, v := newRecoveryCloud(t)
+			seedRecoveryCheckpoint(t, c, v)
+			cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11)})
+			cloud.addTail(t, []lbd.Entry{rewindEntry(4, 42, 4, 0x22)})
+			cloud.boundaryFault = fault
+			v.DiskPath = t.TempDir()
+			_, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+			require.Error(t, err)
+			_, err = os.Stat(filepath.Join(v.DiskPath, "disk.img"))
+			require.True(t, os.IsNotExist(err), "no image may be installed")
+		})
+	}
 }
 
 // An adopted volume marked for takeover acquires its lease through the

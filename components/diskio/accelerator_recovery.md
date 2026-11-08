@@ -37,12 +37,15 @@ the existing authenticated JSON transport:
   with full-image restore; checkpoint-plus-tail is one selection kind, not a
   separate session implementation. Existing full-image callers are unchanged
   by this runtime patch; MIR-2183 supplies their shared protection integration.
+  An optional `until`, an lbd label, selects the history as of that point
+  instead of the head (see Point in time below).
 * Existing `GET /?kind=lbd_log&restore_session=...&recovery_version=1`: returns
   the existing `updates` and `next_cursor`, plus a `recovery` object containing
   the `RecoveryManifest` fields other than `segments`. Every page repeats the
   same selection metadata and binds to the requested session. Tail rows retain
   `update_id`, `kind`, `ordering_key`, and `size`, adding `sha256`,
-  `previous_label`, `first_sequence`, and `entry_count`. The runtime assembles
+  `previous_label`, `first_sequence`, `entry_count`, and `boundary`. The
+  `recovery` object repeats a point-in-time session's `until`. The runtime assembles
   the manifest from all pages using the existing cursor walk. `complete: true`,
   `segment_count`, and `head` describe the **whole** selected tail, not one page.
   Missing/changed metadata, repeated cursors, early EOF, and missing middle or
@@ -81,6 +84,32 @@ checks transport length/digest, snapshot size/checksum, LBD version, label,
 device size, entry counts/sequences, bounds, operations, and write CRCs. It
 renews protection during downloads and again before committing installation.
 Sessions may expire naturally after completion; v1 requires no release endpoint.
+
+## Point in time (`until`)
+
+Rewinding a new volume to another volume's history as of `until` selects the
+newest base at or before `until` and a tail that ends one log past it. An
+lbd_log's label is when its first entry could have been written, and a segment
+keeps receiving writes until the next one opens; a coalesced upload carries the
+label of its last segment. The cloud does not split objects at `until`, so:
+
+* The last tail row is the first `lbd_log` labelled after `until`, flagged
+  `"boundary": true`. It may hold entries written at or before `until`. When
+  `until` is at or past the head there is no boundary row.
+* The row before it, labelled at or before `until`, may hold entries written
+  after `until`.
+
+The runtime filters entries by time in both: it applies entries up to the first
+one written after `until` and skips every entry after that one, across objects.
+A log prefix is a crash state of the device, so the result is the disk as if it
+had crashed at `until`; with a monotonic clock this is exactly "every entry
+written at or before `until`". Skipped entries are still validated.
+
+The selection fails closed unless the `recovery` object repeats the requested
+`until` (a cloud that ignored it would select the head), the base's
+`through_label` is at or before `until`, and exactly the first row labelled
+after `until` is flagged `boundary` and ends the tail. A session without
+`until` must flag no row.
 
 ## Checkpoint production and publication
 

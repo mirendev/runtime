@@ -75,6 +75,7 @@ type UpdateInfo struct {
 	PreviousLabel string `json:"previous_label,omitempty"`
 	FirstSequence uint64 `json:"first_sequence,omitempty"`
 	EntryCount    uint64 `json:"entry_count,omitempty"`
+	Boundary      bool   `json:"boundary,omitempty"`
 }
 
 // maxUpdateListPages caps a cursor walk. The server pages at 100 by default, so
@@ -814,6 +815,10 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, u
 	if !manifest.ExpiresAt.Equal(session.ExpiresAt) {
 		return nil, fmt.Errorf("update listing does not match restore protection")
 	}
+	// A cloud that ignored until would select the head, writes after it included.
+	if manifest.Until != until {
+		return nil, fmt.Errorf("cloud selected history until %q, not %q", manifest.Until, until)
+	}
 	for _, u := range updates {
 		if u.Kind != string(KindLBDLog) {
 			return nil, fmt.Errorf("non-log update in accelerator recovery tail")
@@ -821,6 +826,7 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, u
 		manifest.Segments = append(manifest.Segments, RecoverySegment{
 			RecoveryObject: RecoveryObject{UpdateID: u.UpdateID, Size: u.Size, SHA256: u.SHA256},
 			Label:          u.OrderingKey, PreviousLabel: u.PreviousLabel, FirstSequence: u.FirstSequence, EntryCount: u.EntryCount,
+			Boundary: u.Boundary,
 		})
 	}
 	if err := manifest.validate(volume); err != nil {
