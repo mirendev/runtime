@@ -29,8 +29,9 @@ const checkpointBasisReplayed = "replayed"
 // checkpoint is never read from it: each one is rebuilt from the latest cloud
 // checkpoint plus the committed tail, the same protected selection a fresh
 // node restores from, and published with that tail's last label as its
-// boundary. A volume that never had a checkpoint is rebuilt from its whole
-// log and starts its stream. The device is never paused.
+// boundary. A volume without a stream is skipped: its legacy log cannot be
+// verified, so its first checkpoint comes from detach. The device is never
+// paused.
 func (c *DiskMountController) RunAttachedCheckpoints(ctx context.Context) {
 	ticker := time.NewTicker(attachedCheckpointPoll)
 	defer ticker.Stop()
