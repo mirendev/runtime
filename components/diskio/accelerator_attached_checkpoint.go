@@ -2,14 +2,10 @@ package diskio
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -96,7 +92,11 @@ func (c *DiskMountController) checkpointAttachedMounts(ctx context.Context, due 
 func (c *DiskMountController) publishAttachedCheckpoint(ctx context.Context, client protectedUpdatesClient, v *VolumeState, nonce string) error {
 	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
 	if os.IsNotExist(err) {
-		return c.publishFirstAttachedCheckpoint(ctx, client, v, nonce)
+		// A volume without a stream has only the legacy listing, which carries
+		// no digests, labels or sequences to verify a rebuild against. Its
+		// first checkpoint would start the stream and make that log
+		// retirable, so it comes from detach, which checkpoints the real image.
+		return nil
 	} else if err != nil {
 		return err
 	}
@@ -134,97 +134,6 @@ func (c *DiskMountController) publishAttachedCheckpoint(ctx context.Context, cli
 	}
 	_, err = c.uploadAttachedCheckpoint(ctx, v, nonce, intent, payload, len(m.Segments), start)
 	return err
-}
-
-// publishFirstAttachedCheckpoint covers a volume that has never had a
-// checkpoint, such as a new disk that has stayed attached since it was
-// created. Nothing of its history was ever retired, so its image is rebuilt
-// from an empty one plus its whole committed log, and the checkpoint starts
-// its stream. A stream already proposed by a detach that never published is
-// reused, so the two never disagree.
-func (c *DiskMountController) publishFirstAttachedCheckpoint(ctx context.Context, client protectedUpdatesClient, v *VolumeState, nonce string) error {
-	// Without a stream the cloud retains the whole log ("legacy").
-	m, err := client.BeginRecovery(ctx, v.CloudVolumeId, "", "")
-	switch {
-	case errors.Is(err, errNeverBackedUp):
-		return nil // nothing written yet
-	case errors.Is(err, errRecoveryUnsupported):
-	case err != nil:
-		return fmt.Errorf("select committed history: %w", err)
-	default:
-		return fmt.Errorf("cloud has stream %s for a volume with no local stream", m.StreamID)
-	}
-	var stream string
-	if data, err := os.ReadFile(filepath.Join(v.DiskPath, checkpointIntentFile)); err == nil {
-		var staged checkpointIntent
-		if err := json.Unmarshal(data, &staged); err != nil {
-			return err
-		}
-		stream = staged.Publication.StreamID
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if stream == "" {
-		id := make([]byte, 16)
-		if _, err := rand.Read(id); err != nil {
-			return err
-		}
-		stream = hex.EncodeToString(id)
-	}
-	segments, err := c.cloudClient.ListLogSegments(ctx, v.CloudVolumeId, "")
-	if err != nil {
-		return err
-	}
-	if len(segments) == 0 {
-		return nil
-	}
-	sort.Slice(segments, func(i, j int) bool { return segments[i].Label < segments[j].Label })
-	start := time.Now()
-	image, err := os.CreateTemp(v.DiskPath, ".accelerator-image-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(image.Name())
-	err = image.Truncate(v.SizeBytes)
-	if closeErr := image.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	img, err := openDiskImage(image.Name())
-	if err != nil {
-		return err
-	}
-	for _, seg := range segments {
-		if err = c.replayOneSegment(ctx, v.CloudVolumeId, seg.SegmentID, img); err != nil {
-			err = fmt.Errorf("replay %s: %w", seg.Label, err)
-			break
-		}
-	}
-	if err == nil {
-		err = img.Sync()
-	}
-	if closeErr := img.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("rebuild image: %w", err)
-	}
-	head := segments[len(segments)-1].Label
-	payload, intent, err := c.compressCheckpoint(ctx, v, image.Name(), stream, head)
-	if payload != "" {
-		defer os.Remove(payload)
-	}
-	if err != nil {
-		return err
-	}
-	if _, err := c.uploadAttachedCheckpoint(ctx, v, nonce, intent, payload, len(segments), start); err != nil {
-		return err
-	}
-	// Install the acknowledged stream, as detach does after its first
-	// checkpoint. A staged detach intent proposed this same stream.
-	return writeRecoveryFile(v.DiskPath, acceleratorStreamFile, []byte(stream))
 }
 
 func (c *DiskMountController) uploadAttachedCheckpoint(ctx context.Context, v *VolumeState, nonce string, intent checkpointIntent, payload string, segments int, start time.Time) (string, error) {

@@ -388,6 +388,12 @@ func (c *DiskMountController) rewindAccelerator(ctx context.Context, v *VolumeSt
 	if m.DeviceSize != uint64(v.SizeBytes) {
 		return fmt.Errorf("restore source %s is %d bytes, volume is %d", v.RestoreFrom, m.DeviceSize, v.SizeBytes)
 	}
+	// A failed earlier attempt may have staged a checkpoint of a different
+	// source head. Drop its payload so publication restages from this image;
+	// the intent stays so the proposed stream is kept.
+	if err := os.Remove(filepath.Join(v.DiskPath, checkpointPayloadFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	err = c.protectRecovery(ctx, client, m, func(ctx context.Context) error {
 		image, err := c.buildRecoveryImage(ctx, v, m, cutoff)
 		if image != "" {

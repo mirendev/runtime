@@ -1251,6 +1251,11 @@ func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
 	v.DiskPath = t.TempDir()
 	v.RestoreFrom, v.RestoreUntil = "src", "400000000000000000000002"
 	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	// A failed earlier attempt left a staged checkpoint of another image, at
+	// the same empty boundary. It must not be published over this rebuild.
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), bytes.Repeat([]byte{0x99}, 1024*1024), 0600))
+	_, err := c.stageCheckpoint(t.Context(), v, "proposed", "", filepath.Join(v.DiskPath, checkpointPayloadFile))
+	require.NoError(t, err)
 	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
 	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
@@ -1263,7 +1268,7 @@ func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
 	seed := cloud.publications[seeded]
 	require.Equal(t, "vol", seed.VolumeID)
 	require.Empty(t, seed.Base.ThroughLabel, "the seed precedes all of the new volume's log")
-	require.NotEqual(t, source.StreamID, seed.StreamID)
+	require.Equal(t, "proposed", seed.StreamID, "a retry keeps the proposed stream")
 	digest := sha256.Sum256(expected)
 	require.Equal(t, hex.EncodeToString(digest[:]), seed.Base.ImageSHA256)
 
@@ -1364,7 +1369,7 @@ func TestAcceleratorAttachedCheckpointRebuildsFromCloudHistory(t *testing.T) {
 // A new disk that has stayed attached since it was created has no stream.
 // Its first attached checkpoint is rebuilt from its whole log and starts
 // one, which the volume then keeps.
-func TestAcceleratorAttachedCheckpointStartsStreamForNewVolume(t *testing.T) {
+func TestAcceleratorAttachedCheckpointLeavesNewVolumeToDetach(t *testing.T) {
 	cloud, c, v := newRecoveryCloud(t)
 	expected := make([]byte, 1024*1024)
 	for i, fill := range []byte{0x31, 0x42} {
@@ -1388,22 +1393,10 @@ func TestAcceleratorAttachedCheckpointStartsStreamForNewVolume(t *testing.T) {
 	now := time.Now()
 	c.checkpointAttachedMounts(t.Context(), due, now)
 	c.checkpointAttachedMounts(t.Context(), due, now.Add(DefaultAttachedCheckpointInterval))
-	require.Len(t, cloud.publications, 1)
-	p := cloud.publications[0]
-	require.Equal(t, checkpointBasisReplayed, p.Basis)
-	require.Equal(t, "400000000000000000000002", p.Base.ThroughLabel)
-	digest := sha256.Sum256(expected)
-	require.Equal(t, hex.EncodeToString(digest[:]), p.Base.ImageSHA256, "the whole committed log, not the live image")
-	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
-	require.NoError(t, err)
-	require.Equal(t, p.StreamID, string(stream), "the acknowledged stream is installed locally")
-
-	// A fresh node adopts the new stream and restores from the checkpoint.
-	v.DiskPath = t.TempDir()
-	require.NoError(t, c.recoverAccelerator(t.Context(), v, "nonce"))
-	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
-	require.NoError(t, err)
-	require.Equal(t, expected, actual)
+	// The legacy listing has nothing to verify a rebuild against, and a first
+	// checkpoint would make that log retirable, so only detach starts the stream.
+	require.Empty(t, cloud.publications)
+	require.NoFileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
 }
 
 // The server's shutdown detaches every lbd device cleanly, which proves the
