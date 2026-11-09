@@ -12,19 +12,22 @@ metadata cannot authorize recovery or GC.
 **This change is purely additive.** Legacy replay (`replayMissingSegments`)
 remains the default mount path, and runtime and cloud can deploy in either order.
 Legacy replay is unsafe only once cloud retires log prefixes, which does not
-exist yet. Protected recovery is used only when the volume already has an
-`accelerator-stream` file **and** the cloud supports restore sessions; a
-404/405/501 on `restore-sessions` or a `status: "unsupported"` listing falls
-back to legacy replay. A cloud without the route answers its POST with 405,
-because the path also matches `DELETE /updates/{updateId}`. Other errors from a v1 cloud still fail closed. MIR-2185's first cloud
-change accepts checkpoints but does not yet build restore sessions or the
-`recovery_version=1` listing; those return 405 or 404, so stream volumes take the
-legacy replay fallback until they exist.
+exist yet. Protected recovery is used only when the cloud supports restore
+sessions, and only for a volume that already has an `accelerator-stream` file
+or a fresh volume: one with no horizon and no local logs, such as a new disk or
+a volume rebuilt on a new node. A fresh volume adopts the stream the cloud
+names; a `never_backed_up` answer still lists and replays the full log onto a
+blank image. A 404/405/501 on `restore-sessions` or a `status: "unsupported"`
+or `"legacy"` listing falls back to legacy replay. A cloud without the route
+answers its POST with 405, because the path also matches
+`DELETE /updates/{updateId}`. Other errors from a v1 cloud still fail closed.
+MIR-2185's first cloud change accepts checkpoints but does not yet build
+restore sessions or the `recovery_version=1` listing; those return 405 or 404,
+so every volume takes the legacy replay fallback until they exist.
 
-**Deferred to a later change:** removing the legacy fallback for stream volumes,
-enabling prefix retirement, and using protected recovery on a node with no
-local stream file. These follow cloud retention (MIR-2185) and a passing restore
-onto a fresh node from cloud data alone, against the real cloud.
+**Deferred to a later change:** removing the legacy fallback, and enabling
+prefix retirement. These follow cloud retention (MIR-2185) and a passing
+restore onto a fresh node from cloud data alone, against the real cloud.
 
 ## Recovery
 
