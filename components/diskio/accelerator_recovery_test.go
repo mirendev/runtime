@@ -52,6 +52,9 @@ type recoveryCloud struct {
 	pageFault       string
 	checkpointFault string
 	oldCloud        bool
+	// noRestoreSessions models cloud#370: checkpoints, but restore-sessions
+	// answers 405, since its path matches DELETE /updates/{updateId}.
+	noRestoreSessions bool
 	// completeOnlyStreamCheck models a cloud that refuses a stream only at
 	// completion, after the payload is uploaded.
 	completeOnlyStreamCheck bool
@@ -166,6 +169,8 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			response.RecoveryVersion = AcceleratorRecoveryVersion
 		}
 		json.NewEncoder(w).Encode(response)
+	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions") && s.noRestoreSessions:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions"):
 		s.selection = s.manifest
 		s.selection.Segments = append([]RecoverySegment(nil), s.manifest.Segments...)
@@ -787,6 +792,33 @@ func checkpointClaims(cloud *recoveryCloud) int {
 		}
 	}
 	return n
+}
+
+// A cloud that checkpoints but has no restore sessions (cloud#370 without
+// #373) answers their POST with 405. A volume whose checkpoint started its
+// stream must still mount there, through legacy replay.
+func TestAcceleratorStreamMountsWithoutRestoreSessions(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	cloud.noRestoreSessions = true
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	upload := func(label string, block uint64, data []byte) {
+		segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(block, data)})
+		_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+		require.NoError(t, err)
+	}
+	first := bytes.Repeat([]byte{0x5A}, 4096)
+	upload("400000000000000000000001", 2, first)
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile), "the checkpoint starts a stream")
+
+	later := bytes.Repeat([]byte{0x6B}, 4096)
+	upload("400000000000000000000002", 3, later)
+	mountAndDetach(t, c, v)
+	image, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, first, image[2*4096:3*4096])
+	require.Equal(t, later, image[3*4096:4*4096], "legacy replay applies the log uploaded in between")
 }
 
 func TestAcceleratorMountAndDetachWithoutV1Cloud(t *testing.T) {

@@ -13,11 +13,12 @@ metadata cannot authorize recovery or GC.
 remains the default mount path, and runtime and cloud can deploy in either order.
 Legacy replay is unsafe only once cloud retires log prefixes, which does not
 exist yet. Protected recovery is used only when the volume already has an
-`accelerator-stream` file **and** the cloud supports restore sessions; a 404/501
-on `restore-sessions` or a `status: "unsupported"` listing falls back to legacy
-replay. Other errors from a v1 cloud still fail closed. MIR-2185's first cloud
+`accelerator-stream` file **and** the cloud supports restore sessions; a
+404/405/501 on `restore-sessions` or a `status: "unsupported"` listing falls
+back to legacy replay. A cloud without the route answers its POST with 405,
+because the path also matches `DELETE /updates/{updateId}`. Other errors from a v1 cloud still fail closed. MIR-2185's first cloud
 change accepts checkpoints but does not yet build restore sessions or the
-`recovery_version=1` listing; those return 404, so stream volumes take the
+`recovery_version=1` listing; those return 405 or 404, so stream volumes take the
 legacy replay fallback until they exist.
 
 **Deferred to a later change:** removing the legacy fallback for stream volumes,
