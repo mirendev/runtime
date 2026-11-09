@@ -245,12 +245,23 @@ gate would block detach, lease release and reattach, and nothing but a hand
 edit of the runtime state could clear it. The refused segments stay local, so
 the final drain keeps failing and the lease is kept until they are moved aside.
 
+The final drain at detach and the crash-tail drain before protected recovery
+use the log watcher's uploader (`SetLogUploader`), so a gap first refused there
+gets the same log, metric, doctor signal and hold. A detach whose drain is
+refused also drops its checkpoint: the image holds the refused writes, and
+checkpointing it once the refused logs were cleared would publish them past the
+gap.
+
 There is no automatic recovery, and a checkpoint does not get past a gap.
 Recovery is manual: stop the app so the disk detaches, move the volume's local
 segments aside (they would be refused again), delete the refused updates, and
 let the drain retry release the lease; then reattach, and lbd numbers from 0.
-`TestAcceleratorSequenceGapManualRecovery` runs this sequence. See
-"Recovering from a sequence gap" in the disk accelerator docs.
+A volume without an `accelerator-stream` file replays onto its local image,
+which holds the refused writes, so the operator also moves `disk.img` and
+`log_horizon` aside; the next mount is then fresh and replays the cloud's log
+onto a blank image. `TestAcceleratorSequenceGapManualRecovery` runs this
+sequence for volumes with and without a stream. See "Recovering from a sequence
+gap" in the disk accelerator docs.
 
 ## Installation, compatibility, and cost
 

@@ -45,6 +45,10 @@ type DiskMountController struct {
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
 	cloudClient   CloudDiskClient
 	updatesClient CloudUpdatesClient
+	// logUploader drains a volume's logs before its lease is released. It is
+	// the log watcher's uploader when wired, so both share the sequence-gap
+	// hold and its signals.
+	logUploader *CloudSegmentUploader
 	// checkpointsUnsupported remembers an old cloud's refusal for this
 	// process, so later detaches do not compress an image just to be refused.
 	checkpointsUnsupported atomic.Bool
@@ -123,6 +127,14 @@ func (c *DiskMountController) SetCloudClient(client CloudDiskClient) {
 // universal-mode volume's backing image from the cloud.
 func (c *DiskMountController) SetUpdatesClient(client CloudUpdatesClient) {
 	c.updatesClient = client
+	c.logUploader = NewCloudSegmentUploaderWithClient(c.log, client, c.state)
+}
+
+// SetLogUploader drains logs through the log watcher's uploader, so a
+// sequence_gap refusal during a drain is held and reported like one the
+// watcher hits.
+func (c *DiskMountController) SetLogUploader(u *CloudSegmentUploader) {
+	c.logUploader = u
 }
 
 // SetWriteTracker wires the reconcile controller's write tracker so that entity
@@ -954,6 +966,15 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return detachErr
 	}
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
+		if errors.Is(err, errSequenceGap) && mountState.CheckpointDue {
+			// The image holds writes the cloud refused; checkpointing it once
+			// the operator clears the refused logs would publish them past the
+			// gap. Recovery restores from the cloud history instead.
+			mountState.CheckpointDue = false
+			if saveErr := c.state.SetMountAndSave(entityId, mountState); saveErr != nil {
+				return errors.Join(err, saveErr)
+			}
+		}
 		return err
 	}
 	if mountState.CheckpointDue {
@@ -1005,8 +1026,7 @@ func (c *DiskMountController) drainMountLogs(ctx context.Context, mount *MountSt
 	if diskPath == "" {
 		return fmt.Errorf("cannot establish log directory for lease release of %s", mount.EntityId)
 	}
-	uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
-	return uploader.drainSegmentsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+	return c.drainLogsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
 }
 
 // recoverMountLease resolves a durable acquisition intent. A terminal response

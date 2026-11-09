@@ -135,6 +135,7 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 				uploader.SetLeaseReader(diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updates))
 				uploader.SetMetricsWriter(s.deps.MetricsWriter)
 				uploader.SetEAC(eas)
+				s.dmc.SetLogUploader(uploader)
 				logUploader = uploader
 			}
 		}

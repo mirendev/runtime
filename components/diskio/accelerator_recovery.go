@@ -274,8 +274,7 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 		if manifest.StreamID != string(stream) || manifest.Status != "ready" {
 			return fmt.Errorf("accelerator stream changed with local logs outstanding")
 		}
-		uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
-		if err := uploader.drainSegmentsLocked(ctx, v.CloudVolumeId, v.DiskPath); err != nil {
+		if err := c.drainLogsLocked(ctx, v.CloudVolumeId, v.DiskPath); err != nil {
 			return err
 		}
 	}

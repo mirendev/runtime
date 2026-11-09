@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -111,4 +112,38 @@ func (u *CloudSegmentUploader) markUploadBlocked(ctx context.Context, volumeID, 
 			u.log.Warn("failed to record the volume's upload state", "volume_id", volumeID, "error", err)
 		}
 	}
+}
+
+// drainForRelease drains volumeID's logs before its lease is released, under
+// the same hold and signals as the watcher's uploads: a gap first refused
+// here is reported, and a held volume does not take the refusal again. A
+// drain with nothing left to upload proves nothing about the gap, so it
+// neither waits for the hold nor clears the doctor signal; it does end the
+// hold, since the refused segments only leave by hand.
+func (u *CloudSegmentUploader) drainForRelease(ctx context.Context, volumeID, diskPath string) error {
+	names, err := oldestSegments(ctx, filepath.Join(diskPath, "logs"))
+	pending := err == nil && len(names) > 0
+	if pending {
+		if err := u.heldForSequenceGap(volumeID); err != nil {
+			return err
+		}
+	}
+	err = u.drainSegmentsLocked(ctx, volumeID, diskPath)
+	if !pending && err == nil {
+		u.gapMu.Lock()
+		delete(u.gapUntil, volumeID)
+		u.gapMu.Unlock()
+		return nil
+	}
+	return u.noteUploadOutcome(ctx, volumeID, err)
+}
+
+// drainLogsLocked drains a volume's logs before its lease is released. The
+// caller holds the cloud-volume lock.
+func (c *DiskMountController) drainLogsLocked(ctx context.Context, volumeID, diskPath string) error {
+	u := c.logUploader
+	if u == nil {
+		u = NewCloudSegmentUploaderWithClient(c.log, nil, c.state)
+	}
+	return u.drainForRelease(ctx, volumeID, diskPath)
 }

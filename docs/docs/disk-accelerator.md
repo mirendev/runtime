@@ -244,16 +244,22 @@ manual, and a checkpoint does not get past it:
    the runtime keeps the volume's lease and retries the drain.
 2. Move the volume's remaining log segments out of its `logs` directory, and
    keep them. They include the refused segment and everything after it, and
-   the runtime would otherwise upload them, and be refused, again.
+   the runtime would otherwise upload them, and be refused, again. If the
+   volume's directory has no `accelerator-stream` file, also move `disk.img`
+   and `log_horizon` aside: such a volume reattaches onto its local image,
+   which already holds the refused writes.
 3. Delete the refused updates from the cloud volume. The next drain retry finds
    no segments, and the runtime releases the lease.
-4. Reattach the disk. It restores from the cloud history, and lbd numbers the
-   new attachment from 0, which the cloud accepts.
+4. Reattach the disk. It restores from the cloud history (a volume whose image
+   you moved aside replays the cloud's whole log onto a blank image), and lbd
+   numbers the new attachment from 0, which the cloud accepts.
 
 :::warning[Writes after the gap leave the cloud history]
 
-The segments moved aside in step 2 hold writes the cloud never published.
-After recovery, the volume's cloud history continues from before the gap, and
-those writes exist only in the preserved files.
+The files moved aside in step 2 hold writes the cloud never published. After
+recovery, the volume's cloud history continues from before the gap, and those
+writes exist only in the preserved files. The runtime does not checkpoint a
+disk whose final drain was refused, so the refused writes never reach the
+cloud through a checkpoint either.
 
 :::

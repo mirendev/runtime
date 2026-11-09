@@ -28,6 +28,8 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 	_ "modernc.org/sqlite"
 )
 
@@ -1694,61 +1696,114 @@ func TestAcceleratorAttachedCheckpointNeedsFreeSpace(t *testing.T) {
 	require.Len(t, cloud.publications, published+1)
 }
 
-// The documented manual recovery from a sequence gap works end to end. The
-// refusal is final, so it releases the pending-upload gate: the disk can
-// detach, and only the refused segments, still local, keep its drain from
-// finishing. Once they are moved aside and the cloud forgets the refused
-// update, the lease is released and the disk reattaches.
+// The documented manual recovery from a sequence gap works end to end, for
+// volumes with and without a stream. The refusal first comes from the detach
+// drain, which still logs, counts, holds and marks the volume, and does not
+// checkpoint the image holding the refused writes. Once the operator moves
+// the refused segments (and, without a stream, the local image) aside and the
+// cloud forgets the refused update, the lease is released and the disk
+// reattaches from the cloud history, without the writes after the gap.
 func TestAcceleratorSequenceGapManualRecovery(t *testing.T) {
-	cloud, c, v := newRecoveryCloud(t)
-	expected := seedRecoveryCheckpoint(t, c, v)
-	imagePath := filepath.Join(v.DiskPath, "disk.img")
-	logDir := filepath.Join(v.DiskPath, "logs")
-	require.NoError(t, os.Mkdir(logDir, 0700))
-	const gapped = "400000000000000000000002"
-	segment := buildSegmentData(t, 4096, gapped, []lbd.Entry{makeWriteEntry(3, bytes.Repeat([]byte{0xF6}, 4096))})
-	require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+gapped+".log"), segment, 0600))
-	c.ops.(*mockDiskMountOps).lbdBackings["/dev/lbd0"] = imagePath
-	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{
-		EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol", Mode: storage_v1alpha.VM_ACCELERATOR,
-		BackingPath: imagePath, DevicePath: "/dev/lbd0", Mounted: true, LeaseNonce: "nonce", LeaseOwned: true,
-	}))
-	cloud.mockCloudServer.mu.Lock()
-	cloud.leases["vol"] = &activeLease{Nonce: "nonce"}
-	cloud.mockCloudServer.mu.Unlock()
-	cloud.mu.Lock()
-	cloud.sequenceGap = true
-	cloud.mu.Unlock()
+	for _, withStream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%v", withStream), func(t *testing.T) {
+			cloud, c, v := newRecoveryCloud(t)
+			imagePath := filepath.Join(v.DiskPath, "disk.img")
+			var expected []byte
+			if withStream {
+				expected = seedRecoveryCheckpoint(t, c, v)
+			} else {
+				expected = make([]byte, v.SizeBytes)
+				copy(expected, bytes.Repeat([]byte{0xA7}, 4096))
+				old := buildSegmentData(t, 4096, "400000000000000000000001", []lbd.Entry{makeWriteEntry(0, expected[:4096])})
+				_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000000000001"}, bytes.NewReader(old), int64(len(old)))
+				require.NoError(t, err)
+				require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000001"))
+			}
+			// The watcher published past the last checkpoint before the gap.
+			copy(expected[2*4096:], bytes.Repeat([]byte{0x3C}, 4096))
+			cloud.addTail(t, []lbd.Entry{rewindEntry(5, 2, 2, 0x3C)})
+			require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000002"))
+			// lbd folded the gap's writes into the image at the clean detach.
+			gappedImage := slices.Clone(expected)
+			copy(gappedImage[3*4096:], bytes.Repeat([]byte{0xF6}, 4096))
+			require.NoError(t, os.WriteFile(imagePath, gappedImage, 0600))
+			logDir := filepath.Join(v.DiskPath, "logs")
+			require.NoError(t, os.MkdirAll(logDir, 0700))
+			const gapped = "400000000000000000000003"
+			segment := buildSegmentData(t, 4096, gapped, []lbd.Entry{makeWriteEntry(3, bytes.Repeat([]byte{0xF6}, 4096))})
+			require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+gapped+".log"), segment, 0600))
 
-	// While attached, the watcher's upload is refused, and the gate is released.
-	u := NewCloudSegmentUploaderWithClient(slog.Default(), c.updatesClient, c.state)
-	err := u.UploadSegments(t.Context(), "vol", v.DiskPath, []string{filepath.Join(logDir, "disk."+gapped+".log")}, func(string) error { return nil })
-	require.ErrorIs(t, err, errSequenceGap)
-	require.False(t, c.state.HasPendingCloudUpload("vol"), "a final refusal leaves nothing to reconcile")
+			es, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			_, err := es.EAC.Create(t.Context(), entity.New(entity.DBId, entity.Id(v.EntityId),
+				(&storage_v1alpha.DiskVolume{ID: entity.Id(v.EntityId)}).Encode).Attrs())
+			require.NoError(t, err)
+			points := &recordedPoints{}
+			u := NewCloudSegmentUploaderWithClient(slog.Default(), c.updatesClient, c.state)
+			u.SetMetricsWriter(points)
+			u.SetEAC(es.EAC)
+			c.SetLogUploader(u)
+			uploadBlocked := func() string {
+				resp, err := es.EAC.Get(t.Context(), v.EntityId)
+				require.NoError(t, err)
+				var dv storage_v1alpha.DiskVolume
+				dv.Decode(resp.Entity().Entity())
+				return dv.UploadBlocked
+			}
 
-	// 1. Stopping the app detaches the disk; the drain is refused again.
-	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
-		ActualState: storage_v1alpha.DM_MOUNTED}
-	require.Error(t, c.Reconcile(t.Context(), mount, nil))
-	require.NotEmpty(t, c.ops.(*mockDiskMountOps).detachedLbds, "the disk detaches despite the refusal")
-	require.NotNil(t, c.state.GetMount("mount"), "the lease is kept while refused segments remain")
+			c.ops.(*mockDiskMountOps).lbdBackings["/dev/lbd0"] = imagePath
+			require.NoError(t, c.state.SetMountAndSave("mount", &MountState{
+				EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol", Mode: storage_v1alpha.VM_ACCELERATOR,
+				BackingPath: imagePath, DevicePath: "/dev/lbd0", Mounted: true, LeaseNonce: "nonce", LeaseOwned: true,
+			}))
+			cloud.mockCloudServer.mu.Lock()
+			cloud.leases["vol"] = &activeLease{Nonce: "nonce"}
+			cloud.mockCloudServer.mu.Unlock()
+			cloud.mu.Lock()
+			cloud.sequenceGap = true
+			cloud.mu.Unlock()
+			claims := checkpointClaims(cloud)
 
-	// 2. Move the refused segments aside. 3. Delete the refused update.
-	aside := t.TempDir()
-	require.NoError(t, os.Rename(filepath.Join(logDir, "disk."+gapped+".log"), filepath.Join(aside, "disk."+gapped+".log")))
-	cloud.mu.Lock()
-	cloud.sequenceGap = false
-	cloud.mu.Unlock()
-	mount.ActualState = storage_v1alpha.DM_ERROR
-	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
-	require.Nil(t, c.state.GetMount("mount"))
-	cloud.mockCloudServer.mu.Lock()
-	require.Empty(t, cloud.leases, "the lease is released")
-	cloud.mockCloudServer.mu.Unlock()
+			// 1. Stopping the app detaches the disk; its drain is refused.
+			mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
+				ActualState: storage_v1alpha.DM_MOUNTED}
+			require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
+			require.NotEmpty(t, c.ops.(*mockDiskMountOps).detachedLbds, "the disk detaches despite the refusal")
+			require.NotNil(t, c.state.GetMount("mount"), "the lease is kept while refused segments remain")
+			require.False(t, c.state.HasPendingCloudUpload("vol"), "a final refusal leaves nothing to reconcile")
+			refusals := points.named("miren_disk_lbd_log_sequence_gap_refusals_total")
+			require.Len(t, refusals, 1, "a refusal first hit by the drain is counted")
+			require.Equal(t, "vol", refusals[0].Labels["volume_id"])
+			require.Equal(t, uploadBlockedSequenceGap, uploadBlocked(), "miren doctor sees a refusal first hit by the drain")
+			require.Equal(t, claims, checkpointClaims(cloud), "the image holding refused writes is never checkpointed")
+			require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
+			require.Len(t, points.named("miren_disk_lbd_log_sequence_gap_refusals_total"), 1, "a held volume is not refused again")
 
-	// 4. Reattach: the volume recovers from its cloud history.
-	mountAndDetach(t, c, v)
-	actual, err := os.ReadFile(imagePath)
-	require.NoError(t, err)
-	require.Equal(t, expected, actual, "the cloud history continues from before the gap")
+			// 2. Move the refused segments, and a stream-less image, aside.
+			// 3. Delete the refused update.
+			aside := t.TempDir()
+			moved := []string{"logs/disk." + gapped + ".log"}
+			if !withStream {
+				moved = append(moved, "disk.img", logHorizonFile)
+			}
+			for _, name := range moved {
+				require.NoError(t, os.Rename(filepath.Join(v.DiskPath, name), filepath.Join(aside, filepath.Base(name))))
+			}
+			cloud.mu.Lock()
+			cloud.sequenceGap = false
+			cloud.mu.Unlock()
+			mount.ActualState = storage_v1alpha.DM_ERROR
+			require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+			require.Nil(t, c.state.GetMount("mount"))
+			cloud.mockCloudServer.mu.Lock()
+			require.Empty(t, cloud.leases, "the lease is released")
+			cloud.mockCloudServer.mu.Unlock()
+
+			// 4. Reattach: the volume recovers from its cloud history.
+			mountAndDetach(t, c, v)
+			actual, err := os.ReadFile(imagePath)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual, "the cloud history continues from before the gap")
+		})
+	}
 }
