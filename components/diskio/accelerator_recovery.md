@@ -204,6 +204,46 @@ it. Hourly checkpoints while the disk is attached (MIR-2213) cover the gap left
 by detach checkpoints that time out. Neither upload completion nor publication deletes any cloud
 history; cloud retirement remains MIR-2185's transaction.
 
+A volume with no stream file gets a longer cap for that first detach checkpoint
+(default 15 minutes; `accelerator_first_checkpoint_timeout`, or
+`MIREN_SERVER_ACCELERATOR_FIRST_CHECKPOINT_TIMEOUT`). Hourly checkpoints only
+run for volumes with a stream, so a first checkpoint that never finishes would
+leave the volume's replay growing forever. Consecutive first-checkpoint
+timeouts are counted in `accelerator-checkpoint-timeouts`, which survives
+restarts; from the third, each timeout logs a warning to raise the cap. Any
+other outcome resets the count. Once the volume has a stream, its detach
+checkpoints use the ordinary cap.
+
+Hourly checkpoints rebuild a whole image beside the live one. Each first checks
+that the volume directory's filesystem has room for the device size plus a
+margin of a tenth of it, at least 256 MiB. Otherwise the checkpoint is skipped
+with a warning and `miren_disk_accelerator_checkpoint_skipped_total{volume_id,
+reason="low_disk_space"}`, and retried the next interval. A skipped checkpoint
+loses nothing: the cloud keeps the log.
+
+## Sequence gaps
+
+The cloud refuses to complete an `lbd_log` whose first sequence is neither 0
+nor where the last published log ends, with 409 `code: sequence_gap`. A healthy
+runtime never sends one: lbd numbers entries contiguously within an attachment
+and from 0 on each attach, and coalescing joins only contiguous segments. A gap
+comes only from an lbd log write that failed on the node, and those writes are
+missing from history either way.
+
+The refusal is final. The runtime logs it at Error with the volume and the
+cloud's lease ID (read from `GET …/lease`), counts it in
+`miren_disk_lbd_log_sequence_gap_refusals_total{volume_id, lease_id}`, and sets
+`upload_blocked: sequence_gap` on the disk_volume, which the disk health API
+reports and `miren doctor` fails on. It then holds the volume's uploads for an
+hour before trying once more, instead of retrying every minute. The next
+successful upload clears the hold and the doctor signal.
+
+There is no automatic recovery, and a checkpoint does not get past a gap.
+Recovery is manual: delete the refused updates, then reattach so lbd numbers
+from 0. The refused segment and those after it are still in the volume's local
+`logs` directory and would be refused again, so they must be moved aside first
+(see "Recovering from a sequence gap" in the disk accelerator docs).
+
 ## Installation, compatibility, and cost
 
 For stream volumes on a v1 cloud, recovery deliberately downloads a selected

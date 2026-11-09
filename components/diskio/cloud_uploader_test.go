@@ -1408,3 +1408,74 @@ func TestUploadPipelineResumedTurnPublishesRestOfBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, left)
 }
+
+// A sequence_gap refusal is final, so the uploader names the volume and its
+// lease, counts it, and holds the volume's uploads instead of retrying; a
+// plain 409 is not a sequence gap. Once the hold ends and an upload succeeds,
+// uploads flow again.
+func TestUploadHoldsVolumeAfterSequenceGap(t *testing.T) {
+	cloud := newMockCloudServer(t)
+	var mu sync.Mutex
+	refuse, completions := "sequence_gap", 0
+	cloud.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/lease") {
+			json.NewEncoder(w).Encode(map[string]string{"volume_id": "vol-test", "lease_id": "lease-7"})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/updates/") && strings.HasSuffix(r.URL.Path, "/complete") {
+			mu.Lock()
+			completions++
+			code := refuse
+			mu.Unlock()
+			if code != "" {
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{"error": "refused", "code": code})
+				return
+			}
+		}
+		cloud.ServeHTTP(w, r)
+	})
+	auth := newTestAuthClient(t, cloud.URL())
+	updates := NewCloudUpdatesClient(slog.Default(), cloud.URL(), auth)
+	u := NewCloudSegmentUploaderWithClient(slog.Default(), updates, nil)
+	u.SetLeaseReader(NewCloudDiskClientWithUpdates(slog.Default(), cloud.URL(), auth, updates))
+	points := &recordedPoints{}
+	u.SetMetricsWriter(points)
+
+	diskPath := t.TempDir()
+	label := "400000000000000100000001"
+	path := buildSegmentFile(t, diskPath, label, 4096, []lbd.Entry{makeWriteEntry(5, bytes.Repeat([]byte{0x5A}, 4096))})
+	upload := func() error {
+		return u.UploadSegments(t.Context(), "vol-test", diskPath, []string{path}, func(string) error { return nil })
+	}
+
+	require.ErrorIs(t, upload(), errSequenceGap)
+	refusals := points.named("miren_disk_lbd_log_sequence_gap_refusals_total")
+	require.Len(t, refusals, 1)
+	require.Equal(t, map[string]string{"volume_id": "vol-test", "lease_id": "lease-7"}, refusals[0].Labels)
+	mu.Lock()
+	tried := completions
+	mu.Unlock()
+
+	require.ErrorIs(t, upload(), errSequenceGap)
+	mu.Lock()
+	require.Equal(t, tried, completions, "a held volume does not ask the cloud again")
+	mu.Unlock()
+	require.Len(t, points.named("miren_disk_lbd_log_sequence_gap_refusals_total"), 1)
+
+	// After the hold, a recovered volume uploads normally.
+	u.gapMu.Lock()
+	u.gapUntil["vol-test"] = time.Now()
+	u.gapMu.Unlock()
+	mu.Lock()
+	refuse = "duplicate"
+	mu.Unlock()
+	err := upload()
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errSequenceGap, "only the sequence_gap code holds uploads")
+	mu.Lock()
+	refuse = ""
+	mu.Unlock()
+	require.NoError(t, upload())
+	require.NoError(t, u.heldForSequenceGap("vol-test"))
+}

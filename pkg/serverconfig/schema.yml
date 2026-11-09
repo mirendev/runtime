@@ -221,6 +221,17 @@ configs:
         validation:
           min: 1
 
+      accelerator_first_checkpoint_timeout:
+        type: int
+        default: 900
+        cli:
+          long: accelerator-first-checkpoint-timeout
+          description: Seconds an accelerator disk with no checkpoint stream yet may spend on its first checkpoint at detach before the writer lease is released anyway
+        env: MIREN_SERVER_ACCELERATOR_FIRST_CHECKPOINT_TIMEOUT
+        toml: accelerator_first_checkpoint_timeout
+        validation:
+          min: 1
+
       accelerator_checkpoint_interval:
         type: int
         default: 3600

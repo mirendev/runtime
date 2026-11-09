@@ -182,6 +182,10 @@ kinds:
       type: string
       doc: Nonce of a cloud lease an organization admin took over for this cluster from a lost writer; the volume's next mount writes under it instead of acquiring a lease, then clears it (empty for none)
 
+    upload_blocked:
+      type: string
+      doc: Why miren.cloud refuses this volume's log uploads, such as sequence_gap after a lost lbd log write; empty while uploads flow
+
     node_id:
       type: ref
       doc: Node where this volume should be provisioned

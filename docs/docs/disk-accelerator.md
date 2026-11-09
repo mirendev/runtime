@@ -213,3 +213,40 @@ does not provide an authenticated, conditional batch abort that fences late
 requests and proves all pending identities resolved. If normal completion
 cannot reconcile the original batch, the volume intentionally remains blocked;
 escalate for protocol-level recovery rather than bypassing local fencing.
+
+## Recovering from a sequence gap
+
+lbd numbers every log entry of an attached disk in order. If writing a log
+segment fails on the node, for example on an I/O error, the lost entries leave
+a gap in that numbering. miren.cloud refuses to publish a log that would leave
+a hole in the volume's history, and answers its upload with a `409` carrying
+`code: sequence_gap`. The refusal is final: the same log is refused every
+time.
+
+When this happens, the runtime:
+
+- logs an error naming the volume and its cloud lease;
+- counts it in `miren_disk_lbd_log_sequence_gap_refusals_total{volume_id, lease_id}`;
+- marks the volume, so `miren doctor` fails its disk check until uploads flow again;
+- holds the volume's uploads for an hour before trying once more, instead of
+  retrying.
+
+Until it is recovered, the volume's later writes do not reach the cloud. The
+writes in the gap are missing from the cloud history either way. Recovery is
+manual, and a checkpoint does not get past it:
+
+1. Stop the disk's app and preserve the volume directory, as described above.
+2. Move the volume's remaining log segments out of its `logs` directory, and
+   keep them. They include the refused segment and everything after it, and
+   the runtime would otherwise upload them, and be refused, again.
+3. Delete the refused updates from the cloud volume.
+4. Reattach the disk. lbd numbers the new attachment from 0, which the cloud
+   accepts.
+
+:::warning[Writes after the gap leave the cloud history]
+
+The segments moved aside in step 2 hold writes the cloud never published.
+After recovery, the volume's cloud history continues from before the gap, and
+those writes exist only in the preserved files.
+
+:::

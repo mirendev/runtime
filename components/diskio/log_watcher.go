@@ -311,7 +311,11 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 			return nil, false, err
 		}
 		if batch, ok := w.uploader.(logSegmentBatchUploader); ok {
-			if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths, retire); err != nil {
+			if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths, retire); errors.Is(err, errSequenceGap) {
+				// The uploader logged the refusal; only the hold repeats here.
+				w.log.Debug("volume's uploads are held after a sequence gap", "volume_id", vol.CloudVolumeId, "error", err)
+				return nil, false, err
+			} else if err != nil {
 				w.log.Warn("failed to upload segments, pausing this volume's scan", "path", paths[0], "error", err)
 				return nil, false, err
 			}

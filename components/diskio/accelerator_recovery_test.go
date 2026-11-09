@@ -27,6 +27,7 @@ import (
 	"miren.dev/lbd"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/metrics"
 	_ "modernc.org/sqlite"
 )
 
@@ -40,7 +41,9 @@ type recoveryCloud struct {
 	losePublication bool
 	uploadFail      bool
 	// stallUpload holds checkpoint PUTs open until the client gives up.
-	stallUpload   bool
+	stallUpload bool
+	// uploadDelay holds each checkpoint PUT this long before accepting it.
+	uploadDelay   time.Duration
 	downloadDelay time.Duration
 	renewFail     bool
 	// stallRenewal holds the next renewal open until its request is cancelled.
@@ -386,6 +389,20 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			if checkpoint {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
+			}
+		}
+		if s.uploadDelay > 0 && r.Method == http.MethodPut {
+			s.mockCloudServer.mu.Lock()
+			object := s.segments[strings.TrimPrefix(r.URL.Path, "/upload/")]
+			s.mockCloudServer.mu.Unlock()
+			if object != nil && object.Kind == string(KindLBDCheckpoint) {
+				delay := s.uploadDelay
+				s.mu.Unlock()
+				select {
+				case <-time.After(delay):
+				case <-r.Context().Done():
+				}
+				s.mu.Lock()
 			}
 		}
 		if s.downloadDelay > 0 && strings.HasPrefix(r.URL.Path, "/data/") {
@@ -1178,7 +1195,7 @@ func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
 	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
 	require.NoError(t, err)
 	cloud.stallUpload = true
-	c.SetCheckpointTimeout(500 * time.Millisecond)
+	c.SetFirstCheckpointTimeout(500 * time.Millisecond)
 	started := time.Now()
 	mountAndDetach(t, c, v)
 	require.Less(t, time.Since(started), 10*time.Second, "the lease must not wait on a stalled checkpoint")
@@ -1559,4 +1576,113 @@ func TestAcceleratorPlainBeginConflictIsAnOrdinaryFailure(t *testing.T) {
 	mountAndDetach(t, c, v)
 	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
 	require.Equal(t, 1, checkpointClaims(cloud))
+}
+
+// A volume with no stream must upload a full image to start one, so its first
+// detach checkpoint gets the longer first-checkpoint cap. Once it has a
+// stream, detach checkpoints keep the ordinary cap.
+func TestAcceleratorFirstCheckpointGetsLongerTimeout(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x2B}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.uploadDelay = 600 * time.Millisecond
+	c.SetCheckpointTimeout(150 * time.Millisecond)
+	require.Equal(t, DefaultFirstCheckpointTimeout, c.firstCheckpointTimeout)
+
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile), "the first checkpoint outlasts the ordinary cap")
+	published := len(cloud.publications)
+
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 2, 3, 0x44)})
+	mountAndDetach(t, c, v)
+	require.Len(t, cloud.publications, published, "a stream volume's checkpoint keeps the ordinary cap")
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointTimeoutsFile))
+}
+
+// Repeated timeouts of a stream-less volume's first checkpoint are counted
+// across detaches, so the warning that it never starts a stream can fire.
+func TestAcceleratorRepeatedFirstCheckpointTimeoutsAreCounted(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x2B}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.stallUpload = true
+	c.SetFirstCheckpointTimeout(150 * time.Millisecond)
+	for range repeatedFirstCheckpointTimeouts {
+		mountAndDetach(t, c, v)
+	}
+	count, err := os.ReadFile(filepath.Join(v.DiskPath, checkpointTimeoutsFile))
+	require.NoError(t, err)
+	require.Equal(t, strconv.Itoa(repeatedFirstCheckpointTimeouts), string(count))
+
+	cloud.mu.Lock()
+	cloud.stallUpload = false
+	cloud.mu.Unlock()
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointTimeoutsFile), "success resets the count")
+}
+
+type recordedPoints struct {
+	mu     sync.Mutex
+	points []metrics.MetricPoint
+}
+
+func (r *recordedPoints) WritePoints(_ context.Context, points []metrics.MetricPoint) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.points = append(r.points, points...)
+	return nil
+}
+
+func (r *recordedPoints) named(name string) []metrics.MetricPoint {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []metrics.MetricPoint
+	for _, p := range r.points {
+		if p.Name == name {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// An attached checkpoint rebuilds a whole image beside the live one, so it is
+// skipped, with a warning and a metric, unless free space covers the image
+// plus a margin. With room again, the next interval publishes.
+func TestAcceleratorAttachedCheckpointNeedsFreeSpace(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 41, 2, 0xC3)})
+	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{EntityId: "mount", VolumeId: v.VolumeId, CloudVolumeId: "vol",
+		DevicePath: "/dev/lbd0", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "nonce", LeaseOwned: true}))
+	points := &recordedPoints{}
+	c.SetMetricsWriter(points)
+	free := uint64(cloud.manifest.DeviceSize) + attachedCheckpointMinMargin - 1
+	restore := availableBytes
+	availableBytes = func(string) (uint64, error) { return free, nil }
+	t.Cleanup(func() { availableBytes = restore })
+
+	published := len(cloud.publications)
+	due := map[string]time.Time{v.VolumeId: time.Now()}
+	c.checkpointAttachedMounts(t.Context(), due, time.Now())
+	require.Len(t, cloud.publications, published, "no checkpoint without room for the image and its margin")
+	skipped := points.named("miren_disk_accelerator_checkpoint_skipped_total")
+	require.Len(t, skipped, 1)
+	require.Equal(t, map[string]string{"volume_id": "vol", "reason": "low_disk_space"}, skipped[0].Labels)
+	leftovers, err := filepath.Glob(filepath.Join(v.DiskPath, ".*"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers, "nothing is written when skipped")
+
+	free++
+	due[v.VolumeId] = time.Now()
+	c.checkpointAttachedMounts(t.Context(), due, time.Now())
+	require.Len(t, cloud.publications, published+1)
 }

@@ -226,6 +226,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.AcceleratorCheckpointTimeout = flags.ServerConfigAcceleratorCheckpointTimeout
 	}
 
+	if flags.ServerConfigAcceleratorFirstCheckpointTimeout != nil {
+		cfg.Server.AcceleratorFirstCheckpointTimeout = flags.ServerConfigAcceleratorFirstCheckpointTimeout
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}

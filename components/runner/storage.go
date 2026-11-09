@@ -95,6 +95,8 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	s.dmc = diskio.NewDiskMountController(log, dataPath, s.nodeId(), diskioState, mntOps)
 	s.dmc.SetEAC(eas)
 	s.dmc.SetCheckpointTimeout(s.config.AcceleratorCheckpointTimeout)
+	s.dmc.SetFirstCheckpointTimeout(s.config.AcceleratorFirstCheckpointTimeout)
+	s.dmc.SetMetricsWriter(s.deps.MetricsWriter)
 	s.dmc.SetAttachedCheckpointInterval(s.config.AcceleratorCheckpointInterval)
 	s.diskGC = &diskio.DeletedVolumeGC{
 		Log:      log.With("module", "deleted-volume-gc"),
@@ -131,6 +133,8 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 				s.dvc.SetCloudVolumeRegistrar(diskio.NewCloudVolumeRegistrar(log, cloudURL, authClient), auth.ClusterID)
 				uploader := diskio.NewCloudSegmentUploaderWithClient(log, updates, diskioState)
 				uploader.SetLeaseReader(diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updates))
+				uploader.SetMetricsWriter(s.deps.MetricsWriter)
+				uploader.SetEAC(eas)
 				logUploader = uploader
 			}
 		}

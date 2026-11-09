@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,20 @@ const checkpointConflictFile = "accelerator-checkpoint-conflict"
 // writer lease is held and so delays failover. A missed detach checkpoint loses
 // nothing: the drained tail is durable and attached checkpoints cover the gap.
 const DefaultCheckpointTimeout = 2 * time.Minute
+
+// DefaultFirstCheckpointTimeout caps the detach checkpoint of a volume with no
+// stream yet. Until one publishes, the volume gets no attached checkpoints and
+// its replay keeps growing, so it gets longer to upload its first full image.
+const DefaultFirstCheckpointTimeout = 15 * time.Minute
+
+// checkpointTimeoutsFile counts a stream-less volume's consecutive first
+// checkpoints that timed out, so repeated timeouts are noticed across detaches
+// and restarts.
+const checkpointTimeoutsFile = "accelerator-checkpoint-timeouts"
+
+// repeatedFirstCheckpointTimeouts is how many consecutive first-checkpoint
+// timeouts earn a warning that the volume may never start a stream.
+const repeatedFirstCheckpointTimeouts = 3
 
 type ctxReader struct {
 	ctx context.Context
@@ -67,15 +82,27 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	if v == nil || v.CloudVolumeId == "" {
 		return
 	}
+	timeout := c.checkpointTimeout
+	_, statErr := os.Stat(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	first := os.IsNotExist(statErr)
+	if first {
+		timeout = c.firstCheckpointTimeout
+	}
 	// A bounded caller such as Shutdown must still fit the lease release in
 	// the same context after a full checkpoint timeout.
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < c.checkpointTimeout+jsonRequestTimeout {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout+jsonRequestTimeout {
 		c.log.Info("skipping accelerator checkpoint under a short deadline", "volume_id", v.CloudVolumeId)
 		return
 	}
-	checkpointCtx, cancel := context.WithTimeout(ctx, c.checkpointTimeout)
+	checkpointCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := c.publishAcceleratorCheckpoint(checkpointCtx, v, mount.LeaseNonce)
+	timedOut := err != nil && checkpointCtx.Err() != nil && ctx.Err() == nil
+	if !timedOut || !first {
+		if rmErr := os.Remove(filepath.Join(v.DiskPath, checkpointTimeoutsFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+			c.log.Warn("failed to reset checkpoint timeout count", "volume_id", v.CloudVolumeId, "error", rmErr)
+		}
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, errCheckpointUnsupported):
@@ -84,16 +111,38 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	case errors.Is(err, errCheckpointStreamConflict):
 		c.log.Warn("cloud refused the checkpoint stream; skipping checkpoints until the stream changes",
 			"volume_id", v.CloudVolumeId, "error", err)
-	case checkpointCtx.Err() != nil && ctx.Err() == nil:
+	case timedOut:
 		// The staged bytes go, but the intent stays: it holds a legacy
 		// volume's proposed stream, which the cloud may already have accepted.
 		if rmErr := os.Remove(filepath.Join(v.DiskPath, checkpointPayloadFile)); rmErr != nil && !os.IsNotExist(rmErr) {
 			c.log.Warn("failed to discard abandoned checkpoint", "volume_id", v.CloudVolumeId, "error", rmErr)
 		}
 		c.log.Warn("accelerator checkpoint exceeded its timeout; abandoned", "volume_id", v.CloudVolumeId,
-			"timeout", c.checkpointTimeout)
+			"timeout", timeout, "first", first)
+		if first {
+			c.noteFirstCheckpointTimeout(v, timeout)
+		}
 	default:
 		c.log.Warn("accelerator checkpoint failed; will retry at next detach", "volume_id", v.CloudVolumeId, "error", err)
+	}
+}
+
+// noteFirstCheckpointTimeout counts consecutive timeouts of a stream-less
+// volume's first checkpoint and warns once they repeat: such a volume never
+// starts a stream, so it never gets attached checkpoints either.
+func (c *DiskMountController) noteFirstCheckpointTimeout(v *VolumeState, timeout time.Duration) {
+	path := filepath.Join(v.DiskPath, checkpointTimeoutsFile)
+	count := 0
+	if data, err := os.ReadFile(path); err == nil {
+		count, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+	}
+	count++
+	if err := writeRecoveryFile(v.DiskPath, checkpointTimeoutsFile, []byte(strconv.Itoa(count))); err != nil {
+		c.log.Warn("failed to record checkpoint timeout count", "volume_id", v.CloudVolumeId, "error", err)
+	}
+	if count >= repeatedFirstCheckpointTimeouts {
+		c.log.Warn("accelerator volume's first checkpoint keeps timing out; it gets no checkpoint stream, so replay keeps growing. Raise accelerator_first_checkpoint_timeout",
+			"volume_id", v.CloudVolumeId, "consecutive_timeouts", count, "timeout", timeout)
 	}
 }
 

@@ -160,44 +160,51 @@ func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitio
 // ActiveLease reports whether any writer holds a lease on the volume. The
 // cloud never returns the holder's nonce, so it cannot say whose it is.
 func (c *cloudDiskClient) ActiveLease(ctx context.Context, volumeID string) (bool, error) {
+	id, err := c.ActiveLeaseID(ctx, volumeID)
+	return id != "", err
+}
+
+// ActiveLeaseID returns the cloud's ID of the volume's active lease, or ""
+// when there is none.
+func (c *cloudDiskClient) ActiveLeaseID(ctx context.Context, volumeID string) (string, error) {
 	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/volumes", volumeID, "lease")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	token, err := c.authClient.Authenticate(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to authenticate: %w", err)
+		return "", fmt.Errorf("failed to authenticate: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer resp.Body.Close()
 	invalidateOnUnauthorized(c.authClient, resp)
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return false, nil
+		return "", nil
 	case http.StatusOK:
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return false, fmt.Errorf("get lease failed with status %d: %s", resp.StatusCode, body)
+		return "", fmt.Errorf("get lease failed with status %d: %s", resp.StatusCode, body)
 	}
 	var lease struct {
 		VolumeID string `json:"volume_id"`
 		LeaseID  string `json:"lease_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&lease); err != nil {
-		return false, err
+		return "", err
 	}
 	if lease.VolumeID != volumeID || lease.LeaseID == "" {
-		return false, fmt.Errorf("lease response does not describe volume %s", volumeID)
+		return "", fmt.Errorf("lease response does not describe volume %s", volumeID)
 	}
-	return true, nil
+	return lease.LeaseID, nil
 }
 
 func (c *cloudDiskClient) ReleaseLease(ctx context.Context, volumeID string, nonce string) error {

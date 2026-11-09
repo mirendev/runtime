@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"miren.dev/lbd"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
@@ -30,6 +31,14 @@ type CloudSegmentUploader struct {
 	updates CloudUpdatesClient
 	state   *State
 	leases  leaseHolderReader
+	metrics *diskMetrics
+	eac     *entityserver_v1alpha.EntityAccessClient
+
+	// gapUntil holds a volume's uploads after a sequence_gap refusal; gapClear
+	// records volumes whose doctor signal this process has already cleared.
+	gapMu    sync.Mutex
+	gapUntil map[string]time.Time
+	gapClear map[string]bool
 }
 
 type leaseHolderReader interface {
@@ -98,6 +107,9 @@ func uploadTurnSize(paths []string) (int, error) {
 // Thus a crash or partial publication leaves the original batch available to
 // resume by checksum-bound ordering key, including a lost begin response.
 func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
+	if err := u.heldForSequenceGap(volumeID); err != nil {
+		return err
+	}
 	if u.state != nil {
 		unlock, err := u.state.LockCloudVolume(ctx, volumeID)
 		if err != nil {
@@ -122,7 +134,7 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 			return nil
 		}
 	}
-	return err
+	return u.noteUploadOutcome(ctx, volumeID, err)
 }
 
 // parkFencedTail handles a tail the cloud refused under this node's lease.

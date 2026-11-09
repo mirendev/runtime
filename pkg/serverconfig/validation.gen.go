@@ -218,6 +218,11 @@ func (c *ServerConfig) Validate() error {
 		return fmt.Errorf("accelerator_checkpoint_timeout must be at least 1, got %d", *c.AcceleratorCheckpointTimeout)
 	}
 
+	// Validate accelerator_first_checkpoint_timeout minimum
+	if c.AcceleratorFirstCheckpointTimeout != nil && *c.AcceleratorFirstCheckpointTimeout < 1 {
+		return fmt.Errorf("accelerator_first_checkpoint_timeout must be at least 1, got %d", *c.AcceleratorFirstCheckpointTimeout)
+	}
+
 	// Validate address
 	if c.Address != nil && *c.Address != "" {
 		if _, _, err := net.SplitHostPort(*c.Address); err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -19,6 +20,19 @@ const DefaultAttachedCheckpointInterval = time.Hour
 // attachedCheckpointPoll is how often attached mounts are checked for a due
 // checkpoint. It only bounds how late one starts.
 const attachedCheckpointPoll = 5 * time.Minute
+
+// attachedCheckpointMinMargin is the least free space an attached checkpoint
+// leaves beyond its rebuilt image, for the compressed payload and other writers.
+const attachedCheckpointMinMargin = 256 << 20
+
+// availableBytes reports the free space for unprivileged writes at path.
+var availableBytes = func(path string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, err
+	}
+	return uint64(st.Bavail) * uint64(st.Bsize), nil
+}
 
 // checkpointBasisReplayed tells the cloud the image was rebuilt from its own
 // committed history, so its boundary may lie below the moving head.
@@ -110,6 +124,19 @@ func (c *DiskMountController) publishAttachedCheckpoint(ctx context.Context, cli
 	}
 	if m.Head == "" || (m.Checkpoint != nil && m.Checkpoint.ThroughLabel == m.Head) {
 		return nil // nothing committed since the newest checkpoint
+	}
+	// The rebuild writes a whole image next to the live one, then its
+	// compressed payload. Running the volume's own filesystem out of space
+	// would cost far more than a skipped checkpoint, which loses nothing.
+	need := m.DeviceSize + max(m.DeviceSize/10, attachedCheckpointMinMargin)
+	if free, err := availableBytes(v.DiskPath); err != nil {
+		return fmt.Errorf("check free space: %w", err)
+	} else if free < need {
+		c.log.Warn("skipping attached accelerator checkpoint: not enough free disk space to rebuild the image",
+			"volume_id", v.CloudVolumeId, "path", v.DiskPath, "free_bytes", free, "needed_bytes", need)
+		c.metrics.inc(ctx, "miren_disk_accelerator_checkpoint_skipped_total",
+			map[string]string{"volume_id": v.CloudVolumeId, "reason": "low_disk_space"})
+		return nil
 	}
 	start := time.Now()
 	var payload string

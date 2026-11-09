@@ -14,6 +14,7 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -49,6 +50,10 @@ type DiskMountController struct {
 	checkpointsUnsupported atomic.Bool
 	// checkpointTimeout bounds a detach checkpoint, which holds the lease.
 	checkpointTimeout time.Duration
+	// firstCheckpointTimeout bounds the detach checkpoint of a volume with no
+	// stream yet, which must upload a full image to start one.
+	firstCheckpointTimeout time.Duration
+	metrics                *diskMetrics
 	// attachedCheckpointInterval spaces checkpoints of attached disks.
 	attachedCheckpointInterval time.Duration
 
@@ -71,6 +76,7 @@ func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.No
 		ops:      ops,
 
 		checkpointTimeout:          DefaultCheckpointTimeout,
+		firstCheckpointTimeout:     DefaultFirstCheckpointTimeout,
 		attachedCheckpointInterval: DefaultAttachedCheckpointInterval,
 	}
 }
@@ -89,6 +95,19 @@ func (c *DiskMountController) SetCheckpointTimeout(d time.Duration) {
 	if d > 0 {
 		c.checkpointTimeout = d
 	}
+}
+
+// SetFirstCheckpointTimeout bounds the detach checkpoint of a volume that has
+// no stream yet. Non-positive values keep the default.
+func (c *DiskMountController) SetFirstCheckpointTimeout(d time.Duration) {
+	if d > 0 {
+		c.firstCheckpointTimeout = d
+	}
+}
+
+// SetMetricsWriter publishes the controller's counters; nil disables them.
+func (c *DiskMountController) SetMetricsWriter(w metrics.PointWriter) {
+	c.metrics = newDiskMetrics(w)
 }
 
 func (c *DiskMountController) SetEAC(eac *entityserver_v1alpha.EntityAccessClient) {
