@@ -216,6 +216,8 @@ The canonical use case: let a sandbox assume an AWS IAM role and receive tempora
 
    AWS verifies the token against your cluster's published keys, checks the trust policy, and returns short-lived credentials.
 
+AWS trust policies for a generic OIDC provider can only condition on `aud` and `sub` (plus `amr`, `oaud` and `email`), not on custom claims. `app` is in `sub`, so you can scope a role to an app, but `service` isn't, so you can't scope an AWS role to one service of an app.
+
 ### GCP and Azure
 
 Both Google Cloud and Azure support OIDC-based **workload identity federation**. Configure a workload identity pool / federated credential that trusts your cluster's issuer URL and matches on the token's subject or audience, then exchange the Miren token for cloud credentials using each provider's federation flow. The mechanics differ per provider, but the trust relationship is the same: they verify the token against your cluster's JWKS.
@@ -231,7 +233,7 @@ Your own services can accept Miren identity tokens directly. A service verifies 
 
 ### Per-Workload Access Control
 
-Because each token carries `organization_id`, `cluster_id`, `app`, `service`, and `sandbox_id`, downstream systems can make fine-grained decisions: grant one app access to one bucket, give an app's `worker` service a different cloud role than its `web` service, gate a multi-tenant API on `organization_id`, or trace a request back to the exact sandbox that made it.
+Because each token carries `organization_id`, `cluster_id`, `app`, `service`, and `sandbox_id`, downstream systems can make fine-grained decisions: grant one app access to one bucket, give an app's `worker` service a different GCP role than its `web` service (AWS can't see `service`; see above), gate a multi-tenant API on `organization_id`, or trace a request back to the exact sandbox that made it.
 
 ## Verifying Tokens
 
