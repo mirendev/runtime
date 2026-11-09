@@ -823,7 +823,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	// Resume or unwind creations this node left in flight. Recovery failures are
 	// not fatal: the reconciler still drives new work, and a record left behind
 	// is retried on the next pass.
-	if err := c.executor.Recover(ctx); err != nil {
+	if err := c.executor.Recover(withBootRecovery(ctx)); err != nil {
 		c.Log.Error("saga recovery completed with errors", "error", err)
 	}
 

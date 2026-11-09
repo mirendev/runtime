@@ -12,19 +12,22 @@ metadata cannot authorize recovery or GC.
 **This change is purely additive.** Legacy replay (`replayMissingSegments`)
 remains the default mount path, and runtime and cloud can deploy in either order.
 Legacy replay is unsafe only once cloud retires log prefixes, which does not
-exist yet. Protected recovery is used only when the volume already has an
-`accelerator-stream` file **and** the cloud supports restore sessions; a
-404/405/501 on `restore-sessions` or a `status: "unsupported"` listing falls
-back to legacy replay. A cloud without the route answers its POST with 405,
-because the path also matches `DELETE /updates/{updateId}`. Other errors from a v1 cloud still fail closed. MIR-2185's first cloud
-change accepts checkpoints but does not yet build restore sessions or the
-`recovery_version=1` listing; those return 405 or 404, so stream volumes take the
-legacy replay fallback until they exist.
+exist yet. Protected recovery is used only when the cloud supports restore
+sessions, and only for a volume that already has an `accelerator-stream` file
+or a fresh volume: one with no horizon and no local logs, such as a new disk or
+a volume rebuilt on a new node. A fresh volume adopts the stream the cloud
+names; a `never_backed_up` answer still lists and replays the full log onto a
+blank image. A 404/405/501 on `restore-sessions` or a `status: "unsupported"`
+or `"legacy"` listing falls back to legacy replay. A cloud without the route
+answers its POST with 405, because the path also matches
+`DELETE /updates/{updateId}`. Other errors from a v1 cloud still fail closed.
+MIR-2185's first cloud change accepts checkpoints but does not yet build
+restore sessions or the `recovery_version=1` listing; those return 405 or 404,
+so every volume takes the legacy replay fallback until they exist.
 
-**Deferred to a later change:** removing the legacy fallback for stream volumes,
-enabling prefix retirement, and using protected recovery on a node with no
-local stream file. These follow cloud retention (MIR-2185) and a passing restore
-onto a fresh node from cloud data alone, against the real cloud.
+**Deferred to a later change:** removing the legacy fallback, and enabling
+prefix retirement. These follow cloud retention (MIR-2185) and a passing
+restore onto a fresh node from cloud data alone, against the real cloud.
 
 ## Recovery
 
@@ -38,12 +41,15 @@ the existing authenticated JSON transport:
   with full-image restore; checkpoint-plus-tail is one selection kind, not a
   separate session implementation. Existing full-image callers are unchanged
   by this runtime patch; MIR-2183 supplies their shared protection integration.
+  An optional `until`, an lbd label, selects the history as of that point
+  instead of the head (see Point in time below).
 * Existing `GET /?kind=lbd_log&restore_session=...&recovery_version=1`: returns
   the existing `updates` and `next_cursor`, plus a `recovery` object containing
   the `RecoveryManifest` fields other than `segments`. Every page repeats the
   same selection metadata and binds to the requested session. Tail rows retain
   `update_id`, `kind`, `ordering_key`, and `size`, adding `sha256`,
-  `previous_label`, `first_sequence`, and `entry_count`. The runtime assembles
+  `previous_label`, `first_sequence`, `entry_count`, and `boundary`. The
+  `recovery` object repeats a point-in-time session's `until`. The runtime assembles
   the manifest from all pages using the existing cursor walk. `complete: true`,
   `segment_count`, and `head` describe the **whole** selected tail, not one page.
   Missing/changed metadata, repeated cursors, early EOF, and missing middle or
@@ -58,10 +64,14 @@ the existing authenticated JSON transport:
   The session pins all selected objects throughout listing and downloading;
   resolving an individual download URL is not itself sufficient GC protection.
 
-`status` is `ready` or `never_backed_up`; `unsupported` sends runtime back to
-legacy replay. Other statuses, including `expired` and `unavailable`, are
-errors, never permission to initialize an empty filesystem. Runtime only asks
-for a stream it already has, so it treats `never_backed_up` as lost history.
+`status` is `ready` or `never_backed_up`. `unsupported`, and `legacy` (the
+volume never acknowledged a checkpoint stream, so cloud retains its whole log),
+send runtime back to legacy replay. Other statuses, including `expired` and
+`unavailable`, are errors, never permission to initialize an empty filesystem.
+A volume with a stream treats `never_backed_up` as lost history. A fresh volume
+(no horizon and no local logs) instead adopts the stream the cloud names in a
+`ready` answer, and takes `never_backed_up` as genuinely new: it still lists
+and replays the full log, so that answer never skips a replay.
 The stream itself is proposed by runtime in its first checkpoint and becomes
 durable only when cloud acknowledges that completion; a retried first checkpoint
 reuses the same proposed `stream_id` from its staged intent. `ready` requires a base, stream incarnation, device size, floor, and head. Each object
@@ -82,6 +92,42 @@ checks transport length/digest, snapshot size/checksum, LBD version, label,
 device size, entry counts/sequences, bounds, operations, and write CRCs. It
 renews protection during downloads and again before committing installation.
 Sessions may expire naturally after completion; v1 requires no release endpoint.
+
+## Point in time (`until`)
+
+Rewinding a new volume to another volume's history as of `until` selects the
+newest base at or before `until` and a tail that ends one log past it. An
+lbd_log's label is when its first entry could have been written, and a segment
+keeps receiving writes until the next one opens; a coalesced upload carries the
+label of its last segment. The cloud does not split objects at `until`, so:
+
+* The last tail row is the first `lbd_log` labelled after `until`, flagged
+  `"boundary": true`. It may hold entries written at or before `until`. When
+  `until` is at or past the head there is no boundary row.
+* The row before it, labelled at or before `until`, may hold entries written
+  after `until`.
+
+The runtime filters entries by time in both: it applies entries up to the first
+one written after `until` and skips every entry after that one, across objects.
+A log prefix is a crash state of the device, so the result is the disk as if it
+had crashed at `until`; with a monotonic clock this is exactly "every entry
+written at or before `until`". Skipped entries are still validated.
+
+The selection fails closed unless the `recovery` object repeats the requested
+`until` (a cloud that ignored it would select the head), the base's
+`through_label` is at or before `until`, and exactly the first row labelled
+after `until` is flagged `boundary` and ends the tail. A session without
+`until` must flag no row.
+
+The base is not filtered, and its `through_label` is when its last segment
+opened, not when it closed. The cloud only picks a base whose last segment had
+closed by `until`: either a later log opened at or before `until`, or the
+checkpoint, built only from closed segments, was activated by then. The runtime
+can check the first proof (the first tail row is labelled at or before
+`until`) but not the second, because the manifest carries no activation time.
+So it relies on the cloud for this. Requiring the first proof alone would
+refuse valid points, such as one shortly after a detach checkpoint with no
+log after it yet.
 
 ## Checkpoint production and publication
 
@@ -165,6 +211,65 @@ stream, which cloud may already have accepted; the next detach restages under
 it. Hourly checkpoints while the disk is attached (MIR-2213) cover the gap left
 by detach checkpoints that time out. Neither upload completion nor publication deletes any cloud
 history; cloud retirement remains MIR-2185's transaction.
+
+A volume with no stream file gets a longer cap for that first detach checkpoint
+(default 15 minutes; `accelerator_first_checkpoint_timeout`, or
+`MIREN_SERVER_ACCELERATOR_FIRST_CHECKPOINT_TIMEOUT`). Hourly checkpoints only
+run for volumes with a stream, so a first checkpoint that never finishes would
+leave the volume's replay growing forever. Consecutive first-checkpoint
+timeouts are counted in `accelerator-checkpoint-timeouts`, which survives
+restarts; from the third, each timeout logs a warning to raise the cap. Any
+other outcome resets the count. Once the volume has a stream, its detach
+checkpoints use the ordinary cap.
+
+Hourly checkpoints rebuild a whole image beside the live one. Each first checks
+that the volume directory's filesystem has room for the device size plus a
+margin of a tenth of it, at least 256 MiB. Otherwise the checkpoint is skipped
+with a warning and `miren_disk_accelerator_checkpoint_skipped_total{volume_id,
+reason="low_disk_space"}`, and retried the next interval. A skipped checkpoint
+loses nothing: the cloud keeps the log.
+
+## Sequence gaps
+
+The cloud refuses to complete an `lbd_log` whose first sequence is neither 0
+nor where the last published log ends, with 409 `code: sequence_gap`. A healthy
+runtime never sends one: lbd numbers entries contiguously within an attachment
+and from 0 on each attach, and coalescing joins only contiguous segments. A gap
+comes only from an lbd log write that failed on the node, and those writes are
+missing from history either way.
+
+The refusal is final. The runtime logs it at Error with the volume and the
+cloud's lease ID (read from `GET …/lease`), counts it in
+`miren_disk_lbd_log_sequence_gap_refusals_total{volume_id, lease_id}`, and sets
+`upload_blocked: sequence_gap` on the disk_volume, which the disk health API
+reports and `miren doctor` fails on. It then holds the volume's uploads for an
+hour before trying once more, instead of retrying every minute. The next
+successful upload clears the hold and the doctor signal.
+
+A refusal is a known outcome: the refused log is not published and never will
+be, so there is nothing to reconcile. Like `parkFencedTail`, the refusal
+releases the pending-upload gate and the pinned upload turn. Without that, the
+gate would block detach, lease release and reattach, and nothing but a hand
+edit of the runtime state could clear it. The refused segments stay local, so
+the final drain keeps failing and the lease is kept until they are moved aside.
+
+The final drain at detach and the crash-tail drain before protected recovery
+use the log watcher's uploader (`SetLogUploader`), so a gap first refused there
+gets the same log, metric, doctor signal and hold. A detach whose drain is
+refused also drops its checkpoint: the image holds the refused writes, and
+checkpointing it once the refused logs were cleared would publish them past the
+gap.
+
+There is no automatic recovery, and a checkpoint does not get past a gap.
+Recovery is manual: stop the app so the disk detaches, move the volume's local
+segments aside (they would be refused again), delete the refused updates, and
+let the drain retry release the lease; then reattach, and lbd numbers from 0.
+A volume without an `accelerator-stream` file replays onto its local image,
+which holds the refused writes, so the operator also moves `disk.img` and
+`log_horizon` aside; the next mount is then fresh and replays the cloud's log
+onto a blank image. `TestAcceleratorSequenceGapManualRecovery` runs this
+sequence for volumes with and without a stream. See "Recovering from a sequence
+gap" in the disk accelerator docs.
 
 ## Installation, compatibility, and cost
 

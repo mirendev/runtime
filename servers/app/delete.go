@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -75,6 +76,7 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 	}
 
 	var referencingEntities []entity.Id
+	disks := map[entity.Id]bool{}
 
 	for _, schema := range appRefResult.Schemas() {
 		if !schema.Indexed() {
@@ -96,6 +98,7 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 			if ent := list.Entity(); ent != nil {
 				if id := ent.Id(); id != "" {
 					referencingEntities = append(referencingEntities, id)
+					disks[id] = entity.Is(ent, storage_v1alpha.KindDisk)
 				}
 			}
 		}
@@ -110,6 +113,17 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 	// cleaned up some entities (e.g. pools created for addon infrastructure).
 	for _, id := range referencingEntities {
 		if addonAssocIDs[id] {
+			continue
+		}
+		if disks[id] {
+			// A disk the app created is deleted the way every disk is: the
+			// disk controller soft-deletes its volume, so it stays listed and
+			// undeletable for the retention period. Removing the entity here
+			// would orphan the volume where nothing can find it.
+			log.Info("marking app disk for deletion", "id", id)
+			if err := client.Patch(ctx, id, 0, entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusDeletingId)); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+				return fmt.Errorf("failed to mark disk %s for deletion: %w", id, err)
+			}
 			continue
 		}
 		log.Info("deleting entity", "id", id)

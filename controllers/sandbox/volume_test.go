@@ -680,3 +680,27 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		r.Len(resp.Values(), 1, "running sandbox should not be deleted")
 	})
 }
+
+// A creation resumed during startup must not hold the server unready for a
+// disk lease that never binds (F13): its wait is bounded, while the same
+// creation run by the reconciler keeps the configured wait.
+func TestBootRecoveryBoundsDiskLeaseWait(t *testing.T) {
+	r := require.New(t)
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	controller := &SandboxController{Log: testutils.TestLogger(t), EAC: es.EAC, NodeId: compute.NewNodeId("test-node")}
+	defer func(d time.Duration) { bootRecoveryLeaseWait = d }(bootRecoveryLeaseWait)
+	bootRecoveryLeaseWait = 200 * time.Millisecond
+
+	sb := &compute.Sandbox{ID: entity.Id("sandbox/boot")}
+	volume := compute.SandboxSpecVolume{DiskName: "fenced", MountPath: "/data", SizeGb: 1, LeaseTimeout: "3s"}
+	start := time.Now()
+	_, err := controller.configureMirenVolume(withBootRecovery(context.Background()), sb, volume, nil)
+	r.ErrorContains(err, "timeout waiting for disk lease")
+	r.Less(time.Since(start), 2*time.Second, "boot recovery stops waiting at its bound")
+
+	start = time.Now()
+	_, err = controller.configureMirenVolume(context.Background(), sb, volume, nil)
+	r.ErrorContains(err, "timeout waiting for disk lease")
+	r.GreaterOrEqual(time.Since(start), 3*time.Second, "outside recovery the configured wait applies")
+}

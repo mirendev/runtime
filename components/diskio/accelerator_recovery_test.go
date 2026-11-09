@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,9 @@ import (
 	"miren.dev/lbd"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 	_ "modernc.org/sqlite"
 )
 
@@ -39,7 +43,13 @@ type recoveryCloud struct {
 	losePublication bool
 	uploadFail      bool
 	// stallUpload holds checkpoint PUTs open until the client gives up.
-	stallUpload   bool
+	stallUpload bool
+	// sequenceGap refuses every lbd_log completion with code sequence_gap.
+	sequenceGap bool
+	// logCompleteFail fails every lbd_log completion with a transient 503.
+	logCompleteFail bool
+	// uploadDelay holds each checkpoint PUT this long before accepting it.
+	uploadDelay   time.Duration
 	downloadDelay time.Duration
 	renewFail     bool
 	// stallRenewal holds the next renewal open until its request is cancelled.
@@ -59,6 +69,13 @@ type recoveryCloud struct {
 	// completion, after the payload is uploaded.
 	completeOnlyStreamCheck bool
 	begins                  int
+	// source is the history of another volume, "src", that a new volume is
+	// restored from.
+	source *RecoveryManifest
+	// boundaryFault breaks a point-in-time selection's until or boundary.
+	boundaryFault string
+	// acquisitions counts lease acquisitions by the runtime.
+	acquisitions int
 }
 
 func newRecoveryCloud(t *testing.T) (*recoveryCloud, *DiskMountController, *VolumeState) {
@@ -89,6 +106,9 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		s.mu.Lock()
+		s.acquisitions++
+		s.mu.Unlock()
 		s.mockCloudServer.mu.Lock()
 		s.leases["vol"] = &activeLease{Nonce: "nonce"}
 		s.mockCloudServer.mu.Unlock()
@@ -172,10 +192,54 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions") && s.noRestoreSessions:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	case strings.HasSuffix(r.URL.Path, "/updates/restore-sessions"):
+		var request struct {
+			Until string `json:"until"`
+		}
+		require.NoError(s.t, json.NewDecoder(r.Body).Decode(&request))
 		s.selection = s.manifest
-		s.selection.Segments = append([]RecoverySegment(nil), s.manifest.Segments...)
-		s.sessionExpiry = s.manifest.ExpiresAt
-		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: "vol", SessionID: "session", ExpiresAt: s.manifest.ExpiresAt})
+		if strings.Contains(r.URL.Path, "/volumes/src/") {
+			s.selection = *s.source
+		}
+		s.selection.Segments = append([]RecoverySegment(nil), s.selection.Segments...)
+		if request.Until != "" {
+			// Like the cloud: the newest base at or before until, then the
+			// tail through the first log after until, flagged as the boundary.
+			// These tests keep one base.
+			kept := s.selection.Segments[:0]
+			for _, segment := range s.selection.Segments {
+				kept = append(kept, segment)
+				s.selection.Head = segment.Label
+				if segment.Label > request.Until {
+					kept[len(kept)-1].Boundary = true
+					break
+				}
+			}
+			s.selection.Segments, s.selection.SegmentCount, s.selection.Until = kept, len(kept), request.Until
+			switch s.boundaryFault {
+			case "until-ignored":
+				s.selection.Until = ""
+			case "unflagged":
+				kept[len(kept)-1].Boundary = false
+			case "early-boundary":
+				kept[0].Boundary = true
+			}
+		}
+		if s.selection.VolumeID == "vol" && (s.manifest.StreamID == "" || s.manifest.Status == "never_backed_up") {
+			// No acknowledged stream: cloud retains the whole log, or has
+			// nothing at all, and names no stream either way.
+			status := "never_backed_up"
+			s.mockCloudServer.mu.Lock()
+			for _, object := range s.segments {
+				if object.Complete && object.Kind == string(KindLBDLog) && object.VolumeID == "vol" {
+					status = "legacy"
+				}
+			}
+			s.mockCloudServer.mu.Unlock()
+			s.selection = RecoveryManifest{Version: 1, VolumeID: "vol", Status: status, SessionID: "session",
+				ExpiresAt: time.Now().Add(time.Minute), Complete: true}
+		}
+		s.sessionExpiry = s.selection.ExpiresAt
+		json.NewEncoder(w).Encode(restoreSession{Version: 1, VolumeID: s.selection.VolumeID, SessionID: "session", ExpiresAt: s.selection.ExpiresAt})
 	case strings.Contains(r.URL.Path, "/restore-sessions/") && strings.HasSuffix(r.URL.Path, "/renew"):
 		if s.stallRenewal {
 			s.stallRenewal = false
@@ -193,7 +257,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.renewals++
 		s.sessionExpiry = time.Now().Add(time.Minute)
-		json.NewEncoder(w).Encode(map[string]any{"version": 1, "volume_id": "vol", "session_id": "session", "expires_at": s.sessionExpiry})
+		json.NewEncoder(w).Encode(map[string]any{"version": 1, "volume_id": s.selection.VolumeID, "session_id": "session", "expires_at": s.sessionExpiry})
 	case strings.HasSuffix(r.URL.Path, "/updates") && r.URL.Query().Get("restore_session") != "":
 		start, err := strconv.Atoi(r.URL.Query().Get("cursor"))
 		if r.URL.Query().Get("cursor") == "" {
@@ -209,7 +273,8 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, segment := range s.selection.Segments[start:end] {
 			page.Updates = append(page.Updates, UpdateInfo{UpdateID: segment.UpdateID, Kind: string(KindLBDLog),
 				OrderingKey: segment.Label, Size: segment.Size, SHA256: segment.SHA256,
-				PreviousLabel: segment.PreviousLabel, FirstSequence: segment.FirstSequence, EntryCount: segment.EntryCount})
+				PreviousLabel: segment.PreviousLabel, FirstSequence: segment.FirstSequence, EntryCount: segment.EntryCount,
+				Boundary: segment.Boundary})
 		}
 		if end < len(s.selection.Segments) {
 			page.NextCursor = strconv.Itoa(end)
@@ -241,6 +306,15 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		encoded, err := json.Marshal(completion)
 		require.NoError(s.t, err)
 		r.Body = io.NopCloser(bytes.NewReader(encoded))
+		if completion.Checkpoint == nil && s.logCompleteFail {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if completion.Checkpoint == nil && s.sequenceGap {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": "sequence gap", "code": "sequence_gap"})
+			return
+		}
 		if completion.Checkpoint == nil {
 			s.ServeHTTP(w, r)
 			return
@@ -249,7 +323,7 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mockCloudServer.mu.Lock()
 		head := s.manifest.Head
 		for _, object := range s.segments {
-			if object.Complete && object.Kind == string(KindLBDLog) && object.Label > head {
+			if object.Complete && object.Kind == string(KindLBDLog) && object.VolumeID == "vol" && object.Label > head {
 				head = object.Label
 			}
 		}
@@ -267,7 +341,19 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"code":"stream_conflict"}`))
 			return
 		}
-		if !valid || p.VolumeID != s.manifest.VolumeID || p.Base.ThroughLabel != head {
+		// A replayed image may stop at any committed log above the newest
+		// checkpoint; any other image must reach the head.
+		boundary := p.Base.ThroughLabel == head
+		if p.Basis == checkpointBasisReplayed {
+			committed := false
+			s.mockCloudServer.mu.Lock()
+			for _, object := range s.segments {
+				committed = committed || (object.Complete && object.Kind == string(KindLBDLog) && object.Label == p.Base.ThroughLabel)
+			}
+			s.mockCloudServer.mu.Unlock()
+			boundary = committed && (s.manifest.Checkpoint == nil || p.Base.ThroughLabel > s.manifest.Checkpoint.ThroughLabel)
+		}
+		if !valid || p.VolumeID != s.manifest.VolumeID || !boundary {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			return
 		}
@@ -285,9 +371,12 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.manifest.Status = "ready"
 		s.manifest.Checkpoint = &p.Base
-		s.manifest.Head = p.Base.ThroughLabel
 		s.manifest.CoverageFloor = p.Base.ThroughLabel
-		s.manifest.Segments, s.manifest.SegmentCount = nil, 0
+		s.manifest.Segments = slices.DeleteFunc(s.manifest.Segments, func(seg RecoverySegment) bool { return seg.Label <= p.Base.ThroughLabel })
+		s.manifest.SegmentCount = len(s.manifest.Segments)
+		if len(s.manifest.Segments) == 0 {
+			s.manifest.Head = p.Base.ThroughLabel
+		}
 		if s.losePublication {
 			conn, _, err := w.(http.Hijacker).Hijack()
 			if err == nil {
@@ -320,6 +409,20 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			if checkpoint {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
+			}
+		}
+		if s.uploadDelay > 0 && r.Method == http.MethodPut {
+			s.mockCloudServer.mu.Lock()
+			object := s.segments[strings.TrimPrefix(r.URL.Path, "/upload/")]
+			s.mockCloudServer.mu.Unlock()
+			if object != nil && object.Kind == string(KindLBDCheckpoint) {
+				delay := s.uploadDelay
+				s.mu.Unlock()
+				select {
+				case <-time.After(delay):
+				case <-r.Context().Done():
+				}
+				s.mu.Lock()
 			}
 		}
 		if s.downloadDelay > 0 && strings.HasPrefix(r.URL.Path, "/data/") {
@@ -421,6 +524,64 @@ func TestAcceleratorCheckpointFreshNodeRecovery(t *testing.T) {
 	actual, err = os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
+}
+
+// A node that has never applied anything of the volume (a new cluster
+// adopting it, or a host that lost its copy) has no stream file, horizon or
+// image. Mounting must rebuild it from the protected checkpoint and tail and
+// adopt the cloud's stream, not replay a retired log onto a blank image.
+func TestAcceleratorMountAdoptsCloudStreamOnFreshNode(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	data := bytes.Repeat([]byte{0x5D}, 4096)
+	cloud.addTail(t, []lbd.Entry{{Op: "W", Sequence: 41, Block: 3, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}})
+	copy(expected[3*4096:], data)
+	cloud.mockCloudServer.mu.Lock()
+	for id, object := range cloud.segments {
+		if object.Kind == string(KindLBDLog) && object.Label <= cloud.manifest.Checkpoint.ThroughLabel {
+			delete(cloud.segments, id)
+		}
+	}
+	cloud.mockCloudServer.mu.Unlock()
+
+	v.DiskPath = t.TempDir()
+	mountAndDetach(t, c, v)
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoError(t, err)
+	require.Equal(t, "stream", string(stream))
+	horizon, err := readLogHorizon(v.DiskPath)
+	require.NoError(t, err)
+	require.Equal(t, cloud.manifest.Head, horizon)
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointConflictFile))
+}
+
+// A brand-new volume: the cloud has no history and names no stream.
+func TestAcceleratorNewVolumeMountsWithoutHistory(t *testing.T) {
+	_, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, v.SizeBytes), 0600))
+	mountAndDetach(t, c, v)
+}
+
+// A legacy volume (no checkpoint stream) whose image is gone replays its
+// whole retained log onto a new blank image instead of failing every mount.
+func TestAcceleratorLegacyVolumeRebuildsMissingImage(t *testing.T) {
+	_, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	data := bytes.Repeat([]byte{0x6E}, 4096)
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(2, data)})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+
+	mountAndDetach(t, c, v)
+	image, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Len(t, image, int(v.SizeBytes))
+	require.Equal(t, data, image[2*4096:3*4096])
 }
 
 func TestAcceleratorMountRequiresCompleteRecovery(t *testing.T) {
@@ -999,6 +1160,11 @@ func TestAcceleratorNoCheckpointWithoutLbdDetach(t *testing.T) {
 	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
 		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
 	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	// Even a clean-detach flag left from an earlier attachment proves nothing
+	// about an image whose device was still recorded when it vanished.
+	ms := c.state.GetMount("mount")
+	ms.CheckpointDue = true
+	require.NoError(t, c.state.SetMountAndSave("mount", ms))
 	// A reboot: the kernel device is gone, so cleanup never calls LbdDetach.
 	ops := c.ops.(*mockDiskMountOps)
 	clear(ops.lbdBackings)
@@ -1022,9 +1188,12 @@ func TestAcceleratorStreamConflictStopsCheckpoints(t *testing.T) {
 			cloud.completeOnlyStreamCheck = refusedAt == "complete"
 			seedRecoveryCheckpoint(t, c, v)
 			require.Equal(t, 1, checkpointClaims(cloud))
-			// A legacy copy of the same volume proposes its own stream.
+			// A legacy copy of the same volume, which has applied history of
+			// its own, proposes its own stream. (A copy with nothing applied
+			// adopts the cloud's stream instead.)
 			v.DiskPath = t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+			require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000001"))
 			mountAndDetach(t, c, v)
 			uploaded := 1
 			if refusedAt == "complete" {
@@ -1073,7 +1242,7 @@ func TestAcceleratorStalledCheckpointReleasesLease(t *testing.T) {
 	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
 	require.NoError(t, err)
 	cloud.stallUpload = true
-	c.SetCheckpointTimeout(500 * time.Millisecond)
+	c.SetFirstCheckpointTimeout(500 * time.Millisecond)
 	started := time.Now()
 	mountAndDetach(t, c, v)
 	require.Less(t, time.Since(started), 10*time.Second, "the lease must not wait on a stalled checkpoint")
@@ -1127,6 +1296,308 @@ func TestAcceleratorCheckpointRetryUnderNewLease(t *testing.T) {
 	cloud.mu.Unlock()
 }
 
+func rewindEntry(ts, seq, block uint64, fill byte) lbd.Entry {
+	data := bytes.Repeat([]byte{fill}, 4096)
+	return lbd.Entry{Op: "W", TimestampNS: ts, Sequence: seq, Block: block, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}
+}
+
+// rewindFromSource hands the cloud's history to another volume, "src", and
+// mounts "vol", brand new in v.DiskPath, as that history until the label.
+func rewindFromSource(t *testing.T, cloud *recoveryCloud, c *DiskMountController, v *VolumeState, until string) (*storage_v1alpha.DiskMount, error) {
+	t.Helper()
+	cloud.mu.Lock()
+	source := cloud.manifest
+	source.VolumeID = "src"
+	cloud.source = &source
+	cloud.manifest = RecoveryManifest{Version: 1, VolumeID: "vol", Status: "never_backed_up", SessionID: "session",
+		ExpiresAt: time.Now().Add(time.Minute), Complete: true, DeviceSize: 1024 * 1024}
+	cloud.mockCloudServer.mu.Lock()
+	for _, object := range cloud.segments {
+		object.VolumeID = "src"
+	}
+	cloud.mockCloudServer.mu.Unlock()
+	cloud.mu.Unlock()
+
+	v.RestoreFrom, v.RestoreUntil = "src", until
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(v.DiskPath, "mnt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	return mount, c.Reconcile(t.Context(), mount, nil)
+}
+
+// A new volume restored from another volume's history as of a point in time:
+// a segment opened before the time can hold writes after it, which must not
+// appear, and the result must become the new volume's own first checkpoint so
+// its later history never replays onto an empty image.
+func TestAcceleratorRewindSeedsNewVolumeAtPointInTime(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	// Labels are 2^62 + Unix seconds plus nanoseconds, so label ...02 is 2ns.
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11), rewindEntry(3, 42, 4, 0x22)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(4, 43, 5, 0x33)})
+	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+	seeded := len(cloud.publications)
+
+	// A failed earlier attempt left a staged checkpoint of another image, at
+	// the same empty boundary. It must not be published over this rebuild.
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), bytes.Repeat([]byte{0x99}, 1024*1024), 0600))
+	_, err := c.stageCheckpoint(t.Context(), v, "proposed", "", filepath.Join(v.DiskPath, checkpointPayloadFile))
+	require.NoError(t, err)
+	mount, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+	require.NoError(t, err)
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+
+	// Seeded before anything attaches, not at a detach that may never come.
+	require.Len(t, cloud.publications, seeded+1)
+	seed := cloud.publications[seeded]
+	require.Equal(t, "vol", seed.VolumeID)
+	require.Empty(t, seed.Base.ThroughLabel, "the seed precedes all of the new volume's log")
+	require.Equal(t, "proposed", seed.StreamID, "a retry keeps the proposed stream")
+	digest := sha256.Sum256(expected)
+	require.Equal(t, hex.EncodeToString(digest[:]), seed.Base.ImageSHA256)
+
+	mount.DesiredState, mount.ActualState = storage_v1alpha.DM_WANT_UNMOUNTED, storage_v1alpha.DM_MOUNTED
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+
+	// Once seeded, the volume recovers from its own history, never the source
+	// again: a second rewind would propose another stream and be refused.
+	v.DiskPath = t.TempDir()
+	mountAndDetach(t, c, v)
+	actual, err = os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoError(t, err)
+	require.Equal(t, seed.StreamID, string(stream))
+}
+
+// The cloud ends a point-in-time selection one log past until, because
+// objects are not split there: a coalesced log labelled after until can still
+// hold writes from before it. Those apply; the later writes in it do not.
+func TestAcceleratorRewindAppliesBoundaryLogUpToUntil(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(2, 42, 4, 0x22), rewindEntry(4, 43, 5, 0x33)})
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 44, 6, 0x44)})
+	copy(expected[3*4096:], bytes.Repeat([]byte{0x11}, 4096))
+	copy(expected[4*4096:], bytes.Repeat([]byte{0x22}, 4096))
+
+	v.DiskPath = t.TempDir()
+	_, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+	require.NoError(t, err)
+	require.Len(t, cloud.selection.Segments, 2, "the selection ends at the boundary log")
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+}
+
+// A selection that does not provably end at until could carry writes past it,
+// so the rewind fails before building anything.
+func TestAcceleratorRewindRefusesUnboundedSelection(t *testing.T) {
+	for _, fault := range []string{"until-ignored", "unflagged", "early-boundary"} {
+		t.Run(fault, func(t *testing.T) {
+			cloud, c, v := newRecoveryCloud(t)
+			seedRecoveryCheckpoint(t, c, v)
+			cloud.addTail(t, []lbd.Entry{rewindEntry(2, 41, 3, 0x11)})
+			cloud.addTail(t, []lbd.Entry{rewindEntry(4, 42, 4, 0x22)})
+			cloud.boundaryFault = fault
+			v.DiskPath = t.TempDir()
+			_, err := rewindFromSource(t, cloud, c, v, "400000000000000000000002")
+			require.Error(t, err)
+			_, err = os.Stat(filepath.Join(v.DiskPath, "disk.img"))
+			require.True(t, os.IsNotExist(err), "no image may be installed")
+		})
+	}
+}
+
+// An admin's takeover grants this cluster the lease of a volume whose writer
+// is lost; the cluster cannot break it itself. The mount writes under that
+// lease instead of acquiring one, and only once: after it is released, the
+// next mount acquires a lease of its own.
+func TestAcceleratorMountWritesUnderTakenOverLease(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, v.SizeBytes), 0600))
+	cloud.mockCloudServer.mu.Lock()
+	cloud.leases["vol"] = &activeLease{Nonce: "taken"}
+	cloud.mockCloudServer.mu.Unlock()
+	v.TakeOverNonce = "taken"
+	mountAndDetach(t, c, v)
+	require.Zero(t, cloud.acquisitions)
+	require.Empty(t, c.state.GetVolume(v.EntityId).TakeOverNonce)
+	cloud.mockCloudServer.mu.Lock()
+	require.Nil(t, cloud.leases["vol"], "the taken-over lease is released at detach")
+	cloud.mockCloudServer.mu.Unlock()
+
+	mountAndDetach(t, c, c.state.GetVolume(v.EntityId))
+	require.Equal(t, 1, cloud.acquisitions)
+}
+
+// A disk that stays attached gets hourly checkpoints rebuilt from the cloud's
+// committed history, never from its live image, which is always ahead of
+// what is uploaded. A fresh node then restores from that checkpoint alone.
+func TestAcceleratorAttachedCheckpointRebuildsFromCloudHistory(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := seedRecoveryCheckpoint(t, c, v)
+	entry := func(seq, block uint64, fill byte) lbd.Entry {
+		data := bytes.Repeat([]byte{fill}, 4096)
+		return lbd.Entry{Op: "W", Sequence: seq, Block: block, Length: 4096, Data: data, Checksum: crc32.ChecksumIEEE(data)}
+	}
+	cloud.addTail(t, []lbd.Entry{entry(41, 2, 0xC3)})
+	cloud.addTail(t, []lbd.Entry{{Op: "T", Sequence: 42, Block: 1, Length: 4096}, entry(43, 3, 0xD4)})
+	copy(expected[2*4096:], bytes.Repeat([]byte{0xC3}, 4096))
+	clear(expected[4096 : 2*4096])
+	copy(expected[3*4096:], bytes.Repeat([]byte{0xD4}, 4096))
+	head := cloud.manifest.Head
+
+	// The live image holds a write whose segment is not uploaded yet.
+	live := slices.Clone(expected)
+	copy(live[5*4096:], bytes.Repeat([]byte{0xEE}, 4096))
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), live, 0600))
+	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{EntityId: "mount", VolumeId: v.VolumeId, CloudVolumeId: "vol",
+		DevicePath: "/dev/lbd0", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "nonce", LeaseOwned: true}))
+
+	published := len(cloud.publications)
+	due := map[string]time.Time{}
+	now := time.Now()
+	c.checkpointAttachedMounts(t.Context(), due, now)
+	require.Len(t, cloud.publications, published, "a mount just seen attached from a checkpoint is not due yet")
+	c.checkpointAttachedMounts(t.Context(), due, now.Add(DefaultAttachedCheckpointInterval-time.Second))
+	require.Len(t, cloud.publications, published)
+
+	c.checkpointAttachedMounts(t.Context(), due, now.Add(DefaultAttachedCheckpointInterval))
+	require.Len(t, cloud.publications, published+1)
+	p := cloud.publications[published]
+	require.Equal(t, checkpointBasisReplayed, p.Basis)
+	require.Equal(t, head, p.Base.ThroughLabel, "the boundary is the committed head it was rebuilt through")
+	digest := sha256.Sum256(expected)
+	require.Equal(t, hex.EncodeToString(digest[:]), p.Base.ImageSHA256, "the checkpoint holds committed history only")
+	leftovers, err := filepath.Glob(filepath.Join(v.DiskPath, ".*"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers, "the rebuilt image and payload are removed")
+	actual, err := os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, live, actual, "the live image is never touched")
+
+	// Nothing committed since: the next interval publishes nothing.
+	c.checkpointAttachedMounts(t.Context(), due, now.Add(2*DefaultAttachedCheckpointInterval))
+	require.Len(t, cloud.publications, published+1)
+
+	// A fresh node restores from the attached checkpoint with no tail.
+	cloud.mockCloudServer.mu.Lock()
+	for id, object := range cloud.segments {
+		if object.Kind == string(KindLBDLog) {
+			delete(cloud.segments, id)
+		}
+	}
+	cloud.mockCloudServer.mu.Unlock()
+	v.DiskPath = streamDir(t)
+	require.NoError(t, c.recoverAccelerator(t.Context(), v, "nonce"))
+	actual, err = os.ReadFile(filepath.Join(v.DiskPath, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
+}
+
+// A new disk that has stayed attached since it was created has no stream.
+// Its first attached checkpoint is rebuilt from its whole log and starts
+// one, which the volume then keeps.
+func TestAcceleratorAttachedCheckpointLeavesNewVolumeToDetach(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	expected := make([]byte, 1024*1024)
+	for i, fill := range []byte{0x31, 0x42} {
+		label := fmt.Sprintf("4000000000000000000000%02x", i+1)
+		data := bytes.Repeat([]byte{fill}, 4096)
+		copy(expected[(i+2)*4096:], data)
+		segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(uint64(i+2), data)})
+		_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+		require.NoError(t, err)
+	}
+	cloud.mu.Lock()
+	cloud.manifest.Status = "legacy"
+	cloud.mu.Unlock()
+	live := slices.Clone(expected)
+	copy(live[7*4096:], bytes.Repeat([]byte{0xEE}, 4096))
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), live, 0600))
+	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{EntityId: "mount", VolumeId: v.VolumeId, CloudVolumeId: "vol",
+		DevicePath: "/dev/lbd0", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "nonce", LeaseOwned: true}))
+
+	due := map[string]time.Time{}
+	now := time.Now()
+	c.checkpointAttachedMounts(t.Context(), due, now)
+	c.checkpointAttachedMounts(t.Context(), due, now.Add(DefaultAttachedCheckpointInterval))
+	// The legacy listing has nothing to verify a rebuild against, and a first
+	// checkpoint would make that log retirable, so only detach starts the stream.
+	require.Empty(t, cloud.publications)
+	require.NoFileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+}
+
+// The server's shutdown detaches every lbd device cleanly, which proves the
+// image as well as a detach during cleanup does. The checkpoint that cleanup
+// would have published must still come once the mount is released after the
+// restart, even though the device is gone by then.
+func TestAcceleratorCheckpointAfterShutdownDetach(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x7E}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(diskMountBasePath, "hill-shutdown"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	ops := c.ops.(*mockDiskMountOps)
+	NewDiskVolumeController(slog.Default(), v.DiskPath, compute.NewNodeId("fresh-node"), c.state, nil, ops).Shutdown()
+	require.NotEmpty(t, ops.detachedLbds, "shutdown detached the device")
+
+	restarted, err := LoadState(filepath.Dir(c.state.path))
+	require.NoError(t, err)
+	c.state = restarted
+	mount.DesiredState, mount.ActualState = storage_v1alpha.DM_WANT_UNMOUNTED, storage_v1alpha.DM_ERROR
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	require.Nil(t, c.state.GetMount("mount"))
+	require.Equal(t, 1, checkpointClaims(cloud), "a clean shutdown detach is a checkpoint")
+}
+
+// A server restart cannot detach an lbd device an app container still has
+// mounted. The next process must adopt that device under the lease it still
+// holds rather than retry the detach forever.
+func TestAcceleratorAdoptsLbdThatOutlivedServer(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	require.NoError(t, c.state.SetVolumeAndSave(v.EntityId, v))
+	mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(diskMountBasePath, "hill-adopt"),
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	before := *c.state.GetMount("mount")
+	ops := c.ops.(*mockDiskMountOps)
+	ops.lbdDetachErr = fmt.Errorf("LBD_CTL_REMOVE failed: Device or resource busy")
+	NewDiskVolumeController(slog.Default(), v.DiskPath, compute.NewNodeId("fresh-node"), c.state, nil, ops).Shutdown()
+	require.False(t, ops.IsMounted(mount.MountPath))
+
+	restarted, err := LoadState(filepath.Dir(c.state.path))
+	require.NoError(t, err)
+	c.state = restarted
+	mount.ActualState = storage_v1alpha.DM_MOUNTED
+	require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+	after := c.state.GetMount("mount")
+	require.True(t, after.Mounted)
+	require.Equal(t, before.DevicePath, after.DevicePath)
+	require.Equal(t, before.LeaseNonce, after.LeaseNonce, "the device keeps logging under its lease")
+	require.True(t, ops.IsMounted(mount.MountPath))
+	require.Len(t, ops.attachedLbds, 1, "no second device for the same image")
+	require.Zero(t, checkpointClaims(cloud))
+	cloud.mockCloudServer.mu.Lock()
+	require.Len(t, cloud.leases, 1)
+	cloud.mockCloudServer.mu.Unlock()
+}
+
 func TestAcceleratorPlainBeginConflictIsAnOrdinaryFailure(t *testing.T) {
 	cloud, c, v := newRecoveryCloud(t)
 	v.DiskPath = t.TempDir()
@@ -1152,4 +1623,243 @@ func TestAcceleratorPlainBeginConflictIsAnOrdinaryFailure(t *testing.T) {
 	mountAndDetach(t, c, v)
 	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
 	require.Equal(t, 1, checkpointClaims(cloud))
+}
+
+// A volume with no stream must upload a full image to start one, so its first
+// detach checkpoint gets the longer first-checkpoint cap. Once it has a
+// stream, detach checkpoints keep the ordinary cap.
+func TestAcceleratorFirstCheckpointGetsLongerTimeout(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x2B}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.uploadDelay = 600 * time.Millisecond
+	c.SetCheckpointTimeout(150 * time.Millisecond)
+	require.Equal(t, DefaultFirstCheckpointTimeout, c.firstCheckpointTimeout)
+
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile), "the first checkpoint outlasts the ordinary cap")
+	published := len(cloud.publications)
+
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 2, 3, 0x44)})
+	mountAndDetach(t, c, v)
+	require.Len(t, cloud.publications, published, "a stream volume's checkpoint keeps the ordinary cap")
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointTimeoutsFile))
+}
+
+// Repeated timeouts of a stream-less volume's first checkpoint are counted
+// across detaches, so the warning that it never starts a stream can fire.
+func TestAcceleratorRepeatedFirstCheckpointTimeoutsAreCounted(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	v.DiskPath = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v.DiskPath, "disk.img"), make([]byte, 1024*1024), 0600))
+	const label = "400000000000000000000001"
+	segment := buildSegmentData(t, 4096, label, []lbd.Entry{makeWriteEntry(1, bytes.Repeat([]byte{0x2B}, 4096))})
+	_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: label}, bytes.NewReader(segment), int64(len(segment)))
+	require.NoError(t, err)
+	cloud.stallUpload = true
+	c.SetFirstCheckpointTimeout(150 * time.Millisecond)
+	for range repeatedFirstCheckpointTimeouts {
+		mountAndDetach(t, c, v)
+	}
+	count, err := os.ReadFile(filepath.Join(v.DiskPath, checkpointTimeoutsFile))
+	require.NoError(t, err)
+	require.Equal(t, strconv.Itoa(repeatedFirstCheckpointTimeouts), string(count))
+
+	cloud.mu.Lock()
+	cloud.stallUpload = false
+	cloud.mu.Unlock()
+	mountAndDetach(t, c, v)
+	require.FileExists(t, filepath.Join(v.DiskPath, acceleratorStreamFile))
+	require.NoFileExists(t, filepath.Join(v.DiskPath, checkpointTimeoutsFile), "success resets the count")
+}
+
+type recordedPoints struct {
+	mu     sync.Mutex
+	points []metrics.MetricPoint
+}
+
+func (r *recordedPoints) WritePoints(_ context.Context, points []metrics.MetricPoint) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.points = append(r.points, points...)
+	return nil
+}
+
+func (r *recordedPoints) named(name string) []metrics.MetricPoint {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []metrics.MetricPoint
+	for _, p := range r.points {
+		if p.Name == name {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// An attached checkpoint rebuilds a whole image beside the live one, so it is
+// skipped, with a warning and a metric, unless free space covers the image
+// plus a margin. With room again, the next interval publishes.
+func TestAcceleratorAttachedCheckpointNeedsFreeSpace(t *testing.T) {
+	cloud, c, v := newRecoveryCloud(t)
+	seedRecoveryCheckpoint(t, c, v)
+	cloud.addTail(t, []lbd.Entry{rewindEntry(5, 41, 2, 0xC3)})
+	require.NoError(t, c.state.SetMountAndSave("mount", &MountState{EntityId: "mount", VolumeId: v.VolumeId, CloudVolumeId: "vol",
+		DevicePath: "/dev/lbd0", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "nonce", LeaseOwned: true}))
+	points := &recordedPoints{}
+	c.SetMetricsWriter(points)
+	free := uint64(cloud.manifest.DeviceSize) + attachedCheckpointMinMargin - 1
+	restore := availableBytes
+	availableBytes = func(string) (uint64, error) { return free, nil }
+	t.Cleanup(func() { availableBytes = restore })
+
+	published := len(cloud.publications)
+	due := map[string]time.Time{v.VolumeId: time.Now()}
+	c.checkpointAttachedMounts(t.Context(), due, time.Now())
+	require.Len(t, cloud.publications, published, "no checkpoint without room for the image and its margin")
+	skipped := points.named("miren_disk_accelerator_checkpoint_skipped_total")
+	require.Len(t, skipped, 1)
+	require.Equal(t, map[string]string{"volume_id": "vol", "reason": "low_disk_space"}, skipped[0].Labels)
+	leftovers, err := filepath.Glob(filepath.Join(v.DiskPath, ".*"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers, "nothing is written when skipped")
+
+	free++
+	due[v.VolumeId] = time.Now()
+	c.checkpointAttachedMounts(t.Context(), due, time.Now())
+	require.Len(t, cloud.publications, published+1)
+}
+
+// The documented manual recovery from a sequence gap works end to end, for
+// volumes with and without a stream. The refusal first comes from the detach
+// drain, which still logs, counts, holds and marks the volume, and does not
+// checkpoint the image holding the refused writes. Once the operator moves
+// the refused segments (and, without a stream, the local image) aside and the
+// cloud forgets the refused update, the lease is released and the disk
+// reattaches from the cloud history, without the writes after the gap.
+// When a transient failure first leaves the drain gated, the refusal comes
+// from the retry's early drain instead, and the operator may move the logs
+// aside before the next cleanup; that image is never checkpointed either.
+func TestAcceleratorSequenceGapManualRecovery(t *testing.T) {
+	for _, tc := range []struct{ withStream, transientFirst bool }{{true, false}, {false, false}, {true, true}} {
+		withStream := tc.withStream
+		t.Run(fmt.Sprintf("stream=%v/transient=%v", withStream, tc.transientFirst), func(t *testing.T) {
+			cloud, c, v := newRecoveryCloud(t)
+			imagePath := filepath.Join(v.DiskPath, "disk.img")
+			var expected []byte
+			if withStream {
+				expected = seedRecoveryCheckpoint(t, c, v)
+			} else {
+				expected = make([]byte, v.SizeBytes)
+				copy(expected, bytes.Repeat([]byte{0xA7}, 4096))
+				old := buildSegmentData(t, 4096, "400000000000000000000001", []lbd.Entry{makeWriteEntry(0, expected[:4096])})
+				_, err := c.updatesClient.Upload(t.Context(), "vol", UploadRequest{Kind: KindLBDLog, OrderingKey: "400000000000000000000001"}, bytes.NewReader(old), int64(len(old)))
+				require.NoError(t, err)
+				require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000001"))
+			}
+			// The watcher published past the last checkpoint before the gap.
+			copy(expected[2*4096:], bytes.Repeat([]byte{0x3C}, 4096))
+			cloud.addTail(t, []lbd.Entry{rewindEntry(5, 2, 2, 0x3C)})
+			require.NoError(t, writeLogHorizon(v.DiskPath, "400000000000000000000002"))
+			// lbd folded the gap's writes into the image at the clean detach.
+			gappedImage := slices.Clone(expected)
+			copy(gappedImage[3*4096:], bytes.Repeat([]byte{0xF6}, 4096))
+			require.NoError(t, os.WriteFile(imagePath, gappedImage, 0600))
+			logDir := filepath.Join(v.DiskPath, "logs")
+			require.NoError(t, os.MkdirAll(logDir, 0700))
+			const gapped = "400000000000000000000003"
+			segment := buildSegmentData(t, 4096, gapped, []lbd.Entry{makeWriteEntry(3, bytes.Repeat([]byte{0xF6}, 4096))})
+			require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+gapped+".log"), segment, 0600))
+
+			es, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			_, err := es.EAC.Create(t.Context(), entity.New(entity.DBId, entity.Id(v.EntityId),
+				(&storage_v1alpha.DiskVolume{ID: entity.Id(v.EntityId)}).Encode).Attrs())
+			require.NoError(t, err)
+			points := &recordedPoints{}
+			u := NewCloudSegmentUploaderWithClient(slog.Default(), c.updatesClient, c.state)
+			u.SetMetricsWriter(points)
+			u.SetEAC(es.EAC)
+			c.SetLogUploader(u)
+			uploadBlocked := func() string {
+				resp, err := es.EAC.Get(t.Context(), v.EntityId)
+				require.NoError(t, err)
+				var dv storage_v1alpha.DiskVolume
+				dv.Decode(resp.Entity().Entity())
+				return dv.UploadBlocked
+			}
+
+			c.ops.(*mockDiskMountOps).lbdBackings["/dev/lbd0"] = imagePath
+			require.NoError(t, c.state.SetMountAndSave("mount", &MountState{
+				EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol", Mode: storage_v1alpha.VM_ACCELERATOR,
+				BackingPath: imagePath, DevicePath: "/dev/lbd0", Mounted: true, LeaseNonce: "nonce", LeaseOwned: true,
+			}))
+			cloud.mockCloudServer.mu.Lock()
+			cloud.leases["vol"] = &activeLease{Nonce: "nonce"}
+			cloud.mockCloudServer.mu.Unlock()
+			claims := checkpointClaims(cloud)
+
+			// 1. Stopping the app detaches the disk; its drain is refused.
+			mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
+				ActualState: storage_v1alpha.DM_MOUNTED}
+			if tc.transientFirst {
+				cloud.mu.Lock()
+				cloud.logCompleteFail = true
+				cloud.mu.Unlock()
+				err := c.Reconcile(t.Context(), mount, nil)
+				require.Error(t, err)
+				require.NotErrorIs(t, err, errSequenceGap)
+				require.True(t, c.state.HasPendingCloudUpload("vol"), "an unknown outcome keeps the drain gated")
+				cloud.mu.Lock()
+				cloud.logCompleteFail = false
+				cloud.mu.Unlock()
+			}
+			cloud.mu.Lock()
+			cloud.sequenceGap = true
+			cloud.mu.Unlock()
+			require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
+			require.NotEmpty(t, c.ops.(*mockDiskMountOps).detachedLbds, "the disk detaches despite the refusal")
+			require.NotNil(t, c.state.GetMount("mount"), "the lease is kept while refused segments remain")
+			require.False(t, c.state.HasPendingCloudUpload("vol"), "a final refusal leaves nothing to reconcile")
+			refusals := points.named("miren_disk_lbd_log_sequence_gap_refusals_total")
+			require.Len(t, refusals, 1, "a refusal first hit by the drain is counted")
+			require.Equal(t, "vol", refusals[0].Labels["volume_id"])
+			require.Equal(t, uploadBlockedSequenceGap, uploadBlocked(), "miren doctor sees a refusal first hit by the drain")
+			require.Equal(t, claims, checkpointClaims(cloud), "the image holding refused writes is never checkpointed")
+			if !tc.transientFirst {
+				require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
+				require.Len(t, points.named("miren_disk_lbd_log_sequence_gap_refusals_total"), 1, "a held volume is not refused again")
+			}
+
+			// 2. Move the refused segments, and a stream-less image, aside.
+			// 3. Delete the refused update.
+			aside := t.TempDir()
+			moved := []string{"logs/disk." + gapped + ".log"}
+			if !withStream {
+				moved = append(moved, "disk.img", logHorizonFile)
+			}
+			for _, name := range moved {
+				require.NoError(t, os.Rename(filepath.Join(v.DiskPath, name), filepath.Join(aside, filepath.Base(name))))
+			}
+			cloud.mu.Lock()
+			cloud.sequenceGap = false
+			cloud.mu.Unlock()
+			mount.ActualState = storage_v1alpha.DM_ERROR
+			require.NoError(t, c.Reconcile(t.Context(), mount, nil))
+			require.Nil(t, c.state.GetMount("mount"))
+			cloud.mockCloudServer.mu.Lock()
+			require.Empty(t, cloud.leases, "the lease is released")
+			cloud.mockCloudServer.mu.Unlock()
+
+			// 4. Reattach: the volume recovers from its cloud history.
+			mountAndDetach(t, c, v)
+			actual, err := os.ReadFile(imagePath)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual, "the cloud history continues from before the gap")
+		})
+	}
 }

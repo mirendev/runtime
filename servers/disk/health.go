@@ -94,6 +94,10 @@ func (s *HealthServer) List(ctx context.Context, call *disk_v1alpha.DiskHealthLi
 			if volume.ActualState == storage_v1alpha.DV_ERROR {
 				// Controller errors may embed commands, paths and credentials.
 				info.SetDiagnostic("volume lifecycle failed; inspect server logs")
+			} else if volume.UploadBlocked == "sequence_gap" {
+				info.SetDiagnostic("miren.cloud refuses this volume's log uploads over an lbd sequence gap; recover it by hand: https://miren.md/disk-accelerator#recovering-from-a-sequence-gap")
+			} else if volume.UploadBlocked != "" {
+				info.SetDiagnostic("miren.cloud refuses this volume's log uploads; inspect server logs")
 			}
 		}
 		resources = append(resources, info)

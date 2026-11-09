@@ -75,6 +75,7 @@ type UpdateInfo struct {
 	PreviousLabel string `json:"previous_label,omitempty"`
 	FirstSequence uint64 `json:"first_sequence,omitempty"`
 	EntryCount    uint64 `json:"entry_count,omitempty"`
+	Boundary      bool   `json:"boundary,omitempty"`
 }
 
 // maxUpdateListPages caps a cursor walk. The server pages at 100 by default, so
@@ -313,6 +314,16 @@ func (c *cloudUpdatesClient) authorize(ctx context.Context, req *http.Request) e
 	return nil
 }
 
+// invalidateOnUnauthorized drops the cached token when cloud rejects it, so the
+// caller's next retry authenticates again. Without this a token cloud no longer
+// accepts, such as after a signing-key rotation, is reused until it expires and
+// every disk upload, lease and registration fails in the meantime.
+func invalidateOnUnauthorized(authClient *cloudauth.AuthClient, resp *http.Response) {
+	if resp.StatusCode == http.StatusUnauthorized && authClient != nil {
+		authClient.InvalidateToken()
+	}
+}
+
 // jsonRequestTimeout bounds each small control request. Payload bytes travel
 // only through the PUT, which is bounded by uploadStallTimeout instead.
 const jsonRequestTimeout = 2 * time.Minute
@@ -367,6 +378,7 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 		return fmt.Errorf("request to %s failed: %w", apiURL, err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		return updateHTTPError(resp)
@@ -444,7 +456,7 @@ func (c *cloudUpdatesClient) PublishPrepared(ctx context.Context, head *publicat
 	if response.Terminal != response.Entries[len(prepared)-1] {
 		return nil, fmt.Errorf("cloud acknowledged a different publication boundary")
 	}
-	c.log.Info("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
+	c.log.Debug("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
 	return &response.Terminal, nil
 }
 
@@ -764,15 +776,19 @@ type restoreSession struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce string) (*RecoveryManifest, error) {
+// BeginRecovery selects and protects a base plus tail. A non-empty until
+// selects the history as of that log label instead of the committed head.
+func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, until string) (*RecoveryManifest, error) {
 	endpoint, err := c.updatesPath(volume, "restore-sessions")
 	if err != nil {
 		return nil, err
 	}
+	body := map[string]any{"version": AcceleratorRecoveryVersion, "lease_nonce": nonce, "kind": KindLBDCheckpoint}
+	if until != "" {
+		body["until"] = until
+	}
 	var session restoreSession
-	if err := c.doJSON(ctx, "POST", endpoint, map[string]any{
-		"version": AcceleratorRecoveryVersion, "lease_nonce": nonce, "kind": KindLBDCheckpoint,
-	}, &session); err != nil {
+	if err := c.doJSON(ctx, "POST", endpoint, body, &session); err != nil {
 		// A cloud without this route answers 405 rather than 404: the path
 		// also matches DELETE /updates/{updateId}. A v1 cloud has the route.
 		httpErr, _ := errors.AsType[*cloudUpdateHTTPError](err)
@@ -789,11 +805,22 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce st
 	if err != nil {
 		return nil, err
 	}
-	if manifest.Status == "unsupported" {
+	// "legacy": the volume never acknowledged a checkpoint stream, so cloud
+	// retains its whole log and the caller replays it from the start.
+	if manifest.Status == "unsupported" || manifest.Status == "legacy" {
 		return nil, errRecoveryUnsupported
+	}
+	// No history at all, so there is no stream to name either. Callers that
+	// expected history treat this as lost history, never as an empty volume.
+	if manifest.Status == "never_backed_up" {
+		return nil, errNeverBackedUp
 	}
 	if !manifest.ExpiresAt.Equal(session.ExpiresAt) {
 		return nil, fmt.Errorf("update listing does not match restore protection")
+	}
+	// A cloud that ignored until would select the head, writes after it included.
+	if manifest.Until != until {
+		return nil, fmt.Errorf("cloud selected history until %q, not %q", manifest.Until, until)
 	}
 	for _, u := range updates {
 		if u.Kind != string(KindLBDLog) {
@@ -802,6 +829,7 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce st
 		manifest.Segments = append(manifest.Segments, RecoverySegment{
 			RecoveryObject: RecoveryObject{UpdateID: u.UpdateID, Size: u.Size, SHA256: u.SHA256},
 			Label:          u.OrderingKey, PreviousLabel: u.PreviousLabel, FirstSequence: u.FirstSequence, EntryCount: u.EntryCount,
+			Boundary: u.Boundary,
 		})
 	}
 	if err := manifest.validate(volume); err != nil {

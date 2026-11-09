@@ -70,6 +70,14 @@ type RunnerConfig struct {
 	// AcceleratorCheckpointTimeout bounds the checkpoint an accelerator disk
 	// uploads at detach while it holds the writer lease. Zero uses the default.
 	AcceleratorCheckpointTimeout time.Duration `json:"accelerator_checkpoint_timeout,omitempty" cbor:"accelerator_checkpoint_timeout,omitempty" yaml:"accelerator_checkpoint_timeout,omitempty"`
+
+	// AcceleratorFirstCheckpointTimeout bounds the detach checkpoint of an
+	// accelerator disk that has no checkpoint stream yet. Zero uses the default.
+	AcceleratorFirstCheckpointTimeout time.Duration `json:"accelerator_first_checkpoint_timeout,omitempty" cbor:"accelerator_first_checkpoint_timeout,omitempty" yaml:"accelerator_first_checkpoint_timeout,omitempty"`
+
+	// AcceleratorCheckpointInterval spaces the checkpoints of an accelerator
+	// disk that stays attached. Zero uses the default.
+	AcceleratorCheckpointInterval time.Duration `json:"accelerator_checkpoint_interval,omitempty" cbor:"accelerator_checkpoint_interval,omitempty" yaml:"accelerator_checkpoint_interval,omitempty"`
 }
 
 // RunnerDeps holds dependencies needed by the Runner to construct controllers.

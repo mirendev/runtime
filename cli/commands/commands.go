@@ -1406,6 +1406,8 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk create", Infer("debug disk create", "Create a disk entity for testing", DebugDiskCreate,
 		WithDescription(diskCreateDescription),
 	))
+	d.Dispatch("debug disk adopt", Infer("debug disk adopt", "Create a disk bound to an existing cloud volume", DebugDiskAdopt))
+	d.Dispatch("debug disk rewind", Infer("debug disk rewind", "Create a disk from a cloud volume as of a point in time", DebugDiskRewind))
 	d.Dispatch("debug disk list", Infer("debug disk list", "List all disk entities", DebugDiskList))
 	d.Dispatch("debug disk delete", Infer("debug disk delete", "Delete a disk entity", DebugDiskDelete,
 		WithDescription(diskDeleteDescription),

@@ -23,7 +23,9 @@ type clusterAccessBootInputs struct {
 	dataPath      string
 	diskMode      string
 
-	checkpointTimeout time.Duration
+	checkpointTimeout      time.Duration
+	firstCheckpointTimeout time.Duration
+	checkpointInterval     time.Duration
 }
 
 type clusterAccessBootOutput struct {
@@ -48,7 +50,9 @@ func clusterAccessInputs(options StartOptions) clusterAccessBootInputs {
 		dataPath:      options.DataPath,
 		diskMode:      options.Config.DiskMode,
 
-		checkpointTimeout: time.Duration(options.Config.AcceleratorCheckpointTimeout) * time.Second,
+		checkpointTimeout:      time.Duration(options.Config.AcceleratorCheckpointTimeout) * time.Second,
+		firstCheckpointTimeout: time.Duration(options.Config.AcceleratorFirstCheckpointTimeout) * time.Second,
+		checkpointInterval:     time.Duration(options.Config.AcceleratorCheckpointInterval) * time.Second,
 	}
 }
 
@@ -72,7 +76,9 @@ func (b *clusterAccessBoot) start(ctx context.Context) (clusterAccessBootOutput,
 		Config:        b.inputs.clientConfig,
 		DiskMode:      b.inputs.diskMode,
 
-		AcceleratorCheckpointTimeout: b.inputs.checkpointTimeout,
+		AcceleratorCheckpointTimeout:      b.inputs.checkpointTimeout,
+		AcceleratorFirstCheckpointTimeout: b.inputs.firstCheckpointTimeout,
+		AcceleratorCheckpointInterval:     b.inputs.checkpointInterval,
 	}
 	var err error
 	b.value, err = runner.NewClusterAccess(b.inputs.log, runner.RunnerDeps{}, config)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,20 @@ const checkpointConflictFile = "accelerator-checkpoint-conflict"
 // writer lease is held and so delays failover. A missed detach checkpoint loses
 // nothing: the drained tail is durable and attached checkpoints cover the gap.
 const DefaultCheckpointTimeout = 2 * time.Minute
+
+// DefaultFirstCheckpointTimeout caps the detach checkpoint of a volume with no
+// stream yet. Until one publishes, the volume gets no attached checkpoints and
+// its replay keeps growing, so it gets longer to upload its first full image.
+const DefaultFirstCheckpointTimeout = 15 * time.Minute
+
+// checkpointTimeoutsFile counts a stream-less volume's consecutive first
+// checkpoints that timed out, so repeated timeouts are noticed across detaches
+// and restarts.
+const checkpointTimeoutsFile = "accelerator-checkpoint-timeouts"
+
+// repeatedFirstCheckpointTimeouts is how many consecutive first-checkpoint
+// timeouts earn a warning that the volume may never start a stream.
+const repeatedFirstCheckpointTimeouts = 3
 
 type ctxReader struct {
 	ctx context.Context
@@ -67,15 +82,27 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	if v == nil || v.CloudVolumeId == "" {
 		return
 	}
+	timeout := c.checkpointTimeout
+	_, statErr := os.Stat(filepath.Join(v.DiskPath, acceleratorStreamFile))
+	first := os.IsNotExist(statErr)
+	if first {
+		timeout = c.firstCheckpointTimeout
+	}
 	// A bounded caller such as Shutdown must still fit the lease release in
 	// the same context after a full checkpoint timeout.
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < c.checkpointTimeout+jsonRequestTimeout {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout+jsonRequestTimeout {
 		c.log.Info("skipping accelerator checkpoint under a short deadline", "volume_id", v.CloudVolumeId)
 		return
 	}
-	checkpointCtx, cancel := context.WithTimeout(ctx, c.checkpointTimeout)
+	checkpointCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := c.publishAcceleratorCheckpoint(checkpointCtx, v, mount.LeaseNonce)
+	timedOut := err != nil && checkpointCtx.Err() != nil && ctx.Err() == nil
+	if !timedOut || !first {
+		if rmErr := os.Remove(filepath.Join(v.DiskPath, checkpointTimeoutsFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+			c.log.Warn("failed to reset checkpoint timeout count", "volume_id", v.CloudVolumeId, "error", rmErr)
+		}
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, errCheckpointUnsupported):
@@ -84,16 +111,38 @@ func (c *DiskMountController) checkpointDetachedMount(ctx context.Context, mount
 	case errors.Is(err, errCheckpointStreamConflict):
 		c.log.Warn("cloud refused the checkpoint stream; skipping checkpoints until the stream changes",
 			"volume_id", v.CloudVolumeId, "error", err)
-	case checkpointCtx.Err() != nil && ctx.Err() == nil:
+	case timedOut:
 		// The staged bytes go, but the intent stays: it holds a legacy
 		// volume's proposed stream, which the cloud may already have accepted.
 		if rmErr := os.Remove(filepath.Join(v.DiskPath, checkpointPayloadFile)); rmErr != nil && !os.IsNotExist(rmErr) {
 			c.log.Warn("failed to discard abandoned checkpoint", "volume_id", v.CloudVolumeId, "error", rmErr)
 		}
 		c.log.Warn("accelerator checkpoint exceeded its timeout; abandoned", "volume_id", v.CloudVolumeId,
-			"timeout", c.checkpointTimeout)
+			"timeout", timeout, "first", first)
+		if first {
+			c.noteFirstCheckpointTimeout(v, timeout)
+		}
 	default:
 		c.log.Warn("accelerator checkpoint failed; will retry at next detach", "volume_id", v.CloudVolumeId, "error", err)
+	}
+}
+
+// noteFirstCheckpointTimeout counts consecutive timeouts of a stream-less
+// volume's first checkpoint and warns once they repeat: such a volume never
+// starts a stream, so it never gets attached checkpoints either.
+func (c *DiskMountController) noteFirstCheckpointTimeout(v *VolumeState, timeout time.Duration) {
+	path := filepath.Join(v.DiskPath, checkpointTimeoutsFile)
+	count := 0
+	if data, err := os.ReadFile(path); err == nil {
+		count, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+	}
+	count++
+	if err := writeRecoveryFile(v.DiskPath, checkpointTimeoutsFile, []byte(strconv.Itoa(count))); err != nil {
+		c.log.Warn("failed to record checkpoint timeout count", "volume_id", v.CloudVolumeId, "error", err)
+	}
+	if count >= repeatedFirstCheckpointTimeouts {
+		c.log.Warn("accelerator volume's first checkpoint keeps timing out; it gets no checkpoint stream, so replay keeps growing. Raise accelerator_first_checkpoint_timeout",
+			"volume_id", v.CloudVolumeId, "consecutive_timeouts", count, "timeout", timeout)
 	}
 }
 
@@ -179,28 +228,7 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 		}
 	}
 
-	f, err := os.Open(payloadPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	hash := sha256.New()
-	n, err := io.Copy(hash, f)
-	if err != nil {
-		return err
-	}
-	if n != intent.Publication.Base.Size || hex.EncodeToString(hash.Sum(nil)) != intent.Publication.Base.SHA256 {
-		return fmt.Errorf("staged checkpoint payload changed")
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	id, err := c.updatesClient.Upload(ctx, v.CloudVolumeId, UploadRequest{
-		Kind: KindLBDCheckpoint, OrderingKey: intent.OrderingKey, LeaseNonce: nonce,
-		Checkpoint: &intent.Publication,
-		Metadata: map[string]any{"accelerator_recovery_version": AcceleratorRecoveryVersion,
-			"stream_id": intent.Publication.StreamID, "through_label": intent.Publication.Base.ThroughLabel},
-	}, f, n)
+	id, err := c.uploadCheckpoint(ctx, v, nonce, intent, payloadPath)
 	if errors.Is(err, errCheckpointUnsupported) || errors.Is(err, errCheckpointStreamConflict) {
 		// Staged bytes would only be refused again.
 		_ = os.Remove(intentPath)
@@ -245,49 +273,13 @@ func (c *DiskMountController) publishAcceleratorCheckpoint(ctx context.Context, 
 // any remote call, so retries reuse the same checksum-bound claim.
 // Compression reads the whole image, so it stops when ctx does.
 func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeState, stream, horizon, payloadPath string) (checkpointIntent, error) {
-	img, err := os.Open(filepath.Join(v.DiskPath, "disk.img"))
+	staged, intent, err := c.compressCheckpoint(ctx, v, filepath.Join(v.DiskPath, "disk.img"), stream, horizon)
+	if staged != "" {
+		defer os.Remove(staged)
+	}
 	if err != nil {
 		return checkpointIntent{}, err
 	}
-	defer img.Close()
-	info, err := img.Stat()
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	staged, err := os.CreateTemp(v.DiskPath, ".image-snapshot-*")
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	defer staged.Close()
-	defer os.Remove(staged.Name())
-	name := v.Name
-	if name == "" {
-		name = v.CloudVolumeId
-	}
-	checksum, err := snapshot.Backup(staged, ctxReader{ctx, img}, name, info.Size(), v.Filesystem)
-	if err != nil {
-		return checkpointIntent{}, fmt.Errorf("compress image: %w", err)
-	}
-	if err := staged.Sync(); err != nil {
-		return checkpointIntent{}, err
-	}
-	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		return checkpointIntent{}, err
-	}
-	hash := sha256.New()
-	size, err := io.Copy(hash, staged)
-	if err != nil {
-		return checkpointIntent{}, err
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	// Bind the stable update key to both bytes and boundary. Retrying a
-	// lost response reuses the exact original checksum-bound claim.
-	key := sha256.Sum256([]byte(stream + ":" + horizon + ":" + digest))
-	intent := checkpointIntent{OrderingKey: hex.EncodeToString(key[:8]), Publication: CheckpointPublication{
-		Version: AcceleratorRecoveryVersion, VolumeID: v.CloudVolumeId, StreamID: stream,
-		Base: RecoveryCheckpoint{RecoveryObject: RecoveryObject{Size: size, SHA256: digest},
-			ThroughLabel: horizon, ImageSize: info.Size(), ImageSHA256: checksum},
-	}}
 	data, err := json.Marshal(intent)
 	if err != nil {
 		return checkpointIntent{}, err
@@ -301,8 +293,83 @@ func (c *DiskMountController) stageCheckpoint(ctx context.Context, v *VolumeStat
 	if err := writeRecoveryFile(v.DiskPath, checkpointIntentFile, data); err != nil {
 		return checkpointIntent{}, err
 	}
-	if err := os.Rename(staged.Name(), payloadPath); err != nil {
+	if err := os.Rename(staged, payloadPath); err != nil {
 		return checkpointIntent{}, err
 	}
 	return intent, syncRecoveryDir(v.DiskPath)
+}
+
+// compressCheckpoint writes image as a durable miren snapshot in a temporary
+// file under the volume directory and returns its name with the claim that
+// binds those bytes to boundary horizon. The caller removes the file.
+func (c *DiskMountController) compressCheckpoint(ctx context.Context, v *VolumeState, image, stream, horizon string) (string, checkpointIntent, error) {
+	img, err := os.Open(image)
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	defer img.Close()
+	info, err := img.Stat()
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	staged, err := os.CreateTemp(v.DiskPath, ".image-snapshot-*")
+	if err != nil {
+		return "", checkpointIntent{}, err
+	}
+	defer staged.Close()
+	name := v.Name
+	if name == "" {
+		name = v.CloudVolumeId
+	}
+	checksum, err := snapshot.Backup(staged, ctxReader{ctx, img}, name, info.Size(), v.Filesystem)
+	if err != nil {
+		return staged.Name(), checkpointIntent{}, fmt.Errorf("compress image: %w", err)
+	}
+	if err := staged.Sync(); err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, staged)
+	if err != nil {
+		return staged.Name(), checkpointIntent{}, err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	// Bind the stable update key to both bytes and boundary. Retrying a
+	// lost response reuses the exact original checksum-bound claim.
+	key := sha256.Sum256([]byte(stream + ":" + horizon + ":" + digest))
+	return staged.Name(), checkpointIntent{OrderingKey: hex.EncodeToString(key[:8]), Publication: CheckpointPublication{
+		Version: AcceleratorRecoveryVersion, VolumeID: v.CloudVolumeId, StreamID: stream,
+		Base: RecoveryCheckpoint{RecoveryObject: RecoveryObject{Size: size, SHA256: digest},
+			ThroughLabel: horizon, ImageSize: info.Size(), ImageSHA256: checksum},
+	}}, nil
+}
+
+// uploadCheckpoint sends the staged payload under its claim, after checking
+// the bytes still match it, and returns the activated update's ID.
+func (c *DiskMountController) uploadCheckpoint(ctx context.Context, v *VolumeState, nonce string, intent checkpointIntent, payloadPath string) (string, error) {
+	f, err := os.Open(payloadPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	n, err := io.Copy(hash, f)
+	if err != nil {
+		return "", err
+	}
+	if n != intent.Publication.Base.Size || hex.EncodeToString(hash.Sum(nil)) != intent.Publication.Base.SHA256 {
+		return "", fmt.Errorf("staged checkpoint payload changed")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return c.updatesClient.Upload(ctx, v.CloudVolumeId, UploadRequest{
+		Kind: KindLBDCheckpoint, OrderingKey: intent.OrderingKey, LeaseNonce: nonce,
+		Checkpoint: &intent.Publication,
+		Metadata: map[string]any{"accelerator_recovery_version": AcceleratorRecoveryVersion,
+			"stream_id": intent.Publication.StreamID, "through_label": intent.Publication.Base.ThroughLabel},
+	}, f, n)
 }

@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"miren.dev/lbd"
 )
@@ -63,7 +65,7 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 		}
 
 		lastLabel = seg.Label
-		c.log.Info("replayed log segment", "segment_id", seg.SegmentID, "label", seg.Label, "volume_id", volState.VolumeId)
+		c.log.Debug("replayed log segment", "segment_id", seg.SegmentID, "label", seg.Label, "volume_id", volState.VolumeId)
 	}
 
 	if err := img.Sync(); err != nil {
@@ -264,6 +266,29 @@ func isValidTAI64NLabel(s string) bool {
 	}
 	_, err := hex.DecodeString(s)
 	return err == nil
+}
+
+// lbd labels a segment with the wall clock when it opens: 2^62 plus Unix
+// seconds, then nanoseconds. There is no TAI leap-second offset.
+const labelEpoch = uint64(1) << 62
+
+// LabelAt is the label lbd would give a segment opened at t, so every segment
+// opened at or before t sorts at or below it.
+func LabelAt(t time.Time) string {
+	return fmt.Sprintf("%016x%08x", labelEpoch+uint64(t.Unix()), uint32(t.Nanosecond()))
+}
+
+// labelUnixNano is the wall-clock time of a label, in Unix nanoseconds.
+func labelUnixNano(label string) (uint64, error) {
+	if !isValidTAI64NLabel(label) {
+		return 0, fmt.Errorf("invalid lbd label %q", label)
+	}
+	secs, _ := strconv.ParseUint(label[:16], 16, 64)
+	nanos, _ := strconv.ParseUint(label[16:], 16, 32)
+	if secs < labelEpoch || nanos >= 1e9 {
+		return 0, fmt.Errorf("invalid lbd label %q", label)
+	}
+	return (secs-labelEpoch)*1e9 + nanos, nil
 }
 
 // updateLogHorizonFromPath extracts the TAI64N label from a log file path

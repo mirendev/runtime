@@ -32,6 +32,10 @@ type RecoverySegment struct {
 	PreviousLabel string `json:"previous_label"`
 	FirstSequence uint64 `json:"first_sequence"`
 	EntryCount    uint64 `json:"entry_count"`
+	// Boundary marks a point-in-time selection's last object, the first log
+	// labelled after until. Objects are not split at until, so it may hold
+	// entries written at or before until.
+	Boundary bool `json:"boundary,omitempty"`
 }
 
 type RecoveryCheckpoint struct {
@@ -58,6 +62,8 @@ type RecoveryManifest struct {
 	Head          string              `json:"head"`
 	SegmentCount  int                 `json:"segment_count"`
 	Checkpoint    *RecoveryCheckpoint `json:"checkpoint"`
+	// Until repeats a point-in-time selection's label; empty selects the head.
+	Until string `json:"until,omitempty"`
 	// Segments are assembled from the existing paginated update rows.
 	Segments []RecoverySegment `json:"-"`
 }
@@ -67,12 +73,15 @@ type CheckpointPublication struct {
 	VolumeID string             `json:"volume_id"`
 	StreamID string             `json:"stream_id"`
 	Base     RecoveryCheckpoint `json:"checkpoint"`
+	// Basis is checkpointBasisReplayed for an image rebuilt from committed
+	// history while the writer stays attached; empty for a detached image.
+	Basis string `json:"basis,omitempty"`
 }
 
 // protectedUpdatesClient extends update listing with renewable restore
 // protection. There is no fallback to an unprotected listing.
 type protectedUpdatesClient interface {
-	BeginRecovery(context.Context, string, string) (*RecoveryManifest, error)
+	BeginRecovery(ctx context.Context, volume, nonce, until string) (*RecoveryManifest, error)
 	RenewRecovery(context.Context, string, string) (time.Time, error)
 }
 
@@ -92,25 +101,44 @@ func (m *RecoveryManifest) validate(volume string) error {
 		}
 		return nil
 	}
-	if m.Status != "ready" || m.Checkpoint == nil {
+	if m.Status != "ready" {
 		return fmt.Errorf("accelerator history is %q, not recoverable", m.Status)
 	}
-	b := m.Checkpoint
-	if m.DeviceSize == 0 || m.DeviceSize > 1<<63-1 || !validRecoveryObject(b.RecoveryObject) || b.ImageSize <= 0 || !validRecoveryObject(RecoveryObject{UpdateID: b.UpdateID, Size: b.ImageSize, SHA256: b.ImageSHA256}) ||
-		b.ThroughLabel < m.CoverageFloor || b.ThroughLabel > m.Head {
-		return fmt.Errorf("invalid accelerator checkpoint or retained coverage floor")
+	if m.DeviceSize == 0 || m.DeviceSize > 1<<63-1 {
+		return fmt.Errorf("invalid accelerator device size")
 	}
-	for _, label := range []string{b.ThroughLabel, m.CoverageFloor, m.Head} {
+	// Without a checkpoint the tail replays onto an empty image, which is
+	// complete only if nothing was ever retired.
+	previous := ""
+	seen := map[string]bool{}
+	if b := m.Checkpoint; b != nil {
+		if !validRecoveryObject(b.RecoveryObject) || b.ImageSize <= 0 || !validRecoveryObject(RecoveryObject{UpdateID: b.UpdateID, Size: b.ImageSize, SHA256: b.ImageSHA256}) ||
+			b.ThroughLabel < m.CoverageFloor || b.ThroughLabel > m.Head {
+			return fmt.Errorf("invalid accelerator checkpoint or retained coverage floor")
+		}
+		previous = b.ThroughLabel
+		seen[b.UpdateID] = true
+	} else if m.CoverageFloor != "" {
+		return fmt.Errorf("accelerator history below %s was retired and no checkpoint covers it", m.CoverageFloor)
+	}
+	for _, label := range []string{previous, m.CoverageFloor, m.Head, m.Until} {
 		if label != "" && !isValidTAI64NLabel(label) {
 			return fmt.Errorf("invalid accelerator recovery boundary %q", label)
 		}
 	}
-	previous := b.ThroughLabel
-	seen := map[string]bool{b.UpdateID: true}
-	for _, s := range m.Segments {
+	// Entry filtering can trim the objects at until, never a base past it.
+	if m.Until != "" && previous > m.Until {
+		return fmt.Errorf("accelerator checkpoint through %q is past %q", previous, m.Until)
+	}
+	for i, s := range m.Segments {
 		if !validRecoveryObject(s.RecoveryObject) || !isValidTAI64NLabel(s.Label) || s.Label <= previous ||
 			s.PreviousLabel != previous || seen[s.UpdateID] || s.EntryCount > ^uint64(0)-s.FirstSequence {
 			return fmt.Errorf("incomplete accelerator coverage after %q", previous)
+		}
+		// Exactly the first log after until is the boundary, and it ends the
+		// selection; without until there is none.
+		if s.Boundary != (m.Until != "" && s.Label > m.Until) || (s.Boundary && i != len(m.Segments)-1) {
+			return fmt.Errorf("accelerator selection does not end at the first log after %q", m.Until)
 		}
 		seen[s.UpdateID] = true
 		previous = s.Label
@@ -140,8 +168,78 @@ func (c *DiskMountController) replayAccelerator(ctx context.Context, v *VolumeSt
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	} else if fresh, err := freshAcceleratorVolume(ctx, v); err != nil {
+		return err
+	} else if fresh {
+		// Nothing of this volume has ever been applied here: a new node, a
+		// disk adopted from another cluster, or a host that lost its copy.
+		// The cloud decides what the volume holds, not the blank local image.
+		if _, ok := c.updatesClient.(protectedUpdatesClient); ok {
+			err := c.recoverAccelerator(ctx, v, nonce)
+			switch {
+			case err == nil:
+				return nil
+			case errors.Is(err, errNeverBackedUp) && v.RestoreFrom != "":
+				// A new volume seeded from another one's history.
+				return c.rewindAccelerator(ctx, v, nonce)
+			case errors.Is(err, errNeverBackedUp):
+				// Still list the log below: a claim of no history must
+				// never be what skips a replay.
+			case !errors.Is(err, errRecoveryUnsupported):
+				return err
+			default:
+				c.log.Info("no protected accelerator history; replaying the full log",
+					"volume_id", v.CloudVolumeId)
+			}
+		}
+		if err := ensureBlankImage(v); err != nil {
+			return err
+		}
 	}
 	return c.replayMissingSegments(ctx, v)
+}
+
+// errNeverBackedUp means the cloud holds no history for a volume this node has
+// never applied anything to: it is new, and starts from an empty image.
+var errNeverBackedUp = errors.New("accelerator volume has no cloud history")
+
+// freshAcceleratorVolume reports a volume with no applied horizon and no local
+// log segments. Its local image, if any, holds nothing the cloud lacks.
+func freshAcceleratorVolume(ctx context.Context, v *VolumeState) (bool, error) {
+	horizon, err := readLogHorizon(v.DiskPath)
+	if err != nil || horizon != "" {
+		return false, err
+	}
+	names, err := oldestSegments(ctx, filepath.Join(v.DiskPath, "logs"))
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	return len(names) == 0, nil
+}
+
+// ensureBlankImage creates a sparse image of the volume's size when the local
+// one is gone, so replay has something to apply the log to.
+func ensureBlankImage(v *VolumeState) error {
+	path := filepath.Join(v.DiskPath, "disk.img")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	if os.IsExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(v.SizeBytes); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return syncRecoveryDir(v.DiskPath)
 }
 
 // Recovery always reconstructs from the protected base, not an unproven local
@@ -153,31 +251,46 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 	if !ok {
 		return errRecoveryUnsupported
 	}
+	// A volume without a stream file adopts whatever stream the cloud holds;
+	// replayAccelerator only gets here for one with nothing applied locally.
 	stream, err := os.ReadFile(filepath.Join(v.DiskPath, acceleratorStreamFile))
-	if err != nil {
+	adopting := os.IsNotExist(err)
+	if err != nil && !adopting {
 		return err
 	}
 	names, err := oldestSegments(ctx, filepath.Join(v.DiskPath, "logs"))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	if len(names) > 0 && adopting {
+		return fmt.Errorf("accelerator volume has local logs but no stream; explicit recovery required")
+	}
 	if len(names) > 0 {
 		// Check stream identity before publishing a crash tail.
-		manifest, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce)
+		manifest, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce, "")
 		if err != nil {
 			return err
 		}
 		if manifest.StreamID != string(stream) || manifest.Status != "ready" {
 			return fmt.Errorf("accelerator stream changed with local logs outstanding")
 		}
-		uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
-		if err := uploader.drainSegmentsLocked(ctx, v.CloudVolumeId, v.DiskPath); err != nil {
+		if err := c.drainLogsLocked(ctx, v.CloudVolumeId, v.DiskPath); err != nil {
 			return err
 		}
 	}
-	m, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce)
+	m, err := client.BeginRecovery(ctx, v.CloudVolumeId, nonce, "")
 	if err != nil {
+		if errors.Is(err, errRecoveryUnsupported) {
+			return err
+		}
 		return fmt.Errorf("begin protected accelerator recovery: %w", err)
+	}
+	if adopting {
+		if m.Status == "never_backed_up" {
+			return errNeverBackedUp
+		}
+		stream = []byte(m.StreamID)
+		c.log.Info("adopting cloud accelerator stream", "volume_id", v.CloudVolumeId, "stream", m.StreamID)
 	}
 	// A published stream has a checkpoint; "never backed up" here means the
 	// cloud lost history, never permission to start an empty volume.
@@ -191,6 +304,23 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 		return fmt.Errorf("accelerator stream incarnation changed; explicit recovery required")
 	}
 
+	if err := c.protectRecovery(ctx, client, m, func(ctx context.Context) error {
+		return c.installAcceleratorRecovery(ctx, client, v, m)
+	}); err != nil {
+		return err
+	}
+	base := "(empty image)"
+	if m.Checkpoint != nil {
+		base = m.Checkpoint.UpdateID
+	}
+	c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
+		"checkpoint", base, "head", m.Head, "segments", len(m.Segments))
+	return nil
+}
+
+// protectRecovery runs install while renewing m's restore session, so the
+// selected base and tail cannot be collected underneath large downloads.
+func (c *DiskMountController) protectRecovery(ctx context.Context, client protectedUpdatesClient, m *RecoveryManifest, install func(context.Context) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Renew while large downloads/decompression are running, not just between
@@ -214,7 +344,7 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			case <-timer.C:
 			}
 			renewCtx, stop := context.WithDeadline(ctx, expiry)
-			next, err := client.RenewRecovery(renewCtx, v.CloudVolumeId, m.SessionID)
+			next, err := client.RenewRecovery(renewCtx, m.VolumeID, m.SessionID)
 			stop()
 			// The install finished (or failed) and cancelled us; its own
 			// result is the one to report, not this interrupted renewal.
@@ -229,20 +359,80 @@ func (c *DiskMountController) recoverAccelerator(ctx context.Context, v *VolumeS
 			expiry = next
 		}
 	})
-	err = c.installAcceleratorRecovery(ctx, client, v, m)
+	err := install(ctx)
 	cancel()
 	wg.Wait()
 	// The install renews protection itself just before committing, so a
 	// completed install stands even if a background renewal was cut short
 	// by the cancel above.
-	if err != nil {
-		if protectionErr != nil {
-			return protectionErr
+	if err != nil && protectionErr != nil {
+		return protectionErr
+	}
+	return err
+}
+
+// rewindAccelerator seeds a new volume with another volume's history as of
+// RestoreUntil (its committed head when empty), then publishes the result as
+// this volume's first checkpoint before anything attaches. Without that seed
+// the new volume's cloud history would be a log with no base, which a later
+// recovery would replay onto an empty image. Until the seed is acknowledged
+// the volume is still fresh, so an interrupted rewind starts over.
+func (c *DiskMountController) rewindAccelerator(ctx context.Context, v *VolumeState, nonce string) error {
+	client, ok := c.updatesClient.(protectedUpdatesClient)
+	if !ok {
+		return errRecoveryUnsupported
+	}
+	var cutoff uint64
+	if v.RestoreUntil != "" {
+		ns, err := labelUnixNano(v.RestoreUntil)
+		if err != nil {
+			return err
 		}
+		cutoff = ns
+	}
+	m, err := client.BeginRecovery(ctx, v.RestoreFrom, "", v.RestoreUntil)
+	switch {
+	case errors.Is(err, errRecoveryUnsupported):
+		return fmt.Errorf("restore source %s has no accelerator checkpoint stream to rebuild from", v.RestoreFrom)
+	case errors.Is(err, errNeverBackedUp):
+		return fmt.Errorf("restore source %s has no history", v.RestoreFrom)
+	case err != nil:
+		return fmt.Errorf("select history of restore source %s: %w", v.RestoreFrom, err)
+	}
+	if m.DeviceSize != uint64(v.SizeBytes) {
+		return fmt.Errorf("restore source %s is %d bytes, volume is %d", v.RestoreFrom, m.DeviceSize, v.SizeBytes)
+	}
+	// A failed earlier attempt may have staged a checkpoint of a different
+	// source head. Drop its payload so publication restages from this image;
+	// the intent stays so the proposed stream is kept.
+	if err := os.Remove(filepath.Join(v.DiskPath, checkpointPayloadFile)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	c.log.Info("restored accelerator checkpoint and tail", "volume_id", v.CloudVolumeId,
-		"checkpoint", m.Checkpoint.UpdateID, "head", m.Head, "segments", len(m.Segments))
+	err = c.protectRecovery(ctx, client, m, func(ctx context.Context) error {
+		image, err := c.buildRecoveryImage(ctx, v, m, cutoff)
+		if image != "" {
+			defer os.Remove(image)
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(image, filepath.Join(v.DiskPath, "disk.img")); err != nil {
+			return err
+		}
+		return syncRecoveryDir(v.DiskPath)
+	})
+	if err != nil {
+		return err
+	}
+	base := "(empty image)"
+	if m.Checkpoint != nil {
+		base = m.Checkpoint.UpdateID
+	}
+	c.log.Info("rebuilt accelerator volume from another volume's history", "volume_id", v.CloudVolumeId,
+		"source", v.RestoreFrom, "until", v.RestoreUntil, "checkpoint", base, "head", m.Head, "segments", len(m.Segments))
+	if err := c.publishAcceleratorCheckpoint(ctx, v, nonce); err != nil {
+		return fmt.Errorf("publish the restored image as the volume's first checkpoint: %w", err)
+	}
 	return nil
 }
 
@@ -307,7 +497,62 @@ func (c *DiskMountController) downloadRecoveryObject(ctx context.Context, volume
 }
 
 func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, client protectedUpdatesClient, v *VolumeState, m *RecoveryManifest) error {
-	base, err := c.downloadRecoveryObject(ctx, v.CloudVolumeId, v.DiskPath, m.Checkpoint.RecoveryObject)
+	image, err := c.buildRecoveryImage(ctx, v, m, 0)
+	if image != "" {
+		defer os.Remove(image)
+	}
+	if err != nil {
+		return err
+	}
+	return c.commitRecoveryImage(ctx, client, v, m, image)
+}
+
+// buildRecoveryImage writes the selected base plus its tail into a new
+// temporary image in v.DiskPath and returns its path. Nothing is installed.
+// The objects come from m's volume, which need not be v's. A non-zero cutoff
+// stops applying the log at the first entry written after it (unix ns).
+func (c *DiskMountController) buildRecoveryImage(ctx context.Context, v *VolumeState, m *RecoveryManifest, cutoff uint64) (string, error) {
+	image, err := os.CreateTemp(v.DiskPath, ".accelerator-image-*")
+	if err != nil {
+		return "", err
+	}
+	defer image.Close()
+	if m.Checkpoint == nil {
+		if err := image.Truncate(int64(m.DeviceSize)); err != nil {
+			return image.Name(), err
+		}
+	} else if err := c.restoreRecoveryBase(ctx, m.VolumeID, v.DiskPath, m.Checkpoint, image); err != nil {
+		return image.Name(), err
+	}
+	if err := image.Close(); err != nil {
+		return image.Name(), err
+	}
+	img, err := openDiskImage(image.Name())
+	if err != nil {
+		return image.Name(), err
+	}
+	defer img.Close()
+	past := false
+	for _, s := range m.Segments {
+		f, err := c.downloadRecoveryObject(ctx, m.VolumeID, v.DiskPath, s.RecoveryObject)
+		if err != nil {
+			return image.Name(), err
+		}
+		err = replayRecoverySegment(f, img, s, m.DeviceSize, cutoff, &past)
+		f.Close()
+		os.Remove(f.Name())
+		if err != nil {
+			return image.Name(), fmt.Errorf("replay %s: %w", s.Label, err)
+		}
+	}
+	if err := img.Sync(); err != nil {
+		return image.Name(), err
+	}
+	return image.Name(), img.Close()
+}
+
+func (c *DiskMountController) restoreRecoveryBase(ctx context.Context, volume, dir string, b *RecoveryCheckpoint, image *os.File) error {
+	base, err := c.downloadRecoveryObject(ctx, volume, dir, b.RecoveryObject)
 	if err != nil {
 		return err
 	}
@@ -317,15 +562,9 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	if err != nil {
 		return err
 	}
-	if meta.SizeBytes != m.Checkpoint.ImageSize || meta.Checksum != m.Checkpoint.ImageSHA256 {
+	if meta.SizeBytes != b.ImageSize || meta.Checksum != b.ImageSHA256 {
 		return fmt.Errorf("checkpoint image identity mismatch")
 	}
-	image, err := os.CreateTemp(v.DiskPath, ".accelerator-image-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(image.Name())
-	defer image.Close()
 	if err := image.Truncate(meta.SizeBytes); err != nil {
 		return err
 	}
@@ -335,32 +574,10 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	if size, err := image.Seek(0, io.SeekCurrent); err != nil || size != meta.SizeBytes {
 		return fmt.Errorf("checkpoint decompressed size mismatch: got %d, expected %d (%v)", size, meta.SizeBytes, err)
 	}
-	if err := image.Close(); err != nil {
-		return err
-	}
-	img, err := openDiskImage(image.Name())
-	if err != nil {
-		return err
-	}
-	defer img.Close()
-	for _, s := range m.Segments {
-		f, err := c.downloadRecoveryObject(ctx, v.CloudVolumeId, v.DiskPath, s.RecoveryObject)
-		if err != nil {
-			return err
-		}
-		err = replayRecoverySegment(f, img, s, m.DeviceSize)
-		f.Close()
-		os.Remove(f.Name())
-		if err != nil {
-			return fmt.Errorf("replay %s: %w", s.Label, err)
-		}
-	}
-	if err := img.Sync(); err != nil {
-		return err
-	}
-	if err := img.Close(); err != nil {
-		return err
-	}
+	return nil
+}
+
+func (c *DiskMountController) commitRecoveryImage(ctx context.Context, client protectedUpdatesClient, v *VolumeState, m *RecoveryManifest, image string) error {
 	// Reauthenticate immediately before committing the selected recovery set.
 	expiry, err := client.RenewRecovery(ctx, v.CloudVolumeId, m.SessionID)
 	if err != nil || !expiry.After(time.Now()) {
@@ -372,7 +589,7 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	if err := writeRecoveryFile(v.DiskPath, acceleratorInstallFile, []byte(m.StreamID+"\n"+m.Head)); err != nil {
 		return err
 	}
-	if err := os.Rename(image.Name(), filepath.Join(v.DiskPath, "disk.img")); err != nil {
+	if err := os.Rename(image, filepath.Join(v.DiskPath, "disk.img")); err != nil {
 		return err
 	}
 	if err := writeLogHorizon(v.DiskPath, m.Head); err != nil {
@@ -388,7 +605,11 @@ func (c *DiskMountController) installAcceleratorRecovery(ctx context.Context, cl
 	return os.Remove(filepath.Join(v.DiskPath, acceleratorInstallFile))
 }
 
-func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64) error {
+// A non-zero cutoff applies only the entries before the first one written
+// after it, which *past carries across segments. A log prefix is a crash state
+// of the device, so the result is the disk as if it had crashed at the cutoff.
+// The rest is still validated.
+func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, deviceSize uint64, cutoff uint64, past *bool) error {
 	rd, err := lbd.NewReader(src)
 	if err != nil {
 		return err
@@ -411,6 +632,10 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 			(!e.IsWrite() && !e.IsTrim()) || (e.IsWrite() && (len(e.Data) != int(e.Length) || !e.ValidateCRC())) {
 			return fmt.Errorf("invalid LBD entry sequence, bounds, operation or CRC")
 		}
+		count++
+		if *past = *past || (cutoff != 0 && e.TimestampNS > cutoff); *past {
+			continue
+		}
 		offset := int64(e.Block * uint64(h.BlockSize))
 		if e.IsWrite() {
 			if _, err := img.WriteAt(e.Data, offset); err != nil {
@@ -419,7 +644,6 @@ func replayRecoverySegment(src io.Reader, img diskImage, s RecoverySegment, devi
 		} else if err := img.Trim(offset, int(e.Length)); err != nil {
 			return err
 		}
-		count++
 	}
 	if count != s.EntryCount {
 		return fmt.Errorf("LBD entry count mismatch: got %d, expected %d", count, s.EntryCount)
