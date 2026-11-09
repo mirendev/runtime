@@ -46,6 +46,8 @@ type recoveryCloud struct {
 	stallUpload bool
 	// sequenceGap refuses every lbd_log completion with code sequence_gap.
 	sequenceGap bool
+	// logCompleteFail fails every lbd_log completion with a transient 503.
+	logCompleteFail bool
 	// uploadDelay holds each checkpoint PUT this long before accepting it.
 	uploadDelay   time.Duration
 	downloadDelay time.Duration
@@ -299,6 +301,10 @@ func (s *recoveryCloud) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		encoded, err := json.Marshal(completion)
 		require.NoError(s.t, err)
 		r.Body = io.NopCloser(bytes.NewReader(encoded))
+		if completion.Checkpoint == nil && s.logCompleteFail {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if completion.Checkpoint == nil && s.sequenceGap {
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{"error": "sequence gap", "code": "sequence_gap"})
@@ -1703,9 +1709,13 @@ func TestAcceleratorAttachedCheckpointNeedsFreeSpace(t *testing.T) {
 // the refused segments (and, without a stream, the local image) aside and the
 // cloud forgets the refused update, the lease is released and the disk
 // reattaches from the cloud history, without the writes after the gap.
+// When a transient failure first leaves the drain gated, the refusal comes
+// from the retry's early drain instead, and the operator may move the logs
+// aside before the next cleanup; that image is never checkpointed either.
 func TestAcceleratorSequenceGapManualRecovery(t *testing.T) {
-	for _, withStream := range []bool{true, false} {
-		t.Run(fmt.Sprintf("stream=%v", withStream), func(t *testing.T) {
+	for _, tc := range []struct{ withStream, transientFirst bool }{{true, false}, {false, false}, {true, true}} {
+		withStream := tc.withStream
+		t.Run(fmt.Sprintf("stream=%v/transient=%v", withStream, tc.transientFirst), func(t *testing.T) {
 			cloud, c, v := newRecoveryCloud(t)
 			imagePath := filepath.Join(v.DiskPath, "disk.img")
 			var expected []byte
@@ -1759,14 +1769,26 @@ func TestAcceleratorSequenceGapManualRecovery(t *testing.T) {
 			cloud.mockCloudServer.mu.Lock()
 			cloud.leases["vol"] = &activeLease{Nonce: "nonce"}
 			cloud.mockCloudServer.mu.Unlock()
-			cloud.mu.Lock()
-			cloud.sequenceGap = true
-			cloud.mu.Unlock()
 			claims := checkpointClaims(cloud)
 
 			// 1. Stopping the app detaches the disk; its drain is refused.
 			mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED,
 				ActualState: storage_v1alpha.DM_MOUNTED}
+			if tc.transientFirst {
+				cloud.mu.Lock()
+				cloud.logCompleteFail = true
+				cloud.mu.Unlock()
+				err := c.Reconcile(t.Context(), mount, nil)
+				require.Error(t, err)
+				require.NotErrorIs(t, err, errSequenceGap)
+				require.True(t, c.state.HasPendingCloudUpload("vol"), "an unknown outcome keeps the drain gated")
+				cloud.mu.Lock()
+				cloud.logCompleteFail = false
+				cloud.mu.Unlock()
+			}
+			cloud.mu.Lock()
+			cloud.sequenceGap = true
+			cloud.mu.Unlock()
 			require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
 			require.NotEmpty(t, c.ops.(*mockDiskMountOps).detachedLbds, "the disk detaches despite the refusal")
 			require.NotNil(t, c.state.GetMount("mount"), "the lease is kept while refused segments remain")
@@ -1776,8 +1798,10 @@ func TestAcceleratorSequenceGapManualRecovery(t *testing.T) {
 			require.Equal(t, "vol", refusals[0].Labels["volume_id"])
 			require.Equal(t, uploadBlockedSequenceGap, uploadBlocked(), "miren doctor sees a refusal first hit by the drain")
 			require.Equal(t, claims, checkpointClaims(cloud), "the image holding refused writes is never checkpointed")
-			require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
-			require.Len(t, points.named("miren_disk_lbd_log_sequence_gap_refusals_total"), 1, "a held volume is not refused again")
+			if !tc.transientFirst {
+				require.ErrorIs(t, c.Reconcile(t.Context(), mount, nil), errSequenceGap)
+				require.Len(t, points.named("miren_disk_lbd_log_sequence_gap_refusals_total"), 1, "a held volume is not refused again")
+			}
 
 			// 2. Move the refused segments, and a stream-less image, aside.
 			// 3. Delete the refused update.

@@ -966,15 +966,6 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return detachErr
 	}
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
-		if errors.Is(err, errSequenceGap) && mountState.CheckpointDue {
-			// The image holds writes the cloud refused; checkpointing it once
-			// the operator clears the refused logs would publish them past the
-			// gap. Recovery restores from the cloud history instead.
-			mountState.CheckpointDue = false
-			if saveErr := c.state.SetMountAndSave(entityId, mountState); saveErr != nil {
-				return errors.Join(err, saveErr)
-			}
-		}
 		return err
 	}
 	if mountState.CheckpointDue {
@@ -1026,7 +1017,17 @@ func (c *DiskMountController) drainMountLogs(ctx context.Context, mount *MountSt
 	if diskPath == "" {
 		return fmt.Errorf("cannot establish log directory for lease release of %s", mount.EntityId)
 	}
-	return c.drainLogsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+	err := c.drainLogsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+	if errors.Is(err, errSequenceGap) && mount.CheckpointDue {
+		// The image holds writes the cloud refused; checkpointing it once
+		// the operator clears the refused logs would publish them past the
+		// gap. Recovery restores from the cloud history instead.
+		mount.CheckpointDue = false
+		if saveErr := c.state.SetMountAndSave(mount.EntityId, mount); saveErr != nil {
+			return errors.Join(err, saveErr)
+		}
+	}
+	return err
 }
 
 // recoverMountLease resolves a durable acquisition intent. A terminal response
