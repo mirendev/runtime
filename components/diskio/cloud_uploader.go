@@ -232,7 +232,29 @@ func (u *CloudSegmentUploader) parkFencedTail(ctx context.Context, volumeID, dis
 	return true, nil
 }
 
+// uploadSegmentsLocked uploads one turn. A sequence_gap refusal is a final,
+// known outcome: the refused log is not published and never will be. Unlike
+// an unknown outcome, it leaves no remote writes to reconcile, so it releases
+// the pending-upload gate and the pinned turn, as parkFencedTail does. Detach
+// and lease release can then proceed; the refused segments stay local, and
+// keep failing the drain, until an operator moves them aside.
 func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
+	err := u.uploadTurnLocked(ctx, volumeID, diskPath, paths, committed)
+	if !isSequenceGap(err) {
+		return err
+	}
+	if rmErr := os.Remove(filepath.Join(diskPath, uploadTurnFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+		return errors.Join(err, rmErr)
+	}
+	if u.state != nil {
+		if stateErr := u.state.SetPendingCloudUpload(volumeID, ""); stateErr != nil {
+			return errors.Join(err, stateErr)
+		}
+	}
+	return err
+}
+
+func (u *CloudSegmentUploader) uploadTurnLocked(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
 	if len(paths) == 0 || len(paths) > uploadWindow {
 		return fmt.Errorf("upload batch must contain 1..%d segments", uploadWindow)
 	}

@@ -231,17 +231,24 @@ When this happens, the runtime:
 - holds the volume's uploads for an hour before trying once more, instead of
   retrying.
 
+Because the refusal is final, it leaves no upload with an unknown outcome, so
+the runtime releases the volume's pending-upload gate itself. The disk can
+still detach; only the refused segments, which stay on the node, keep its final
+drain from finishing.
+
 Until it is recovered, the volume's later writes do not reach the cloud. The
 writes in the gap are missing from the cloud history either way. Recovery is
 manual, and a checkpoint does not get past it:
 
-1. Stop the disk's app and preserve the volume directory, as described above.
+1. Stop the disk's app. The disk detaches, but its final drain is refused, so
+   the runtime keeps the volume's lease and retries the drain.
 2. Move the volume's remaining log segments out of its `logs` directory, and
    keep them. They include the refused segment and everything after it, and
    the runtime would otherwise upload them, and be refused, again.
-3. Delete the refused updates from the cloud volume.
-4. Reattach the disk. lbd numbers the new attachment from 0, which the cloud
-   accepts.
+3. Delete the refused updates from the cloud volume. The next drain retry finds
+   no segments, and the runtime releases the lease.
+4. Reattach the disk. It restores from the cloud history, and lbd numbers the
+   new attachment from 0, which the cloud accepts.
 
 :::warning[Writes after the gap leave the cloud history]
 

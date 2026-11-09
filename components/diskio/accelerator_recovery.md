@@ -238,11 +238,19 @@ reports and `miren doctor` fails on. It then holds the volume's uploads for an
 hour before trying once more, instead of retrying every minute. The next
 successful upload clears the hold and the doctor signal.
 
+A refusal is a known outcome: the refused log is not published and never will
+be, so there is nothing to reconcile. Like `parkFencedTail`, the refusal
+releases the pending-upload gate and the pinned upload turn. Without that, the
+gate would block detach, lease release and reattach, and nothing but a hand
+edit of the runtime state could clear it. The refused segments stay local, so
+the final drain keeps failing and the lease is kept until they are moved aside.
+
 There is no automatic recovery, and a checkpoint does not get past a gap.
-Recovery is manual: delete the refused updates, then reattach so lbd numbers
-from 0. The refused segment and those after it are still in the volume's local
-`logs` directory and would be refused again, so they must be moved aside first
-(see "Recovering from a sequence gap" in the disk accelerator docs).
+Recovery is manual: stop the app so the disk detaches, move the volume's local
+segments aside (they would be refused again), delete the refused updates, and
+let the drain retry release the lease; then reattach, and lbd numbers from 0.
+`TestAcceleratorSequenceGapManualRecovery` runs this sequence. See
+"Recovering from a sequence gap" in the disk accelerator docs.
 
 ## Installation, compatibility, and cost
 
