@@ -789,7 +789,10 @@ func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, u
 	}
 	var session restoreSession
 	if err := c.doJSON(ctx, "POST", endpoint, body, &session); err != nil {
-		if unsupportedStatus(err, false) {
+		// A cloud without this route answers 405 rather than 404: the path
+		// also matches DELETE /updates/{updateId}. A v1 cloud has the route.
+		httpErr, _ := errors.AsType[*cloudUpdateHTTPError](err)
+		if unsupportedStatus(err, false) || (httpErr != nil && httpErr.status == http.StatusMethodNotAllowed) {
 			return nil, fmt.Errorf("%w: %v", errRecoveryUnsupported, err)
 		}
 		return nil, err
