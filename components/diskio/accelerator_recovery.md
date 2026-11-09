@@ -61,10 +61,14 @@ the existing authenticated JSON transport:
   The session pins all selected objects throughout listing and downloading;
   resolving an individual download URL is not itself sufficient GC protection.
 
-`status` is `ready` or `never_backed_up`; `unsupported` sends runtime back to
-legacy replay. Other statuses, including `expired` and `unavailable`, are
-errors, never permission to initialize an empty filesystem. Runtime only asks
-for a stream it already has, so it treats `never_backed_up` as lost history.
+`status` is `ready` or `never_backed_up`. `unsupported`, and `legacy` (the
+volume never acknowledged a checkpoint stream, so cloud retains its whole log),
+send runtime back to legacy replay. Other statuses, including `expired` and
+`unavailable`, are errors, never permission to initialize an empty filesystem.
+A volume with a stream treats `never_backed_up` as lost history. A fresh volume
+(no horizon and no local logs) instead adopts the stream the cloud names in a
+`ready` answer, and takes `never_backed_up` as genuinely new: it still lists
+and replays the full log, so that answer never skips a replay.
 The stream itself is proposed by runtime in its first checkpoint and becomes
 durable only when cloud acknowledges that completion; a retried first checkpoint
 reuses the same proposed `stream_id` from its staged intent. `ready` requires a base, stream incarnation, device size, floor, and head. Each object
