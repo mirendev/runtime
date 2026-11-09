@@ -489,3 +489,30 @@ func TestDiskLeaseController_UnstampedVolume(t *testing.T) {
 			"with no owner recorded anywhere, no node should claim the mount")
 	})
 }
+
+// After a hard kill and reboot, the crashed sandbox's recovery released its
+// lease before this (fresh) controller saw it bound again. The release must
+// still unmount the lease's own mount; skipping it left the dead sandbox's
+// mount holding the volume against every later sandbox (hill A, soak1).
+func TestDiskLeaseController_ReleaseUntrackedLeaseUnmountsItsMount(t *testing.T) {
+	ctx := context.Background()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	dlc := NewDiskLeaseController(slog.Default(), es.EAC, compute.NewNodeId("test-node"), "")
+
+	leaseId := entity.Id("disk-lease/crashed")
+	mountId := entity.Id("disk_mount/crashed")
+	mount := &storage_v1alpha.DiskMount{VolumeId: "disk_volume/v", DiskLeaseId: leaseId, MountPath: "/var/lib/miren/disks/v",
+		DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_MOUNTED, NodeId: compute.NewNodeId("test-node").Id()}
+	_, err := es.EAC.Create(ctx, entity.New(entity.DBId, mountId, mount.Encode).Attrs())
+	require.NoError(t, err)
+
+	released := &storage_v1alpha.DiskLease{ID: leaseId, DiskId: "disk/d", SandboxId: "sandbox/dead", Status: storage_v1alpha.RELEASED}
+	require.NoError(t, dlc.Update(ctx, released, &entity.Meta{}))
+
+	resp, err := es.EAC.Get(ctx, mountId.String())
+	require.NoError(t, err)
+	var got storage_v1alpha.DiskMount
+	got.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.DM_WANT_UNMOUNTED, got.DesiredState)
+}

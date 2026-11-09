@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	// accelerator mode. Its ordering key is the TAI64N label from the segment
 	// filename, disk.<label>.log.
 	KindLBDLog UpdateKind = "lbd_log"
+
+	// KindLBDCheckpoint completion atomically activates its recovery coverage.
+	KindLBDCheckpoint UpdateKind = "lbd_checkpoint"
 
 	// KindLoopImage is a compressed snapshot of a universal-mode volume's
 	// backing image. Its ordering key is a zero-padded 16-hex snapshot
@@ -54,16 +58,24 @@ type UploadRequest struct {
 	Metadata map[string]any
 	// LeaseNonce is required when the volume has an active lease.
 	LeaseNonce string
+	// Checkpoint binds checkpoint activation to the uploaded bytes and log head.
+	// Completion must acknowledge it exactly; ordinary upload success is not proof.
+	Checkpoint *CheckpointPublication
 }
 
 // UpdateInfo describes one update the cloud is holding.
 type UpdateInfo struct {
-	UpdateID     string `json:"update_id"`
-	Kind         string `json:"kind"`
-	OrderingKey  string `json:"ordering_key"`
-	EndKey       string `json:"end_key,omitempty"`
-	Size         int64  `json:"size"`
-	SnapshotName string `json:"snapshot_name,omitempty"`
+	UpdateID      string `json:"update_id"`
+	Kind          string `json:"kind"`
+	OrderingKey   string `json:"ordering_key"`
+	EndKey        string `json:"end_key,omitempty"`
+	Size          int64  `json:"size"`
+	SnapshotName  string `json:"snapshot_name,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+	PreviousLabel string `json:"previous_label,omitempty"`
+	FirstSequence uint64 `json:"first_sequence,omitempty"`
+	EntryCount    uint64 `json:"entry_count,omitempty"`
+	Boundary      bool   `json:"boundary,omitempty"`
 }
 
 // maxUpdateListPages caps a cursor walk. The server pages at 100 by default, so
@@ -87,6 +99,9 @@ type ListOptions struct {
 	// Limit caps how many updates come back. Zero walks every page, which is
 	// what replay wants; a positive value stops as soon as it has enough.
 	Limit int
+
+	// Protected recovery uses the same cursor walk, bound to one restore session.
+	restoreSession string
 }
 
 // CloudUpdatesClient is the runtime's view of the cloud's volume update API.
@@ -134,14 +149,18 @@ func NewCloudUpdatesClient(log *slog.Logger, baseURL string, authClient *cloudau
 }
 
 type beginUploadRequestJSON struct {
-	Kind         string `json:"kind"`
-	OrderingKey  string `json:"ordering_key"`
-	EndKey       string `json:"end_key,omitempty"`
-	SnapshotName string `json:"snapshot_name,omitempty"`
-	LeaseNonce   string `json:"lease_nonce,omitempty"`
-	MD5          string `json:"md5,omitempty"`
-	CRC32C       string `json:"crc32c,omitempty"`
-	Size         int64  `json:"size,omitempty"`
+	Kind            string `json:"kind"`
+	OrderingKey     string `json:"ordering_key"`
+	EndKey          string `json:"end_key,omitempty"`
+	SnapshotName    string `json:"snapshot_name,omitempty"`
+	LeaseNonce      string `json:"lease_nonce,omitempty"`
+	MD5             string `json:"md5,omitempty"`
+	CRC32C          string `json:"crc32c,omitempty"`
+	Size            int64  `json:"size,omitempty"`
+	RecoveryVersion int    `json:"recovery_version,omitempty"`
+	// StreamID lets cloud refuse a conflicting checkpoint stream before any
+	// bytes are sent. It is set only for lbd_checkpoint.
+	StreamID string `json:"stream_id,omitempty"`
 }
 
 type beginUploadResponseJSON struct {
@@ -160,15 +179,17 @@ type beginUploadResponseJSON struct {
 		Version    int `json:"version"`
 		MaxEntries int `json:"max_entries"`
 	} `json:"prepared_prefix_publication"`
+	RecoveryVersion int `json:"recovery_version,omitempty"`
 }
 
 type completeUploadRequestJSON struct {
-	MD5         string         `json:"md5"`
-	CRC32C      string         `json:"crc32c"`
-	Size        int64          `json:"size"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	LeaseNonce  string         `json:"lease_nonce,omitempty"`
-	PrepareOnly bool           `json:"prepare_only,omitempty"`
+	MD5         string                 `json:"md5"`
+	CRC32C      string                 `json:"crc32c"`
+	Size        int64                  `json:"size"`
+	Metadata    map[string]any         `json:"metadata,omitempty"`
+	LeaseNonce  string                 `json:"lease_nonce,omitempty"`
+	PrepareOnly bool                   `json:"prepare_only,omitempty"`
+	Checkpoint  *CheckpointPublication `json:"checkpoint,omitempty"`
 }
 
 // Preparation does the slow storage work without exposing an update to replay.
@@ -200,8 +221,48 @@ type prefixUpdatesClient interface {
 
 var errPreparationUnsupported = errors.New("cloud does not support ordered upload preparation")
 
+// Old clouds lack the recovery extensions. Callers keep the legacy behavior
+// rather than failing, which is safe only while the cloud retains every log.
+var (
+	errCheckpointUnsupported = errors.New("cloud does not support accelerator checkpoints")
+	errRecoveryUnsupported   = errors.New("cloud does not support protected accelerator recovery")
+	// errCheckpointStreamConflict means the cloud already has another stream
+	// for the volume. Retrying the same local stream can never succeed.
+	errCheckpointStreamConflict = errors.New("cloud refused the checkpoint's stream")
+	// errCheckpointClaimRefused is any other 409 at checkpoint begin, such as a
+	// duplicate key or a differing payload. The staged claim cannot succeed,
+	// but the volume's stream may still be fine.
+	errCheckpointClaimRefused = errors.New("cloud refused the checkpoint claim")
+)
+
+// streamConflict reports a checkpoint stream refusal. Only the explicit code
+// counts, at begin and completion alike: a plain 409 also covers duplicate
+// keys, constraint violations and differing payloads or metadata, and treating
+// those as a conflict would stop checkpoints for the volume for good.
+func streamConflict(err error, atBegin bool) error {
+	httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err)
+	switch {
+	case !ok || httpErr.status != http.StatusConflict:
+		return err
+	case httpErr.code == "stream_conflict":
+		return fmt.Errorf("%w: %v", errCheckpointStreamConflict, err)
+	case atBegin:
+		return fmt.Errorf("%w: %v", errCheckpointClaimRefused, err)
+	}
+	return err
+}
+
+// unsupportedStatus reports a refusal of an unknown route, or with
+// unknownKind also of an unknown update kind.
+func unsupportedStatus(err error, unknownKind bool) bool {
+	httpErr, ok := errors.AsType[*cloudUpdateHTTPError](err)
+	return ok && (httpErr.status == http.StatusNotFound || httpErr.status == http.StatusNotImplemented ||
+		(unknownKind && httpErr.status == http.StatusBadRequest))
+}
+
 type cloudUpdateHTTPError struct {
 	status     int
+	code       string
 	message    string
 	retryAfter time.Duration
 }
@@ -219,13 +280,18 @@ func updateHTTPError(resp *http.Response) error {
 	} else if until, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
 		delay = max(0, time.Until(until))
 	}
-	return &cloudUpdateHTTPError{status: resp.StatusCode, retryAfter: delay,
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	return &cloudUpdateHTTPError{status: resp.StatusCode, code: body.Code, retryAfter: delay,
 		message: fmt.Sprintf("%s %s failed with status %d: %s", resp.Request.Method, apiURL.Redacted(), resp.StatusCode, payload)}
 }
 
 type listUpdatesResponseJSON struct {
-	Updates    []UpdateInfo `json:"updates"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+	Updates    []UpdateInfo      `json:"updates"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	Recovery   *RecoveryManifest `json:"recovery,omitempty"`
 }
 
 type downloadResponseJSON struct {
@@ -246,6 +312,16 @@ func (c *cloudUpdatesClient) authorize(ctx context.Context, req *http.Request) e
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	return nil
+}
+
+// invalidateOnUnauthorized drops the cached token when cloud rejects it, so the
+// caller's next retry authenticates again. Without this a token cloud no longer
+// accepts, such as after a signing-key rotation, is reused until it expires and
+// every disk upload, lease and registration fails in the meantime.
+func invalidateOnUnauthorized(authClient *cloudauth.AuthClient, resp *http.Response) {
+	if resp.StatusCode == http.StatusUnauthorized && authClient != nil {
+		authClient.InvalidateToken()
+	}
 }
 
 // jsonRequestTimeout bounds each small control request. Payload bytes travel
@@ -302,6 +378,7 @@ func (c *cloudUpdatesClient) doJSON(ctx context.Context, method, apiURL string, 
 		return fmt.Errorf("request to %s failed: %w", apiURL, err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(c.authClient, resp)
 
 	if resp.StatusCode != http.StatusOK {
 		return updateHTTPError(resp)
@@ -379,13 +456,26 @@ func (c *cloudUpdatesClient) PublishPrepared(ctx context.Context, head *publicat
 	if response.Terminal != response.Entries[len(prepared)-1] {
 		return nil, fmt.Errorf("cloud acknowledged a different publication boundary")
 	}
-	c.log.Info("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
+	c.log.Debug("updates uploaded", "volume_id", first.volumeID, "count", len(prepared), "ordering_key", response.Terminal.OrderingKey)
 	return &response.Terminal, nil
 }
 
 func (c *cloudUpdatesClient) CompleteUpload(ctx context.Context, prepared *preparedUpload) (string, error) {
-	if err := c.doJSON(ctx, "POST", prepared.completeURL, prepared.completion, nil); err != nil {
+	var response struct {
+		Checkpoint *CheckpointPublication `json:"checkpoint"`
+	}
+	var out any
+	if prepared.completion.Checkpoint != nil {
+		out = &response
+	}
+	if err := c.doJSON(ctx, "POST", prepared.completeURL, prepared.completion, out); err != nil {
+		if prepared.completion.Checkpoint != nil {
+			return "", streamConflict(err, false)
+		}
 		return "", err
+	}
+	if prepared.completion.Checkpoint != nil && (response.Checkpoint == nil || *response.Checkpoint != *prepared.completion.Checkpoint) {
+		return "", fmt.Errorf("cloud did not authenticate the exact checkpoint activation")
 	}
 	c.log.Info("update uploaded", "update_id", prepared.updateID, "volume_id", prepared.volumeID,
 		"kind", prepared.kind, "ordering_key", prepared.orderingKey, "size", prepared.completion.Size)
@@ -410,6 +500,15 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 	claim := beginUploadRequestJSON{
 		Kind: string(req.Kind), OrderingKey: req.OrderingKey, EndKey: req.EndKey,
 		SnapshotName: req.SnapshotName, LeaseNonce: req.LeaseNonce,
+	}
+	if req.Kind == KindLBDCheckpoint {
+		if req.Checkpoint == nil || req.Checkpoint.Version != AcceleratorRecoveryVersion || req.Checkpoint.VolumeID != volumeID || req.LeaseNonce == "" {
+			return nil, fmt.Errorf("checkpoint upload requires recovery coverage and an owned lease")
+		}
+		claim.RecoveryVersion = AcceleratorRecoveryVersion
+		claim.StreamID = req.Checkpoint.StreamID
+	} else if req.Checkpoint != nil {
+		return nil, fmt.Errorf("checkpoint coverage requires lbd_checkpoint kind")
 	}
 	if seeker, ok := body.(io.ReadSeeker); ok {
 		position, err := seeker.Seek(0, io.SeekCurrent)
@@ -440,6 +539,12 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 
 	var begun beginUploadResponseJSON
 	err = c.doJSON(ctx, "POST", beginURL, claim, &begun)
+	if req.Checkpoint != nil && unsupportedStatus(err, true) {
+		return nil, fmt.Errorf("%w: %v", errCheckpointUnsupported, err)
+	}
+	if req.Checkpoint != nil && err != nil {
+		return nil, streamConflict(err, true)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -447,6 +552,9 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 	// otherwise a concurrent preparation could publish a replay-visible hole.
 	if prepareOnly && !begun.SupportsPrepare {
 		return nil, errPreparationUnsupported
+	}
+	if req.Checkpoint != nil && begun.RecoveryVersion != AcceleratorRecoveryVersion {
+		return nil, errCheckpointUnsupported
 	}
 	if begun.UpdateID == "" {
 		return nil, fmt.Errorf("cloud returned an empty upload identity")
@@ -467,6 +575,11 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 			Metadata: req.Metadata, LeaseNonce: req.LeaseNonce}}
 	if begun.Publication != nil && begun.Publication.Version == 1 && req.Kind == KindLBDLog && req.LeaseNonce != "" {
 		prepared.batchLimit = min(uploadWindow, begun.Publication.MaxEntries)
+	}
+	if req.Checkpoint != nil {
+		checkpoint := *req.Checkpoint
+		checkpoint.Base.UpdateID = begun.UpdateID
+		prepared.completion.Checkpoint = &checkpoint
 	}
 	// Prepared bytes are immutable and have no upload URL. Reuse the bound
 	// identity, but still authenticate publication through CompleteUpload.
@@ -537,6 +650,10 @@ func (c *cloudUpdatesClient) uploadPayload(ctx context.Context, volumeID string,
 }
 
 func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {
+	return c.list(ctx, volumeID, opts, nil)
+}
+
+func (c *cloudUpdatesClient) list(ctx context.Context, volumeID string, opts ListOptions, recovery *RecoveryManifest) ([]UpdateInfo, error) {
 	// The cloud refuses after/until without a kind, since ordering keys only
 	// compare within one. Catch it here with a clearer message.
 	if (opts.After != "" || opts.Until != "") && opts.Kind == "" {
@@ -564,6 +681,10 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 	if opts.Limit > 0 {
 		query.Set("limit", strconv.Itoa(opts.Limit))
 	}
+	if recovery != nil {
+		query.Set("restore_session", opts.restoreSession)
+		query.Set("recovery_version", strconv.Itoa(AcceleratorRecoveryVersion))
+	}
 
 	// Walk every page: callers want the whole matching set, and the cursor is
 	// an implementation detail of the transport.
@@ -582,6 +703,16 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 		var page listUpdatesResponseJSON
 		if err := c.doJSON(ctx, "GET", pageURL, nil, &page); err != nil {
 			return nil, err
+		}
+		if recovery != nil {
+			if page.Recovery == nil || page.Recovery.SessionID != opts.restoreSession || page.Recovery.VolumeID != volumeID || page.Recovery.Version != AcceleratorRecoveryVersion {
+				return nil, fmt.Errorf("cloud did not bind update listing to the restore selection")
+			}
+			if pages == 0 {
+				*recovery = *page.Recovery
+			} else if !reflect.DeepEqual(recovery, page.Recovery) {
+				return nil, fmt.Errorf("recovery selection changed between update pages")
+			}
 		}
 		all = append(all, page.Updates...)
 
@@ -634,6 +765,92 @@ func (c *cloudUpdatesClient) Download(ctx context.Context, volumeID, updateID st
 	}
 
 	return dataResp.Body, nil
+}
+
+// Restore sessions are shared protection for immutable update selections. The
+// cloud must implement these MIR-2183 semantics before enabling retention.
+type restoreSession struct {
+	Version   int       `json:"version"`
+	VolumeID  string    `json:"volume_id"`
+	SessionID string    `json:"session_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// BeginRecovery selects and protects a base plus tail. A non-empty until
+// selects the history as of that log label instead of the committed head.
+func (c *cloudUpdatesClient) BeginRecovery(ctx context.Context, volume, nonce, until string) (*RecoveryManifest, error) {
+	endpoint, err := c.updatesPath(volume, "restore-sessions")
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"version": AcceleratorRecoveryVersion, "lease_nonce": nonce, "kind": KindLBDCheckpoint}
+	if until != "" {
+		body["until"] = until
+	}
+	var session restoreSession
+	if err := c.doJSON(ctx, "POST", endpoint, body, &session); err != nil {
+		// A cloud without this route answers 405 rather than 404: the path
+		// also matches DELETE /updates/{updateId}. A v1 cloud has the route.
+		httpErr, _ := errors.AsType[*cloudUpdateHTTPError](err)
+		if unsupportedStatus(err, false) || (httpErr != nil && httpErr.status == http.StatusMethodNotAllowed) {
+			return nil, fmt.Errorf("%w: %v", errRecoveryUnsupported, err)
+		}
+		return nil, err
+	}
+	if session.Version != AcceleratorRecoveryVersion || session.VolumeID != volume || session.SessionID == "" || !session.ExpiresAt.After(time.Now()) {
+		return nil, fmt.Errorf("cloud did not protect the selected updates")
+	}
+	var manifest RecoveryManifest
+	updates, err := c.list(ctx, volume, ListOptions{Kind: KindLBDLog, restoreSession: session.SessionID}, &manifest)
+	if err != nil {
+		return nil, err
+	}
+	// "legacy": the volume never acknowledged a checkpoint stream, so cloud
+	// retains its whole log and the caller replays it from the start.
+	if manifest.Status == "unsupported" || manifest.Status == "legacy" {
+		return nil, errRecoveryUnsupported
+	}
+	// No history at all, so there is no stream to name either. Callers that
+	// expected history treat this as lost history, never as an empty volume.
+	if manifest.Status == "never_backed_up" {
+		return nil, errNeverBackedUp
+	}
+	if !manifest.ExpiresAt.Equal(session.ExpiresAt) {
+		return nil, fmt.Errorf("update listing does not match restore protection")
+	}
+	// A cloud that ignored until would select the head, writes after it included.
+	if manifest.Until != until {
+		return nil, fmt.Errorf("cloud selected history until %q, not %q", manifest.Until, until)
+	}
+	for _, u := range updates {
+		if u.Kind != string(KindLBDLog) {
+			return nil, fmt.Errorf("non-log update in accelerator recovery tail")
+		}
+		manifest.Segments = append(manifest.Segments, RecoverySegment{
+			RecoveryObject: RecoveryObject{UpdateID: u.UpdateID, Size: u.Size, SHA256: u.SHA256},
+			Label:          u.OrderingKey, PreviousLabel: u.PreviousLabel, FirstSequence: u.FirstSequence, EntryCount: u.EntryCount,
+			Boundary: u.Boundary,
+		})
+	}
+	if err := manifest.validate(volume); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func (c *cloudUpdatesClient) RenewRecovery(ctx context.Context, volume, session string) (time.Time, error) {
+	endpoint, err := c.updatesPath(volume, "restore-sessions", session, "renew")
+	if err != nil {
+		return time.Time{}, err
+	}
+	var response restoreSession
+	if err := c.doJSON(ctx, "POST", endpoint, map[string]any{"version": AcceleratorRecoveryVersion}, &response); err != nil {
+		return time.Time{}, err
+	}
+	if response.Version != AcceleratorRecoveryVersion || response.VolumeID != volume || response.SessionID != session || !response.ExpiresAt.After(time.Now()) {
+		return time.Time{}, fmt.Errorf("cloud did not renew the selected recovery session")
+	}
+	return response.ExpiresAt, nil
 }
 
 // resolveCompleteURL turns the cloud's completion URL into an absolute one,

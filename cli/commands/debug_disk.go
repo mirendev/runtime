@@ -7,10 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -95,6 +99,178 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// DebugDiskAdopt creates a disk bound to an existing miren.cloud volume, such
+// as one written by another (possibly lost) cluster in the same organization.
+// Its first mount rebuilds the image from the cloud's protected checkpoint and
+// log tail and continues that volume's stream.
+//
+// --takeover declares the volume's current writer gone. As an organization
+// admin, it breaks the cloud lease granted before now, fencing that writer,
+// and has cloud grant the lease to this cluster instead of waiting for a
+// release that will never come. Use it only when the old cluster is lost.
+func DebugDiskAdopt(ctx *Context, opts struct {
+	ConfigCentric
+	Name        string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
+	CloudVolume string `long:"cloud-volume" description:"miren.cloud volume ID to adopt (vol-...)" required:"true"`
+	Size        int    `short:"s" long:"size" description:"Size of the cloud volume in GB" required:"true"`
+	Filesystem  string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
+	Node        string `long:"node" description:"Node the volume lives on" default:"node/miren"`
+	Takeover    bool   `long:"takeover" description:"The volume's previous writer is lost: as an organization admin, break any cloud lease granted before now, fencing it, and grant the lease to this cluster"`
+}) error {
+	var nonce string
+	if opts.Takeover {
+		var err error
+		if nonce, err = takeOverVolumeLease(ctx, opts.CloudVolume); err != nil {
+			return fmt.Errorf("taking over the cloud lease of %s: %w", opts.CloudVolume, err)
+		}
+	}
+	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
+		v.CloudVolumeId = opts.CloudVolume
+		v.LeaseTakeoverNonce = nonce
+	})
+	if err != nil {
+		if nonce != "" {
+			ctx.Warn("This cluster now holds the cloud lease of %s; run the command again to adopt it", opts.CloudVolume)
+		}
+		return err
+	}
+	ctx.Info("Disk %s (%s) adopts cloud volume %s on %s", opts.Name, diskId, opts.CloudVolume, opts.Node)
+	if nonce != "" {
+		ctx.Info("Its mount writes under the cloud lease taken over for this cluster")
+	}
+	return nil
+}
+
+// takeOverVolumeLease has cloud break volume's lease and grant it to the
+// selected cluster, authenticating as the logged-in user, who must be an admin
+// of the cluster's organization. It returns the new lease's nonce.
+func takeOverVolumeLease(ctx *Context, volume string) (string, error) {
+	if ctx.clusterErr != nil {
+		return "", ctx.unknownClusterError()
+	}
+	cluster := ctx.ClusterConfig
+	if cluster == nil || ctx.ClientConfig == nil {
+		return "", fmt.Errorf("--takeover needs a selected cluster; use --cluster or 'miren cluster switch'")
+	}
+	if cluster.XID == "" {
+		return "", fmt.Errorf("cluster %q has no Cloud ID; add a Cloud-registered cluster with 'miren cluster add'", ctx.ClusterName)
+	}
+	identityName, err := pickCloudIdentity(ctx, ctx.ClientConfig, cluster.Identity, "")
+	if err != nil {
+		return "", err
+	}
+	identity, err := lookupIdentity(ctx.ClientConfig, identityName)
+	if err != nil {
+		return "", err
+	}
+	client, err := cloudClient(ctx.ClientConfig, identityName, identity)
+	if err != nil {
+		return "", err
+	}
+	clusters, err := client.ListClusters(ctx)
+	if err != nil {
+		return "", err
+	}
+	var org string
+	for _, c := range clusters {
+		if c.XID == cluster.XID {
+			org = c.OrganizationXID
+		}
+	}
+	if org == "" {
+		return "", fmt.Errorf("cluster %q (%s) is not visible to identity %q", ctx.ClusterName, cluster.XID, identityName)
+	}
+	lease, err := client.TakeOverVolumeLease(ctx, org, volume, cluster.XID, uuid.NewString(), time.Now())
+	if err != nil {
+		return "", err
+	}
+	ctx.Info("Took over the cloud lease of %s for cluster %q (lease %s)", volume, ctx.ClusterName, lease.LeaseID)
+	return lease.Nonce, nil
+}
+
+// DebugDiskRewind creates a new disk holding another accelerator cloud
+// volume's contents as of a point in time. Its first mount rebuilds the image
+// from that volume's checkpoint and log up to the time, crash-consistently,
+// and publishes it as the new disk's own first checkpoint. The source volume
+// is only read.
+func DebugDiskRewind(ctx *Context, opts struct {
+	ConfigCentric
+	Name       string `short:"n" long:"name" description:"Name for the new disk" required:"true"`
+	From       string `long:"from" description:"miren.cloud accelerator volume ID to restore from (vol-...)" required:"true"`
+	At         string `long:"at" description:"Point in time to restore to (RFC 3339); omit for the latest mirrored state"`
+	Size       int    `short:"s" long:"size" description:"Size of the source volume in GB" required:"true"`
+	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type the volume holds" default:"ext4"`
+	Node       string `long:"node" description:"Node to create the disk on" default:"node/miren"`
+}) error {
+	var until string
+	if opts.At != "" {
+		at, err := time.Parse(time.RFC3339Nano, opts.At)
+		if err != nil {
+			return fmt.Errorf("--at: %w", err)
+		}
+		until = diskio.LabelAt(at)
+	}
+	diskId, err := createAcceleratorDisk(ctx, opts.Name, opts.Size, opts.Filesystem, opts.Node, func(v *storage_v1alpha.DiskVolume) {
+		v.RestoreFromVolume = opts.From
+		v.RestoreUntil = until
+	})
+	if err != nil {
+		return err
+	}
+	ctx.Info("Disk %s (%s) will be restored from %s as of %s (label %s)", opts.Name, diskId, opts.From, opts.At, until)
+	return nil
+}
+
+func createAcceleratorDisk(ctx *Context, name string, sizeGB int, filesystem, node string, bind func(*storage_v1alpha.DiskVolume)) (entity.Id, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return "", err
+	}
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
+
+	var fs storage_v1alpha.DiskFilesystem
+	switch filesystem {
+	case "ext4":
+		fs = storage_v1alpha.EXT4
+	case "xfs":
+		fs = storage_v1alpha.XFS
+	case "btrfs":
+		fs = storage_v1alpha.BTRFS
+	default:
+		return "", fmt.Errorf("unsupported filesystem type: %s", filesystem)
+	}
+	// RESTORING keeps the disk controller from provisioning a fresh volume
+	// until the bound one exists; the volume must reference an existing disk.
+	diskId, err := ec.Create(ctx, idgen.GenNS("disk"), &storage_v1alpha.Disk{
+		Name:       name,
+		SizeGb:     int64(sizeGB),
+		Filesystem: fs,
+		Status:     storage_v1alpha.RESTORING,
+		Mode:       storage_v1alpha.ACCELERATOR,
+	})
+	if err != nil {
+		return "", fmt.Errorf("creating disk: %w", err)
+	}
+	volume := &storage_v1alpha.DiskVolume{
+		Name:         name,
+		DiskId:       diskId,
+		SizeGb:       int64(sizeGB),
+		Filesystem:   filesystem,
+		VolumeMode:   storage_v1alpha.VM_ACCELERATOR,
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_PENDING,
+		NodeId:       entity.Id(node),
+	}
+	bind(volume)
+	if _, err := ec.Create(ctx, idgen.GenNS("disk-vol"), volume); err != nil {
+		return "", fmt.Errorf("creating disk_volume: %w", err)
+	}
+	if err := ec.UpdateAttrs(ctx, diskId, entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisioningId)); err != nil {
+		return "", fmt.Errorf("releasing disk to provisioning: %w", err)
+	}
+	return diskId, nil
 }
 
 // DebugDiskList lists all disk entities

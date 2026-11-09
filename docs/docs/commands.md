@@ -401,6 +401,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug ctr nuke`](./command/debug-ctr-nuke.md) | Nuke a containerd namespace |
 | [`miren debug deploy-events`](./command/debug-deploy-events.md) | Render a 'miren deploy --format jsonl' stream as readable output |
 | [`miren debug disk`](./command/debug-disk.md) | Disk entity debug commands |
+| [`miren debug disk adopt`](./command/debug-disk-adopt.md) | Create a disk bound to an existing cloud volume |
 | [`miren debug disk backup`](./command/debug-disk-backup.md) | Back up a disk by reading its image directly (break-glass) |
 | [`miren debug disk create`](./command/debug-disk-create.md) | Create a disk entity for testing |
 | [`miren debug disk delete`](./command/debug-disk-delete.md) | Delete a disk entity |
@@ -413,6 +414,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug disk list-deleted`](./command/debug-disk-list-deleted.md) | Read the soft-delete holding area directly (break-glass) |
 | [`miren debug disk mounts`](./command/debug-disk-mounts.md) | List all mounted disks from /proc/mounts |
 | [`miren debug disk restore`](./command/debug-disk-restore.md) | Restore a disk by writing its image directly (break-glass) |
+| [`miren debug disk rewind`](./command/debug-disk-rewind.md) | Create a disk from a cloud volume as of a point in time |
 | [`miren debug disk status`](./command/debug-disk-status.md) | Show status of a disk entity |
 | [`miren debug disk undelete`](./command/debug-disk-undelete.md) | Recover a deleted disk by moving its data directly (break-glass) |
 | [`miren debug entity`](./command/debug-entity.md) | Entity store debug commands |

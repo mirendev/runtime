@@ -176,7 +176,9 @@ func checkDisks(env *doctorEnv) checkResult {
 		}
 	}
 	for _, volume := range env.resources.volumes {
-		if volume.State() == "actual_state.dv_error" {
+		// A diagnostic marks a volume as unhealthy even while it is ready,
+		// such as one whose log uploads the cloud refuses.
+		if volume.State() == "actual_state.dv_error" || volume.Diagnostic() != "" {
 			failing = append(failing, fmt.Sprintf("volume %s: %s", volume.Id(), volume.Diagnostic()))
 		}
 	}

@@ -195,3 +195,22 @@ func TestDoctorRejectsUnusableConnectionConfig(t *testing.T) {
 	require.Error(t, env.connErr)
 	assert.Equal(t, checkFail, checkServer(env).Status)
 }
+
+// A ready volume can still be unhealthy, such as one whose log uploads the
+// cloud refuses over a sequence gap; its diagnostic fails the disk check.
+func TestDoctorFailsVolumeWithDiagnostic(t *testing.T) {
+	ready := new(disk_v1alpha.ResourceHealth)
+	ready.SetId("disk_volume/ok")
+	ready.SetState("actual_state.dv_ready")
+	gapped := new(disk_v1alpha.ResourceHealth)
+	gapped.SetId("disk_volume/gapped")
+	gapped.SetState("actual_state.dv_ready")
+	gapped.SetDiagnostic("miren.cloud refuses this volume's log uploads over an lbd sequence gap")
+	env := &doctorEnv{cfg: clientconfig.NewConfig(), cluster: &clientconfig.ClusterConfig{}, clusterCount: 1,
+		resources: &doctorResources{volumes: []*disk_v1alpha.ResourceHealth{ready}}}
+	assert.Equal(t, checkOK, checkDisks(env).Status)
+	env.resources.volumes = append(env.resources.volumes, gapped)
+	result := checkDisks(env)
+	assert.Equal(t, checkFail, result.Status)
+	assert.Equal(t, "volume disk_volume/gapped: miren.cloud refuses this volume's log uploads over an lbd sequence gap", result.Summary)
+}

@@ -131,6 +131,7 @@ func (r *cloudVolumeRegistrar) EnsureVolume(ctx context.Context, req RegisterVol
 		return "", fmt.Errorf("failed to register volume: %w", err)
 	}
 	defer resp.Body.Close()
+	invalidateOnUnauthorized(r.authClient, resp)
 
 	payload, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
