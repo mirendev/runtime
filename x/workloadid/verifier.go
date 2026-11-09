@@ -28,11 +28,18 @@ const (
 // Claims is the payload of a Miren workload identity token.
 type Claims struct {
 	jwt.RegisteredClaims
-	OrganizationID string       `json:"organization_id,omitempty"`
-	ClusterID      string       `json:"cluster_id,omitempty"`
-	App            string       `json:"app,omitempty"`
-	SandboxID      string       `json:"sandbox_id"`
-	IdentityType   IdentityType `json:"identity_type,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
+	ClusterID      string `json:"cluster_id,omitempty"`
+	App            string `json:"app,omitempty"`
+	// Service is the service within App that holds the token, such as "web".
+	// The cluster sets it from the sandbox; the workload cannot choose it.
+	// Authorize a particular service by checking App and Service together.
+	// Don't confuse it with the audience, which names who the token is for.
+	// Empty on system tokens, on sandboxes outside any service, and on tokens
+	// from clusters that predate the claim.
+	Service      string       `json:"service,omitempty"`
+	SandboxID    string       `json:"sandbox_id"`
+	IdentityType IdentityType `json:"identity_type,omitempty"`
 	// SystemWorkload names the Miren-owned workload a system token identifies,
 	// such as "telemetrywriter". Empty on sandbox tokens.
 	SystemWorkload string `json:"system_workload,omitempty"`

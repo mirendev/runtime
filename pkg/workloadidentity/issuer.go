@@ -157,6 +157,19 @@ type WorkloadClaims struct {
 	OrganizationID string `json:"organization_id,omitempty"`
 	ClusterID      string `json:"cluster_id,omitempty"`
 	App            string `json:"app,omitempty"`
+	// Service names the service within App that the sandbox runs (web, worker,
+	// and so on), taken from the sandbox's own service label. Like App it says
+	// who holds the token, so a verifier can tell an app's services apart.
+	//
+	// It is not the audience. aud names who the token is for, and the
+	// workload picks it per request; service names the workload holding the
+	// token, and only the cluster sets it. Empty on system workload tokens and
+	// on sandboxes that are not part of a service.
+	//
+	// It stays out of the subject on purpose: external verifiers already
+	// federate on sub, and putting the service in it would break every trust
+	// config written against the existing shape.
+	Service string `json:"service,omitempty"`
 	// SandboxID deliberately keeps its unconditional encoding: it predates
 	// system workload tokens and external verifiers may already federate on its
 	// presence. System workload tokens therefore carry an empty sandbox_id
@@ -385,6 +398,9 @@ type TokenOptions struct {
 	// (workloadroles.Default). An unknown role name is embedded as-is and is
 	// denied everything at authorize time, so a misconfiguration fails closed.
 	Role string
+	// Service stamps the service claim on a sandbox token. Callers take it from
+	// the sandbox's service label, never from anything the workload asked for.
+	Service string
 	// RunnerID stamps the runner_id claim on a system workload token. Only a
 	// coordinator minting on a runner's behalf sets it, and only from the
 	// runner's verified certificate, never from anything the runner sent.
@@ -410,6 +426,7 @@ func (iss *Issuer) IssueTokenWithOptions(app, sandboxID string, opts TokenOption
 
 	claims := iss.baseClaims(subject, opts)
 	claims.App = app
+	claims.Service = opts.Service
 	claims.SandboxID = sandboxID
 	claims.IdentityType = IdentityTypeSandbox
 	claims.Role = role

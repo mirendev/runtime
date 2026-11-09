@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -188,10 +189,10 @@ func TestResolveSandboxApp(t *testing.T) {
 	require.Equal(t, "myapp", srv.resolveSandboxApp(ctx, "sandbox/s1"))
 }
 
-// The distributed-runner mint path must derive the role server-side, exactly as
-// it does the app — a runner must not be able to forge the authority its
-// sandboxes' tokens carry.
-func TestResolveSandboxAppAndRole(t *testing.T) {
+// The distributed-runner mint path must derive the service and role
+// server-side, exactly as it does the app — a runner must not be able to forge
+// which service its sandboxes are or the authority their tokens carry.
+func TestResolveSandboxIdentity(t *testing.T) {
 	ctx := context.Background()
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -220,12 +221,14 @@ func TestResolveSandboxAppAndRole(t *testing.T) {
 
 	_, err = es.EAC.Create(ctx, entity.New(
 		entity.DBId, entity.Id("sandbox/s1"),
+		(&core_v1alpha.Metadata{Name: "s1", Labels: types.LabelSet("service", "agents")}).Encode,
 		(&compute_v1alpha.Sandbox{Spec: compute_v1alpha.SandboxSpec{Version: "version/v1"}}).Encode,
 	).Attrs())
 	require.NoError(t, err)
 
-	name, role := srv.resolveSandboxAppAndRole(ctx, "sandbox/s1")
+	name, service, role := srv.resolveSandboxIdentity(ctx, "sandbox/s1")
 	require.Equal(t, "myapp", name)
+	require.Equal(t, "agents", service)
 	require.Equal(t, "app-admin", role)
 }
 
