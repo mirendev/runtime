@@ -19,3 +19,5 @@ miren auth [flags]
 - [`miren auth ci`](./auth-ci.md) — CI authentication binding management
 - [`miren auth generate`](./auth-generate.md) — Generate authentication config file
 - [`miren auth provider`](./auth-provider.md) — Identity provider management
+- [`miren auth revocation`](./auth-revocation.md) — Inspect revoked client certificates
+- [`miren auth revoke`](./auth-revoke.md) — Revoke a client certificate so the cluster refuses it

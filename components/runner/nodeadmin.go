@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/lbdmod"
@@ -84,6 +85,29 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 	return nil
 }
 
+// coordinatorOnlyExec confines a runner's exec service to the coordinator, whose
+// exec proxy is how every legitimate call arrives. Any certificate from the
+// cluster CA reaches this listener and it has no authorizer, so otherwise every
+// client certificate could exec into any sandbox on a runner it can reach,
+// bypassing the checks the coordinator's proxy applies.
+type coordinatorOnlyExec struct {
+	exec_v1alpha.SandboxExec
+}
+
+func (e coordinatorOnlyExec) Exec(ctx context.Context, state *exec_v1alpha.SandboxExecExec) error {
+	if err := requireCoordinator(ctx); err != nil {
+		return err
+	}
+	return e.SandboxExec.Exec(ctx, state)
+}
+
+func (e coordinatorOnlyExec) Attach(ctx context.Context, state *exec_v1alpha.SandboxExecAttach) error {
+	if err := requireCoordinator(ctx); err != nil {
+		return err
+	}
+	return e.SandboxExec.Attach(ctx, state)
+}
+
 // requireCoordinator refuses anyone but the coordinator.
 //
 // The listener verifies client certificates against the cluster CA. The
@@ -92,13 +116,13 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 func requireCoordinator(ctx context.Context) error {
 	identity := rpc.IdentityFromContext(ctx)
 	if identity == nil || identity.Method == rpc.AuthMethodAnonymous {
-		return fmt.Errorf("node administration requires the coordinator's certificate, and this caller presented none")
+		return fmt.Errorf("this call requires the coordinator's certificate, and this caller presented none")
 	}
 	if identity.Method != rpc.AuthMethodCert {
-		return fmt.Errorf("node administration requires a certificate, got %q", identity.Method)
+		return fmt.Errorf("this call requires a certificate, got %q", identity.Method)
 	}
 	if identity.Subject != rpc.CoordinatorCertSubject {
-		return fmt.Errorf("only the coordinator may administer this node, not %q", identity.Subject)
+		return fmt.Errorf("only the coordinator may call this on a runner, not %q", identity.Subject)
 	}
 	return nil
 }

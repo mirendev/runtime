@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -528,6 +529,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This runs ahead of the authenticator so that one check covers every way a
+	// certificate becomes an identity. A revoked certificate is a compromised
+	// credential, so it refuses the request even alongside a valid bearer token.
+	if cert := CredentialsFromRequest(r).VerifiedPeerCertificate(); cert != nil && s.state.certRevocations != nil {
+		admitted, release, err := s.state.certRevocations.admit(ctx, cert)
+		if err != nil {
+			s.refuseCert(w, r, cert, err)
+			return
+		}
+		defer release()
+		ctx = admitted
+		r = r.WithContext(ctx)
+	}
+
 	// If no authenticator configured, allow all requests
 	if s.state.authenticator == nil {
 		s.mux.ServeHTTP(w, r)
@@ -564,6 +579,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mux.ServeHTTP(w, r)
+}
+
+// refuseCert answers a request whose certificate failed the revocation check. A
+// set that has not loaded yet is a boot-time condition the caller should retry;
+// anything else is a denial for the audit trail.
+func (s *Server) refuseCert(w http.ResponseWriter, r *http.Request, cert *x509.Certificate, err error) {
+	if errors.Is(err, errCertRevocationsNotLoaded) {
+		http.Error(w, "server starting", http.StatusServiceUnavailable)
+		return
+	}
+	logCertRevoked(s.state.audit(), s.state.certDenied, r, cert)
+	writeAuthFailure(w, err)
 }
 
 // rpcPathPrefix is the path namespace reserved for RPC dispatch.
@@ -1213,6 +1240,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to upgrade connection", http.StatusInternalServerError)
 		return
 	}
+	defer closeOnRevocation(ctx, sess)()
 
 	ctrlstream, err := sess.AcceptStream(ctx)
 	if err != nil {

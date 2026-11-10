@@ -278,6 +278,32 @@ func logCertAuth(ctx context.Context, log *slog.Logger, dedup *certAuthDeduper, 
 	log.Log(ctx, level, "cert auth", attrs...)
 }
 
+// logCertRevoked records a request refused for presenting a revoked certificate.
+// It shares logCertAuth's deduplication, so a leaked certificate retried in a
+// loop costs one record per interval and still reports how often it was tried.
+func logCertRevoked(log *slog.Logger, dedup *certAuthDeduper, r *http.Request, cert *x509.Certificate) {
+	fingerprint := certFingerprint(cert)
+	shouldLog, suppressed := dedup.record(certAuthKey{
+		fingerprint: fingerprint,
+		host:        remoteHost(r.RemoteAddr),
+	})
+	if !shouldLog {
+		return
+	}
+
+	attrs := []any{
+		"remote", r.RemoteAddr,
+		"subject", cert.Subject.String(),
+		"serial", CertSerial(cert.SerialNumber),
+		"fingerprint", fingerprint,
+	}
+	if suppressed > 0 {
+		attrs = append(attrs, "suppressed", suppressed)
+	}
+
+	log.Warn("revoked cert refused", attrs...)
+}
+
 // logAccess emits a per-request RPC access record for a non-public method.
 // It is intentionally auth-method-agnostic: every line carries the source IP,
 // the authenticated subject, and the auth method, so the trail stays useful no
