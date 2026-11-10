@@ -89,7 +89,7 @@ type commandError struct {
 	Message string `json:"message"`
 }
 
-// addedCluster describes what was written to the config.
+// addedCluster describes the added configuration and the route checked at add time.
 type addedCluster struct {
 	// Name is the local name, which is what every other command takes.
 	Name string `json:"name"`
@@ -104,6 +104,9 @@ type addedCluster struct {
 	// no address of its own.
 	Address  string `json:"address,omitempty"`
 	ViaCloud bool   `json:"via_cloud"`
+	// ForceCloud is the persisted override, unlike ViaCloud which reports the
+	// route used while adding and may change on the next connection.
+	ForceCloud bool `json:"force_cloud"`
 
 	Identity string `json:"identity,omitempty"`
 
@@ -159,7 +162,10 @@ const clusterAddJSONDoc = "With `--format json`, the command prints one result d
 	"```\n\n" +
 	"`name` is the local name, which is what every other command takes. `cloud_name` " +
 	"appears alongside it only when `--as` stored the cluster under a different name than " +
-	"it has in Miren Cloud, and `address` is absent for a cluster reached through cloud.\n\n" +
+	"it has in Miren Cloud, and `address` is absent for a cluster reached through cloud. " +
+	"`via_cloud` reports the route selected while adding; `force_cloud` reports whether " +
+	"future connections are forced through cloud. With `force_cloud: false`, cloud-authenticated " +
+	"clusters try direct when reachable, otherwise via cloud.\n\n" +
 	"Messages are written for people and will be reworded. The code is the stable part:\n\n" +
 	"| Code | Meaning |\n" +
 	"|------|---------|\n" +

@@ -37,7 +37,7 @@ func authenticateBearer(t *testing.T, a *Authenticator, token string) (*rpc.Iden
 func TestAuthenticate_ValidToken(t *testing.T) {
 	a, iss := testAuthenticator(t)
 
-	tokenStr, err := iss.IssueToken("myapp", "sandbox-1")
+	tokenStr, err := iss.IssueTokenWithOptions("myapp", "sandbox-1", TokenOptions{Service: "web"})
 	require.NoError(t, err)
 
 	identity, err := authenticateBearer(t, a, tokenStr)
@@ -45,6 +45,7 @@ func TestAuthenticate_ValidToken(t *testing.T) {
 	require.NotNil(t, identity)
 
 	assert.Equal(t, rpc.AuthMethodWorkload, identity.Method)
+	assert.Equal(t, "web", identity.Metadata["service"])
 	assert.Equal(t, "org:org-123:app:myapp:sandbox:sandbox-1", identity.Subject)
 	assert.Equal(t, "myapp", identity.Metadata["app"])
 	assert.Equal(t, "sandbox-1", identity.Metadata["sandbox_id"])

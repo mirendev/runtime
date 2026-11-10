@@ -53,6 +53,7 @@ func TestTokensVerifyWithWorkloadid(t *testing.T) {
 		tok, err := iss.IssueTokenWithOptions("myapp", "sandbox-1", TokenOptions{
 			Audience: []string{audience},
 			Role:     "deployer",
+			Service:  "web",
 		})
 		require.NoError(t, err)
 
@@ -60,6 +61,7 @@ func TestTokensVerifyWithWorkloadid(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, workloadid.IdentityTypeSandbox, c.IdentityType)
 		require.Equal(t, "myapp", c.App)
+		require.Equal(t, "web", c.Service)
 		require.Equal(t, "sandbox-1", c.SandboxID)
 		require.Equal(t, "cluster-456", c.ClusterID)
 		require.Equal(t, "org-123", c.OrganizationID)
@@ -77,6 +79,7 @@ func TestTokensVerifyWithWorkloadid(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, workloadid.IdentityTypeSystem, c.IdentityType)
 		require.Equal(t, string(SystemWorkloadTelemetryWriter), c.SystemWorkload)
+		require.Empty(t, c.Service, "system workloads belong to no app service")
 	})
 
 	t.Run("default audience is refused", func(t *testing.T) {

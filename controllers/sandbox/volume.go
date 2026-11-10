@@ -325,6 +325,9 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 		}
 		leaseTimeout = duration
 	}
+	if inBootRecovery(ctx) && leaseTimeout > bootRecoveryLeaseWait {
+		leaseTimeout = bootRecoveryLeaseWait
+	}
 
 	// Resolve version to app ID if set
 	var appID entity.Id
@@ -531,6 +534,25 @@ func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.I
 	c.Log.Info("created disk lease", "lease", leaseID)
 
 	return leaseID, nil
+}
+
+// bootRecoveryLeaseWait bounds a disk lease wait in a creation resumed at
+// startup. Recovery runs before the server reports ready, so a lease that
+// cannot bind (such as a disk whose cloud lease another cluster took over)
+// held every deploy off for the full wait. Past this bound the resumed
+// creation fails and the sandbox reconciler retries it with the full wait,
+// off the startup path; the lease entity it created is kept.
+var bootRecoveryLeaseWait = 20 * time.Second
+
+type bootRecoveryKey struct{}
+
+func withBootRecovery(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bootRecoveryKey{}, true)
+}
+
+func inBootRecovery(ctx context.Context) bool {
+	v, _ := ctx.Value(bootRecoveryKey{}).(bool)
+	return v
 }
 
 func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entity.Id, timeout time.Duration) (string, error) {

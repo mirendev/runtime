@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -43,6 +45,21 @@ type DiskMountController struct {
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
 	cloudClient   CloudDiskClient
 	updatesClient CloudUpdatesClient
+	// logUploader drains a volume's logs before its lease is released. It is
+	// the log watcher's uploader when wired, so both share the sequence-gap
+	// hold and its signals.
+	logUploader *CloudSegmentUploader
+	// checkpointsUnsupported remembers an old cloud's refusal for this
+	// process, so later detaches do not compress an image just to be refused.
+	checkpointsUnsupported atomic.Bool
+	// checkpointTimeout bounds a detach checkpoint, which holds the lease.
+	checkpointTimeout time.Duration
+	// firstCheckpointTimeout bounds the detach checkpoint of a volume with no
+	// stream yet, which must upload a full image to start one.
+	firstCheckpointTimeout time.Duration
+	metrics                *diskMetrics
+	// attachedCheckpointInterval spaces checkpoints of attached disks.
+	attachedCheckpointInterval time.Duration
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -61,7 +78,40 @@ func NewDiskMountController(log *slog.Logger, dataPath string, nodeId compute.No
 		nodeId:   nodeId,
 		state:    state,
 		ops:      ops,
+
+		checkpointTimeout:          DefaultCheckpointTimeout,
+		firstCheckpointTimeout:     DefaultFirstCheckpointTimeout,
+		attachedCheckpointInterval: DefaultAttachedCheckpointInterval,
 	}
+}
+
+// SetAttachedCheckpointInterval spaces the checkpoints taken while a disk
+// stays attached. Non-positive values keep the default.
+func (c *DiskMountController) SetAttachedCheckpointInterval(d time.Duration) {
+	if d > 0 {
+		c.attachedCheckpointInterval = d
+	}
+}
+
+// SetCheckpointTimeout bounds the full-image checkpoint taken at detach, which
+// delays lease release and so failover. Non-positive values keep the default.
+func (c *DiskMountController) SetCheckpointTimeout(d time.Duration) {
+	if d > 0 {
+		c.checkpointTimeout = d
+	}
+}
+
+// SetFirstCheckpointTimeout bounds the detach checkpoint of a volume that has
+// no stream yet. Non-positive values keep the default.
+func (c *DiskMountController) SetFirstCheckpointTimeout(d time.Duration) {
+	if d > 0 {
+		c.firstCheckpointTimeout = d
+	}
+}
+
+// SetMetricsWriter publishes the controller's counters; nil disables them.
+func (c *DiskMountController) SetMetricsWriter(w metrics.PointWriter) {
+	c.metrics = newDiskMetrics(w)
 }
 
 func (c *DiskMountController) SetEAC(eac *entityserver_v1alpha.EntityAccessClient) {
@@ -77,6 +127,14 @@ func (c *DiskMountController) SetCloudClient(client CloudDiskClient) {
 // universal-mode volume's backing image from the cloud.
 func (c *DiskMountController) SetUpdatesClient(client CloudUpdatesClient) {
 	c.updatesClient = client
+	c.logUploader = NewCloudSegmentUploaderWithClient(c.log, client, c.state)
+}
+
+// SetLogUploader drains logs through the log watcher's uploader, so a
+// sequence_gap refusal during a drain is held and reported like one the
+// watcher hits.
+func (c *DiskMountController) SetLogUploader(u *CloudSegmentUploader) {
+	c.logUploader = u
 }
 
 // SetWriteTracker wires the reconcile controller's write tracker so that entity
@@ -159,7 +217,7 @@ func (c *DiskMountController) cloudVolumeIdFor(ms *MountState) string {
 
 func (c *DiskMountController) reconcileMount(ctx context.Context, mount *storage_v1alpha.DiskMount) error {
 	entityId := string(mount.ID)
-	c.log.Info("reconciling disk mount",
+	c.log.Debug("reconciling disk mount",
 		"entity_id", entityId,
 		"desired_state", mount.DesiredState,
 		"actual_state", mount.ActualState,
@@ -300,8 +358,21 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		return fmt.Errorf("volume %s changed while waiting for cloud lock", volumeId)
 	}
 	volState = current
+	// A crashed attachment's record, for this or an older mount entity, can
+	// claim a device the reboot removed; that claim would keep the uploader
+	// from parking a fenced tail and so hold the gate below shut forever.
+	for _, ms := range c.state.ListMounts() {
+		if c.cloudVolumeIdFor(ms) == volState.CloudVolumeId {
+			if err := c.dropStaleLbdClaim(ms); err != nil {
+				return err
+			}
+		}
+	}
 	if c.state.HasPendingCloudUpload(volState.CloudVolumeId) {
 		return fmt.Errorf("volume %s has a pending cloud upload", volumeId)
+	}
+	if adopted, err := c.adoptAttachedLbd(ctx, mount, volState); adopted || err != nil {
+		return err
 	}
 	// Recovery must finish the old attachment/release before acquiring a new
 	// lease or overwriting its cleanup credentials.
@@ -362,7 +433,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		}
 		leaseNonce, acquisitionID = intent.LeaseNonce, intent.LeaseAcquisitionID
 
-		if rerr := c.replayMissingSegments(ctx, volState); rerr != nil {
+		if rerr := c.replayAccelerator(ctx, volState, leaseNonce); rerr != nil {
 			_ = c.cleanupMount(ctx, c.state.GetMount(entityId))
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to replay segments: %v", rerr))
 			return fmt.Errorf("failed to replay segments: %w", rerr)
@@ -471,6 +542,57 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	return nil
+}
+
+// adoptAttachedLbd takes back an lbd device that outlived the server process.
+// Stopping the server unmounts its own path but cannot detach a device an app
+// container still has mounted, and detaching it now would fail the same way
+// forever. The device still logs under this mount's lease, so remounting it
+// is all that is missing. Nothing here formats or fscks: the filesystem is live.
+func (c *DiskMountController) adoptAttachedLbd(ctx context.Context, mount *storage_v1alpha.DiskMount, volState *VolumeState) (bool, error) {
+	entityId := string(mount.ID)
+	ms := c.state.GetMount(entityId)
+	imagePath := filepath.Join(volState.DiskPath, "disk.img")
+	if ms == nil || ms.Mode != storage_v1alpha.VM_ACCELERATOR || ms.DevicePath == "" || ms.LeaseNonce == "" ||
+		ms.BackingPath != imagePath || mount.MountPath == "" {
+		return false, nil
+	}
+	backing, err := c.ops.DeviceBacking(ms.DevicePath)
+	if err != nil {
+		return false, fmt.Errorf("inspect lbd device before adopting it: %w", err)
+	}
+	if backing != imagePath {
+		return false, nil
+	}
+	c.log.Info("adopting lbd device that outlived the previous server",
+		"entity_id", entityId, "device", ms.DevicePath, "volume_id", volState.CloudVolumeId)
+	if mounted, err := c.ops.MountDevice(mount.MountPath); err != nil {
+		return true, fmt.Errorf("inspect mount before adopting lbd: %w", err)
+	} else if mounted != ms.DevicePath {
+		if mounted != "" {
+			return true, fmt.Errorf("mount path %s holds %s, not adopted %s", mount.MountPath, mounted, ms.DevicePath)
+		}
+		if err := c.ops.CreateDir(mount.MountPath, 0755); err != nil {
+			return true, fmt.Errorf("failed to create mount point: %w", err)
+		}
+		filesystem := volState.Filesystem
+		if filesystem == "" {
+			filesystem = "ext4"
+		}
+		if err := c.ops.Mount(ms.DevicePath, mount.MountPath, filesystem, mount.ReadOnly); err != nil {
+			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to remount adopted lbd: %v", err))
+			return true, fmt.Errorf("failed to remount adopted lbd: %w", err)
+		}
+	}
+	ms.MountPath, ms.Mounted, ms.CheckpointDue = mount.MountPath, true, false
+	if err := c.state.SetMountAndSave(entityId, ms); err != nil {
+		return true, err
+	}
+	devicePath := ms.DevicePath
+	if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_MOUNTED, &devicePath, &devicePath, nil); err != nil {
+		c.log.Warn("failed to update mount state to mounted", "error", err)
+	}
+	return true, nil
 }
 
 func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1alpha.DiskMount) error {
@@ -613,6 +735,44 @@ func (c *DiskMountController) unmountAndDetach(ctx context.Context, mount *stora
 	return c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_DETACHED, &clearPath, &clearPath, &clearErr)
 }
 
+// dropStaleLbdClaim clears an accelerator mount record's claim on a device
+// that is gone or now backs another image. A record that outlived a crash or
+// reboot keeps naming its old device; the claim alone would block both the
+// pending-upload gates (cleanup and attach) and the uploader parking a fenced
+// tail, each waiting on the other.
+func (c *DiskMountController) dropStaleLbdClaim(mountState *MountState) error {
+	entityId := mountState.EntityId
+	if mountState.Mode == storage_v1alpha.VM_ACCELERATOR && mountState.DevicePath != "" && mountState.BackingPath != "" {
+		backing, err := c.ops.DeviceBacking(mountState.DevicePath)
+		if err != nil {
+			return fmt.Errorf("inspect device before cleanup: %w", err)
+		}
+		expected := mountState.BackingPath
+		if backing != expected {
+			if canonical, err := filepath.EvalSymlinks(expected); err == nil {
+				if canonical, err := filepath.Abs(canonical); err == nil {
+					expected = canonical
+				}
+			}
+		}
+		if backing != expected {
+			if mountState.MountPath != "" {
+				if dev, err := c.ops.MountDevice(mountState.MountPath); err != nil {
+					return fmt.Errorf("inspect mount before cleanup: %w", err)
+				} else if dev == mountState.DevicePath {
+					return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", dev)
+				}
+			}
+			c.log.Info("dropping stale lbd device claim", "entity_id", entityId, "device", mountState.DevicePath)
+			mountState.DevicePath, mountState.Mounted, mountState.MountPath, mountState.CheckpointDue = "", false, "", false
+			if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // cleanupMount persists each successful step independently so retries, orphan
 // cleanup and attach rollback cannot repeat a completed release or detach.
 // The caller holds the cloud-volume lock.
@@ -624,6 +784,16 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return nil
 	}
 	cloudID := c.cloudVolumeIdFor(mountState)
+	if err := c.dropStaleLbdClaim(mountState); err != nil {
+		return err
+	}
+	if c.state.MountSuperseded(entityId) {
+		// Draining here would upload the live mount's segments under a dead
+		// nonce, and its failure would gate the live mount's own detach.
+		c.log.Info("dropping mount record superseded by a newer lease on this volume",
+			"entity_id", entityId, "volume_id", cloudID)
+		return c.state.DeleteMountAndSave(entityId)
+	}
 	if c.state.HasPendingCloudUpload(cloudID) {
 		// A failed final drain must be resumable even if the volume entity
 		// vanished and the periodic watcher no longer enumerates it.
@@ -721,6 +891,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			if mountedDevice == mountState.DevicePath {
 				return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", mountedDevice)
 			}
+			// The device vanished (a crash or reboot) rather than detaching
+			// cleanly, which always clears the path: the image proves nothing.
+			mountState.CheckpointDue = false
 			mountState.DevicePath = ""
 			mountState.Mounted = false
 			mountState.MountPath = ""
@@ -755,6 +928,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 
 	// Detach device based on mode (use persisted mode from MountState)
 	var detachErr error
+	// Only a clean LBD detach proves the image holds every logged write. A
+	// device that vanished (for example after a reboot) proves nothing about
+	// the local image, so it must not become a checkpoint.
 	if mountState.DevicePath != "" {
 		mounted, err := c.ops.IsDeviceMounted(mountState.DevicePath)
 		if err != nil {
@@ -765,6 +941,8 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach lbd device", "error", err)
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
+			} else {
+				mountState.CheckpointDue = true
 			}
 		} else {
 			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
@@ -789,6 +967,13 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	}
 	if err := c.drainMountLogs(ctx, mountState); err != nil {
 		return err
+	}
+	if mountState.CheckpointDue {
+		c.checkpointDetachedMount(ctx, mountState)
+		mountState.CheckpointDue = false
+		if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
+			return err
+		}
 	}
 
 	// Release cloud lease if one was acquired
@@ -832,8 +1017,17 @@ func (c *DiskMountController) drainMountLogs(ctx context.Context, mount *MountSt
 	if diskPath == "" {
 		return fmt.Errorf("cannot establish log directory for lease release of %s", mount.EntityId)
 	}
-	uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
-	return uploader.drainSegmentsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+	err := c.drainLogsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
+	if errors.Is(err, errSequenceGap) && mount.CheckpointDue {
+		// The image holds writes the cloud refused; checkpointing it once
+		// the operator clears the refused logs would publish them past the
+		// gap. Recovery restores from the cloud history instead.
+		mount.CheckpointDue = false
+		if saveErr := c.state.SetMountAndSave(mount.EntityId, mount); saveErr != nil {
+			return errors.Join(err, saveErr)
+		}
+	}
+	return err
 }
 
 // recoverMountLease resolves a durable acquisition intent. A terminal response
@@ -844,6 +1038,15 @@ func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountSt
 		return fmt.Errorf("cannot recover lease acquisition without cloud client")
 	}
 	if err := c.state.SetMountAndSave(ms.EntityId, ms); err != nil {
+		return err
+	}
+	// An admin's takeover already granted this cluster the lease; the
+	// cluster's own credentials cannot break another writer's.
+	if adopted, err := c.state.AdoptTakeoverLeaseAndSave(ms); err != nil || adopted {
+		if err == nil {
+			c.log.Info("writing under the cloud lease an admin took over for this cluster", "volume_id", c.cloudVolumeIdFor(ms))
+			c.clearTakeoverHandoff(ctx, ms.VolumeId)
+		}
 		return err
 	}
 	nonce, err := c.cloudClient.AcquireLeaseWithIdentity(ctx, c.cloudVolumeIdFor(ms), ms.LeaseAcquisitionID)
@@ -859,6 +1062,21 @@ func (c *DiskMountController) recoverMountLease(ctx context.Context, ms *MountSt
 	}
 	ms.LeaseNonce, ms.LeaseOwned = nonce, true
 	return c.state.SetMountAndSave(ms.EntityId, ms)
+}
+
+// clearTakeoverHandoff removes a consumed takeover nonce from the volume
+// entity, so rebuilding this volume's state from it cannot hand the released
+// lease out again. The local state already consumed it, so failure only warns.
+func (c *DiskMountController) clearTakeoverHandoff(ctx context.Context, volumeEntityID string) {
+	if c.eac == nil {
+		return
+	}
+	if _, err := c.eac.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, entity.Id(volumeEntityID)),
+		entity.String(storage_v1alpha.DiskVolumeLeaseTakeoverNonceId, ""),
+	}, 0); err != nil {
+		c.log.Warn("failed to clear the consumed lease takeover from the volume", "volume", volumeEntityID, "error", err)
+	}
 }
 
 func diskMountActualStateToId(state storage_v1alpha.DiskMountActualState) entity.Id {

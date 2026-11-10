@@ -84,7 +84,10 @@
       "command/auth-provider-add-password",
       "command/auth-provider-list",
       "command/auth-provider-remove",
-      "command/auth-provider-show"
+      "command/auth-provider-show",
+      "command/auth-revocation",
+      "command/auth-revocation-list",
+      "command/auth-revoke"
     ]
   },
   {
@@ -152,6 +155,7 @@
       "command/debug-ctr-nuke",
       "command/debug-deploy-events",
       "command/debug-disk",
+      "command/debug-disk-adopt",
       "command/debug-disk-backup",
       "command/debug-disk-create",
       "command/debug-disk-delete",
@@ -164,6 +168,7 @@
       "command/debug-disk-list-deleted",
       "command/debug-disk-mounts",
       "command/debug-disk-restore",
+      "command/debug-disk-rewind",
       "command/debug-disk-status",
       "command/debug-disk-undelete",
       "command/debug-entity",

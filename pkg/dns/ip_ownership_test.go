@@ -28,7 +28,7 @@ import (
 // ownerOf is the question the token server asks: who owns this IP right now?
 func ownerOf(t *testing.T, s *Server, ip string) (sandboxID, appName string) {
 	t.Helper()
-	sandboxID, appName, ok := s.LookupSandboxByIP(ip)
+	sandboxID, appName, _, ok := s.LookupSandboxByIP(ip)
 	require.True(t, ok, "IP %s should resolve to a sandbox", ip)
 	return sandboxID, appName
 }
@@ -224,12 +224,13 @@ func TestRefreshSandboxByIPCorrectsStaleMapping(t *testing.T) {
 	})
 
 	s := newEntityBackedServer(t, inmem)
-	s.AddSandboxMapping("sandbox/db-app-web-STALE", ip, "db-app", "web")
+	s.AddSandboxMapping("sandbox/db-app-worker-STALE", ip, "db-app", "worker")
 
-	sandboxID, appName, ok := s.RefreshSandboxByIP(ip)
+	sandboxID, appName, service, ok := s.RefreshSandboxByIP(ip)
 	require.True(t, ok)
 	assert.Equal(t, live.ID.String(), sandboxID, "refresh should return the address's real owner")
 	assert.Equal(t, "reviewagent", appName)
+	assert.Equal(t, "web", service, "the service must come from the real owner too, since tokens carry it")
 
 	cached, _ := ownerOf(t, s, ip)
 	assert.Equal(t, live.ID.String(), cached, "and should leave the corrected mapping behind")
@@ -247,7 +248,7 @@ func TestRefreshSandboxByIPKeepsMappingWhenStoreCannotAnswer(t *testing.T) {
 	s := newEntityBackedServer(t, inmem)
 	s.AddSandboxMapping("sandbox/reviewagent-web-LIVE", ip, "reviewagent", "web")
 
-	_, _, ok := s.RefreshSandboxByIP(ip)
+	_, _, _, ok := s.RefreshSandboxByIP(ip)
 	assert.False(t, ok, "the store has no sandbox at this address")
 
 	sandboxID, _ := ownerOf(t, s, ip)

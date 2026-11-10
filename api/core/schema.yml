@@ -595,6 +595,25 @@ kinds:
       type: string
       doc: Human-readable description of this binding
 
+  # A client certificate the cluster refuses. Named for its serial, so revoking
+  # twice lands on one entity. Holds no certificate or key material.
+  certificate_revocation:
+    serial:
+      type: string
+      doc: The certificate serial number in canonical form (lowercase hex, no separators or leading zeros)
+
+    revoked_at:
+      type: time
+      doc: When the certificate was revoked
+
+    revoked_by:
+      type: string
+      doc: The subject of the operator who revoked the certificate
+
+    reason:
+      type: string
+      doc: Why the certificate was revoked
+
   # A secret's stable identity. Mutable metadata only — the value lives in the
   # immutable secret_version rows this points at, so nothing sensitive is here.
   secret:

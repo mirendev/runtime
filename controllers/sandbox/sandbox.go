@@ -606,9 +606,13 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 					if !ok {
 						appName, role = c.resolveAppAndRole(ctx, &sb)
 					}
-					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
+					// The service is a label the sandbox was created with, so read
+					// it from the entity rather than the token: a token minted
+					// before the claim existed carries none.
+					service := sandboxService(e.Entity())
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, service, role)
 					c.Log.Debug("re-registered sandbox for token refresh",
-						"sandbox_id", sb.ID, "app", appName, "role", role)
+						"sandbox_id", sb.ID, "app", appName, "service", service, "role", role)
 
 					// A mounted token minted under a different anchor means the
 					// cluster's identity anchor moved while this sandbox was
@@ -823,7 +827,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	// Resume or unwind creations this node left in flight. Recovery failures are
 	// not fatal: the reconciler still drives new work, and a record left behind
 	// is retried on the next pass.
-	if err := c.executor.Recover(ctx); err != nil {
+	if err := c.executor.Recover(withBootRecovery(ctx)); err != nil {
 		c.Log.Error("saga recovery completed with errors", "error", err)
 	}
 
@@ -2509,7 +2513,8 @@ func (c *SandboxController) buildSubContainerSpec(
 	// Inject workload identity token
 	if c.WorkloadIssuer != nil {
 		appName, role := c.resolveAppAndRole(ctx, sb)
-		token, tokenErr := c.WorkloadIssuer.IssueTokenWithOptions(appName, sb.ID.String(), workloadidentity.TokenOptions{Role: role})
+		service := sandboxService(meta)
+		token, tokenErr := c.WorkloadIssuer.IssueTokenWithOptions(appName, sb.ID.String(), workloadidentity.TokenOptions{Role: role, Service: service})
 		if tokenErr != nil {
 			c.Log.Warn("failed to generate workload identity token", "sandbox", sb.ID, "error", tokenErr)
 		} else {
@@ -2524,7 +2529,7 @@ func (c *SandboxController) buildSubContainerSpec(
 					Options:     []string{"rbind", "ro"},
 				})
 				if c.tokenRefresher != nil {
-					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, service, role)
 				}
 			}
 		}
@@ -3583,12 +3588,9 @@ func (c *SandboxController) registerSandboxDNS(ctx context.Context, sb *compute.
 		return
 	}
 
-	var md core_v1alpha.Metadata
-	md.Decode(meta)
-
 	// DNS entries are keyed by app+service; a sandbox without a service label has no
 	// name to answer to, which matches what the watcher does with one.
-	service, _ := md.Labels.Get("service")
+	service := sandboxService(meta)
 	if service == "" {
 		return
 	}
@@ -3602,6 +3604,15 @@ func (c *SandboxController) registerSandboxDNS(ctx context.Context, sb *compute.
 	ip := ep.Addresses[0].Addr().String()
 	c.NetServ.AddSandboxMapping(sb.ID.String(), ip, appName, service)
 	c.Log.Debug("registered sandbox DNS mapping", "sandbox", sb.ID, "ip", ip, "app", appName, "service", service)
+}
+
+// sandboxService is the service a sandbox runs, from the label its pool created
+// it with. Empty for a sandbox that belongs to no service.
+func sandboxService(meta entity.AttrGetter) string {
+	var md core_v1alpha.Metadata
+	md.Decode(meta)
+	service, _ := md.Labels.Get("service")
+	return service
 }
 
 func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {

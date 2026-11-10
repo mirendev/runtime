@@ -116,7 +116,7 @@ func (c *DiskVolumeController) Index() entity.Attr {
 
 func (c *DiskVolumeController) reconcileVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
 	entityId := string(volume.ID)
-	c.log.Info("reconciling disk volume",
+	c.log.Debug("reconciling disk volume",
 		"entity_id", entityId,
 		"desired_state", volume.DesiredState,
 		"actual_state", volume.ActualState,
@@ -264,6 +264,9 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
 			Filesystem:    volume.Filesystem,
 			Mode:          volume.VolumeMode,
+			RestoreFrom:   volume.RestoreFromVolume,
+			RestoreUntil:  volume.RestoreUntil,
+			TakeOverNonce: volume.LeaseTakeoverNonce,
 		}
 		c.state.SetVolume(entityId, volState)
 		if err := c.state.Save(); err != nil {
@@ -385,6 +388,9 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		SizeBytes:     sizeBytes,
 		Filesystem:    volume.Filesystem,
 		Mode:          volume.VolumeMode,
+		RestoreFrom:   volume.RestoreFromVolume,
+		RestoreUntil:  volume.RestoreUntil,
+		TakeOverNonce: volume.LeaseTakeoverNonce,
 	}
 	c.state.SetVolume(entityId, volState)
 
@@ -945,8 +951,13 @@ func (c *DiskVolumeController) Shutdown() {
 		}
 
 		if strings.HasPrefix(am.Device, "/dev/lbd") {
+			backing, berr := c.mntOps.DeviceBacking(am.Device)
 			if err := c.mntOps.LbdDetach(context.Background(), am.Device); err != nil {
 				c.log.Warn("failed to detach lbd on shutdown", "device", am.Device, "error", err)
+			} else if berr != nil {
+				c.log.Warn("detached lbd of unknown backing; no checkpoint from it", "device", am.Device, "error", berr)
+			} else if err := c.state.MarkCheckpointDue(am.Device, backing); err != nil {
+				c.log.Warn("failed to record clean lbd detach", "device", am.Device, "error", err)
 			}
 		} else if strings.HasPrefix(am.Device, "/dev/loop") {
 			if err := c.mntOps.LoopDetach(am.Device); err != nil {

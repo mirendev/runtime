@@ -60,6 +60,17 @@ type VolumeState struct {
 	// Mode is the disk I/O mode (universal or accelerator)
 	Mode storage_v1alpha.DiskVolumeVolumeMode `json:"mode,omitempty"`
 
+	// RestoreFrom and RestoreUntil name another accelerator cloud volume and
+	// the label to rebuild it to. They seed a new volume that has no history
+	// of its own; once it publishes its own checkpoint they are inert.
+	RestoreFrom  string `json:"restore_from,omitempty"`
+	RestoreUntil string `json:"restore_until,omitempty"`
+
+	// TakeOverNonce is a cloud lease an organization admin took over for this
+	// cluster from a lost writer. The next mount writes under it instead of
+	// acquiring a lease, and consumes it: once released, it is never reused.
+	TakeOverNonce string `json:"take_over_nonce,omitempty"`
+
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
 
@@ -102,6 +113,11 @@ type MountState struct {
 
 	// Mounted indicates if the volume is currently mounted
 	Mounted bool `json:"mounted"`
+
+	// CheckpointDue records that this mount's lbd device detached cleanly, so
+	// its image holds every logged write. It outlives a failed drain or a
+	// restart, which a device that merely vanished could not prove.
+	CheckpointDue bool `json:"checkpoint_due,omitempty"`
 
 	// ReadOnly indicates if the mount is read-only
 	ReadOnly bool `json:"read_only"`
@@ -379,6 +395,23 @@ func (s *State) DeleteVolumeAndSave(entityId string) error {
 	return s.saveLocked()
 }
 
+// AdoptTakeoverLeaseAndSave gives mount the lease handed to its volume by a
+// takeover and consumes the handoff in the same save, so a crash can neither
+// lose the lease nor reuse its nonce after release. It reports false, without
+// saving, when there is no handoff.
+func (s *State) AdoptTakeoverLeaseAndSave(mount *MountState) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.Volumes[mount.VolumeId]
+	if v == nil || v.TakeOverNonce == "" {
+		return false, nil
+	}
+	mount.LeaseNonce, mount.LeaseOwned = v.TakeOverNonce, true
+	v.TakeOverNonce = ""
+	s.Mounts[mount.EntityId] = mount
+	return true, s.saveLocked()
+}
+
 // GetMount returns a copy of a mount state by entity ID
 func (s *State) GetMount(entityId string) *MountState {
 	s.mu.RLock()
@@ -486,6 +519,51 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	mount.MountPath = v.MountPath
 	s.Mounts[mount.EntityId] = mount
 	return v.DevicePath, v.MountPath, nil
+}
+
+// MarkCheckpointDue records a clean detach of device, such as the server's
+// shutdown detaching every device. Only the accelerator mount whose image
+// backed the device is marked, and its device path is cleared in the same
+// save: a record that still names a device never carries a clean detach.
+func (s *State) MarkCheckpointDue(device, backing string) error {
+	s.mu.Lock()
+	for _, m := range s.Mounts {
+		if device != "" && backing != "" && m.DevicePath == device && m.BackingPath == backing &&
+			m.Mode == storage_v1alpha.VM_ACCELERATOR {
+			m.CheckpointDue, m.DevicePath, m.Mounted = true, "", false
+		}
+	}
+	s.mu.Unlock()
+	return s.Save()
+}
+
+// MountSuperseded reports whether another mount of the same cloud volume
+// holds a device under a different lease. The cloud keeps one lease per
+// volume, so the other lease ended this record's: it owns neither the lease
+// nor the volume's log directory, which now holds the live mount's segments.
+func (s *State) MountSuperseded(entityId string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cloudID := func(m *MountState) string {
+		if m.CloudVolumeId != "" {
+			return m.CloudVolumeId
+		}
+		if v := s.Volumes[m.VolumeId]; v != nil {
+			return v.CloudVolumeId
+		}
+		return ""
+	}
+	self := s.Mounts[entityId]
+	if self == nil || self.Mounted || self.DevicePath != "" || cloudID(self) == "" {
+		return false
+	}
+	for id, m := range s.Mounts {
+		if id != entityId && (m.Mounted || m.DevicePath != "") && m.LeaseNonce != "" &&
+			m.LeaseNonce != self.LeaseNonce && cloudID(m) == cloudID(self) {
+			return true
+		}
+	}
+	return false
 }
 
 // LeaseNonceForCloudVolume returns the lease nonce held by a mount whose

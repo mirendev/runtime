@@ -1,15 +1,23 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
@@ -17,6 +25,100 @@ import (
 
 func diagnosticContext() *Context {
 	return &Context{ClusterName: "local", CommandName: "route list"}
+}
+
+func TestRPCClientRoutingCredentialErrors(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusUnauthorized} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			t.Setenv(clientconfig.EnvConfigPath, dir)
+			var signIns atomic.Int32
+			cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/auth/refresh", r.URL.Path)
+				signIns.Add(1)
+				w.Header().Set("Retry-After", "20")
+				http.Error(w, http.StatusText(status), status)
+			}))
+			defer cloud.Close()
+			writeTokenIdentity(t, dir, cloud.URL)
+			cfg, err := clientconfig.LoadConfig()
+			require.NoError(t, err)
+			identity, err := cfg.GetIdentity("cloud")
+			require.NoError(t, err)
+			identity.Token = "" // Force a refresh, both in memory and under the refresh lock.
+			data, err := yaml.Marshal(clientconfig.ConfigData{Identities: map[string]*clientconfig.IdentityConfig{"cloud": identity}})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(cfg.GetIdentitySource("cloud"), data, 0600))
+			silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer silent.Close()
+			cluster := &clientconfig.ClusterConfig{XID: "cluster-auth", Identity: "cloud", CloudURL: cloud.URL,
+				Hostname: silent.LocalAddr().String(), AllAddresses: []string{silent.LocalAddr().String()}}
+			ctx := &Context{Context: t.Context(), ClientConfig: cfg, ClusterConfig: cluster,
+				ClusterName: "wilderness", Stderr: io.Discard, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			defer ctx.Close()
+			_, err = ctx.RPCClient("entities")
+			require.EqualValues(t, 1, signIns.Load(), "credential failures must not retry sign-in on another route")
+			var diagnostic *ui.Diagnostic
+			require.ErrorAs(t, err, &diagnostic)
+			var rendered bytes.Buffer
+			diagnostic.WriteForTerminal(&rendered)
+			require.NotContains(t, rendered.String(), "miren doctor")
+			if status == http.StatusTooManyRequests {
+				require.Contains(t, rendered.String(), "too many sign-ins")
+				require.Contains(t, rendered.String(), "waiting will")
+				require.Contains(t, rendered.String(), "Retry in")
+				require.NotContains(t, rendered.String(), "miren login")
+				var limited *clientconfig.CloudRateLimitError
+				require.ErrorAs(t, err, &limited)
+			} else {
+				require.Contains(t, rendered.String(), "miren login")
+				require.ErrorIs(t, err, clientconfig.ErrLoginRequired)
+			}
+		})
+	}
+}
+
+func TestRPCClientDiagnosesBothRoutesFailing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer cloud.Close()
+	cfg := clientconfig.NewConfig()
+	cfg.SetIdentity("cloud", &clientconfig.IdentityConfig{
+		Type: clientconfig.IdentityToken, Issuer: cloud.URL, Token: freshLoginJWT(t),
+	})
+	cluster := &clientconfig.ClusterConfig{XID: "cluster-down", Identity: "cloud", CloudURL: cloud.URL,
+		AllAddresses: []string{silent.LocalAddr().String()}, Insecure: true}
+	ctx := &Context{Context: t.Context(), ClientConfig: cfg, ClusterConfig: cluster,
+		ClusterName: "wilderness", CommandName: "app list", Stderr: io.Discard,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	defer ctx.Close()
+	for range 2 {
+		_, err := ctx.RPCClient("entities")
+		d, ok := errors.AsType[*ui.Diagnostic](err)
+		if !ok {
+			t.Fatalf("expected a diagnostic for both failed routes, got %T: %v", err, err)
+		}
+		var rendered bytes.Buffer
+		d.WriteForTerminal(&rendered)
+		for _, want := range []string{`couldn't reach cluster "wilderness" directly or through Miren Cloud`,
+			silent.LocalAddr().String(), "Nothing answered after", "404", "miren doctor"} {
+			if !strings.Contains(rendered.String(), want) {
+				t.Errorf("diagnostic lacks %q:\n%s", want, rendered.String())
+			}
+		}
+		if _, ok := errors.AsType[*rpc.ResolveError](err); !ok {
+			t.Error("the direct timeout must remain available to callers")
+		}
+	}
 }
 
 // Each kind has to produce its own diagnosis. The bug this replaces collapsed
@@ -62,6 +164,12 @@ func TestDiagnoseResolveDistinguishesKinds(t *testing.T) {
 			err:         rpc.NewResolveStatusError("entities", "localhost:8443", 401),
 			wantSummary: `access denied on cluster "local"`,
 			wantDetail:  []string{"permission"},
+		},
+		{
+			name:        "revoked certificate",
+			err:         rpc.NewResolveStatusErrorWithReason("entities", "localhost:8443", 401, rpc.AuthErrorCertRevoked, "client certificate abc has been revoked"),
+			wantSummary: `this client certificate was revoked on cluster "local"`,
+			wantDetail:  []string{"new one"},
 		},
 		{
 			name:        "unexpected status",

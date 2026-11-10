@@ -25,8 +25,7 @@ firewall rule to add.
 
 ## Setting one up
 
-Usually you do not have to do anything. `miren cluster add` picks this route on
-its own when it is the one that works:
+Usually you do not have to do anything. Add your cluster normally:
 
 ```bash
 miren cluster add
@@ -35,16 +34,43 @@ miren cluster add
 If the cluster you pick advertises no address your machine can dial, or
 advertises addresses that do not answer, the command tries the cloud route
 itself: it opens a session through cloud and makes a call. If the cluster
-answers, the entry is written to route through cloud and it tells you so. A
+answers, the entry is saved and it tells you which route worked. A
 cluster that neither you nor cloud can reach still fails, because that is a real
 problem rather than a routing choice.
+
+Subsequent connections reuse the last route that successfully established an RPC
+client, without probing first. The cache is local to your machine and shared by
+commands; moving between networks does not permanently change your config. A
+failed connection discards the cached route, discovers a route again, and retries
+connection setup. Application calls are never replayed. A server rejecting a
+capability or your permissions does not trigger route rediscovery.
+
+Credentials are resolved before routing starts. An expired or rate-limited login
+stops there, without probing, retrying sign-in on another route, or discarding a
+working route. The error points you toward logging in or waiting, as appropriate.
+
+A successful cloud route is cached for 30 seconds without extending its lifetime
+on every use, so returning to the direct network is noticed. If the cached cloud
+route fails, direct discovery runs immediately rather than waiting for expiry.
+Unsuccessful routes are never cached. When both routes fail, the error includes
+the direct failures and the cloud failure, along with the usual diagnostic and
+`miren doctor` guidance.
+
+Advertised addresses and the cluster CA fingerprint are retained even when you
+add the cluster remotely, so a later direct connection can verify the cluster.
+When only the fingerprint is saved and there is no cached direct route, the first
+TLS handshake fails verification and supplies the certificate chain. The CLI
+checks the CA fingerprint, then retries with that CA trusted and normal TLS
+verification enabled. The recovered CA is cached with the successful direct route,
+so later connections need only their own RPC handshake. Entries with a saved CA
+and address can connect without a preliminary probe even on the first use.
 
 It tries the route rather than asking whether one exists, because those are
 different questions. Cloud can hold a link to a cluster whose runtime is older
 than this feature, and that cluster will sit there without answering. Making the
 call is what tells the two apart.
 
-To skip the direct attempt entirely, ask for it:
+To force cloud routing, skipping direct attempts on every connection, ask for it:
 
 ```bash
 miren cluster add --via-cloud
@@ -200,8 +226,34 @@ rather than going looking for a fault.
 **It is slower than a direct connection.** Every frame takes an extra hop, and
 the relay is not the path to choose when you have a direct one available.
 
-**One cloud, one cluster.** The route is per-cluster. Clusters you can reach
-directly should stay that way.
+:::note[Only connection setup is retried]
+
+Automatic routing can rediscover a route and fall back to cloud if direct RPC
+connection setup fails. This happens before any application call. Once a call
+starts, a failure is returned to the caller; in-flight operations are never
+automatically replayed on another route.
+
+:::
+
+:::note[Existing forced routes stay forced]
+
+Older versions wrote `via_cloud: true` for both explicit `--via-cloud` requests
+and automatic fallbacks. Both remain forced cloud routes after upgrading:
+the saved config cannot distinguish their intent, and automatic fallbacks
+discarded the direct addresses and CA.
+
+Re-add the cluster without `--via-cloud` to enable automatic routing and retrieve
+its advertised addresses and CA fingerprint:
+
+```bash
+miren cluster add --cluster NAME --force
+```
+
+Use the cluster's name in cloud for `NAME`. If its saved local name differs, add
+`--as LOCAL_NAME` to replace the existing entry rather than create another one.
+If the cloud name exists in multiple organizations, add `--organization ORG`.
+
+:::
 
 ## Configuration
 

@@ -704,10 +704,12 @@ func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *st
 	}
 	d.mu.Unlock()
 
-	if !isActiveForThisLease {
-		return nil
-	}
-
+	// The mount is found by this lease's own ID, so a released lease always
+	// unmounts it, tracked or not. Tracking is in memory: after a reboot a
+	// crashed sandbox's recovery can release its lease before this controller
+	// has seen it bound again, and skipping it then left the dead sandbox's
+	// mount wanting the volume forever, holding its cloud lease against every
+	// later sandbox.
 	diskMount, _, err := d.getDiskMountForLease(ctx, lease.ID)
 	if err != nil {
 		d.Log.Warn("Error looking up disk_mount for released lease", "lease", leaseId, "error", err)

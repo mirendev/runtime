@@ -103,8 +103,10 @@ func refreshTokenPair(ctx context.Context, issuer, refreshToken string) (*tokenP
 		// Definitive rejection: token expired, revoked, or already spent by a
 		// concurrent refresh. The refresh endpoint returns plain-text bodies.
 		return nil, ErrLoginRequired
+	case http.StatusTooManyRequests:
+		return nil, authResponseError(resp, body)
 	default:
-		// Transient (5xx, rate-limit, etc.): keep the existing tokens.
+		// Transient errors such as 5xx keep the existing tokens.
 		return nil, fmt.Errorf("token refresh failed: server returned status %d: %s",
 			resp.StatusCode, strings.TrimSpace(string(body)))
 	}

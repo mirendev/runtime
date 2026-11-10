@@ -128,8 +128,29 @@ Each token is a JWT carrying the standard registered claims plus a few Miren-spe
 | `organization_id` | Your organization (for cloud-registered clusters) |
 | `cluster_id` | The cluster that issued the token |
 | `app` | The application name |
+| `service` | The service within the app that the sandbox runs, such as `web` (omitted for sandboxes outside any service) |
 | `sandbox_id` | The sandbox instance |
 | `identity_type` | The kind of principal the token represents (always `sandbox` for the tokens your app receives) |
+
+`service` and `aud` answer different questions. `service`, like `app`, says
+**who is holding** the token: Miren sets it from the sandbox, and your code
+can't change it. `aud` says **who the token is for**: your code picks it each
+time it asks for a token. To accept requests only from an app's `web` service,
+check `app` and `service`; check `aud` so a token meant for another service
+can't be replayed against yours.
+
+The `service` claim isn't part of `sub`, so trust configurations already
+written against the subject keep working.
+
+`service` keeps an app's services apart only as long as nothing can run code
+as one of them except that service. A role that can deploy an app or exec into
+its sandboxes can do exactly that: `app-deployer`, `app-debugger`, and
+`app-admin` within their own app, and `cluster-deployer`, `cluster-debugger`,
+and `cluster-admin` in every app on the cluster. So rely on `service` only when
+the app runs as `app-readonly` (the default) or `none`, and no app on the
+cluster runs under a cluster role other than `cluster-readonly`. That last
+condition applies to `app` too, since a cluster role can act as any app.
+See [In-Cluster API Access](./in-cluster-api.md) for the roles.
 
 The `sub` (subject) encodes the workload's identity as a path-like string, omitting any empty parts:
 
@@ -157,6 +178,7 @@ A decoded token payload looks like:
   "organization_id": "org-demo-xyz",
   "cluster_id": "cluster-aabbcc",
   "app": "demo",
+  "service": "web",
   "sandbox_id": "sandbox/demo-web-xxyyzz",
   "identity_type": "sandbox"
 }
@@ -194,6 +216,8 @@ The canonical use case: let a sandbox assume an AWS IAM role and receive tempora
 
    AWS verifies the token against your cluster's published keys, checks the trust policy, and returns short-lived credentials.
 
+AWS trust policies for a generic OIDC provider can only condition on `aud` and `sub` (plus `amr`, `oaud` and `email`), not on custom claims. `app` is in `sub`, so you can scope a role to an app, but `service` isn't, so you can't scope an AWS role to one service of an app.
+
 ### GCP and Azure
 
 Both Google Cloud and Azure support OIDC-based **workload identity federation**. Configure a workload identity pool / federated credential that trusts your cluster's issuer URL and matches on the token's subject or audience, then exchange the Miren token for cloud credentials using each provider's federation flow. The mechanics differ per provider, but the trust relationship is the same: they verify the token against your cluster's JWKS.
@@ -205,11 +229,11 @@ For the provider-specific setup, see:
 
 ### Internal Service-to-Service Auth
 
-Your own services can accept Miren identity tokens directly. A service verifies the token against the cluster's JWKS (see [Verifying Tokens](#verifying-tokens) below) and then authorizes based on the claims — for example, only accepting requests from a particular `app`.
+Your own services can accept Miren identity tokens directly. A service verifies the token against the cluster's JWKS (see [Verifying Tokens](#verifying-tokens) below) and then authorizes based on the claims — for example, only accepting requests from a particular `app`, or from one `service` within it.
 
 ### Per-Workload Access Control
 
-Because each token carries `organization_id`, `cluster_id`, `app`, and `sandbox_id`, downstream systems can make fine-grained decisions: grant one app access to one bucket, gate a multi-tenant API on `organization_id`, or trace a request back to the exact sandbox that made it.
+Because each token carries `organization_id`, `cluster_id`, `app`, `service`, and `sandbox_id`, downstream systems can make fine-grained decisions: grant one app access to one bucket, give an app's `worker` service a different GCP role than its `web` service (AWS can't see `service`; see above), gate a multi-tenant API on `organization_id`, or trace a request back to the exact sandbox that made it.
 
 ## Verifying Tokens
 

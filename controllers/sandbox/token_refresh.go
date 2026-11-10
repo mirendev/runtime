@@ -19,6 +19,7 @@ const tokenRefreshInterval = 45 * time.Minute
 type tokenEntry struct {
 	filePath  string
 	appName   string
+	service   string
 	role      string
 	sandboxID string
 }
@@ -37,12 +38,13 @@ func newTokenRefresher() *tokenRefresher {
 // register records a sandbox for periodic token refresh. The role is captured
 // here and preserved across refreshes, so a role change takes effect the next
 // time the sandbox is built (a redeploy or restart), not mid-lifetime.
-func (tr *tokenRefresher) register(sandboxID, filePath, appName, role string) {
+func (tr *tokenRefresher) register(sandboxID, filePath, appName, service, role string) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.entries[sandboxID] = tokenEntry{
 		filePath:  filePath,
 		appName:   appName,
+		service:   service,
 		role:      role,
 		sandboxID: sandboxID,
 	}
@@ -116,7 +118,7 @@ func (c *SandboxController) refreshTokens() {
 	entries := c.tokenRefresher.snapshot()
 	var dropped int
 	for _, e := range entries {
-		token, err := c.WorkloadIssuer.IssueTokenWithOptions(e.appName, e.sandboxID, workloadidentity.TokenOptions{Role: e.role})
+		token, err := c.WorkloadIssuer.IssueTokenWithOptions(e.appName, e.sandboxID, workloadidentity.TokenOptions{Role: e.role, Service: e.service})
 		if err != nil {
 			c.Log.Warn("failed to refresh workload identity token", "sandbox", e.sandboxID, "error", err)
 			continue

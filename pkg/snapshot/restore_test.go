@@ -341,3 +341,45 @@ func TestAllZero(t *testing.T) {
 		assert.False(t, allZero([]byte{1}))
 	})
 }
+
+// Restore decompresses, writes and hashes in 4 MiB chunks that overlap, so an
+// image spanning several chunks must come back byte for byte, including a
+// short last chunk and zeros across a chunk boundary, and a wrong checksum
+// must still be caught.
+func TestRestoreImageAcrossChunks(t *testing.T) {
+	srcData := make([]byte, 4*4*1024*1024+12345)
+	for i := range srcData {
+		srcData[i] = byte(i*7 + i>>16)
+	}
+	clear(srcData[4*1024*1024-8192 : 4*1024*1024+8192])
+
+	snapBuf := &bufferSeeker{}
+	_, err := Backup(snapBuf, bytes.NewReader(srcData), "test", int64(len(srcData)), "ext4")
+	require.NoError(t, err)
+	restore := func(meta *Meta, r io.Reader) ([]byte, error) {
+		out, err := os.CreateTemp(t.TempDir(), "restore-*")
+		require.NoError(t, err)
+		defer out.Close()
+		require.NoError(t, out.Truncate(meta.SizeBytes))
+		if err := RestoreImage(out, r, meta); err != nil {
+			return nil, err
+		}
+		_, err = out.Seek(0, io.SeekStart)
+		require.NoError(t, err)
+		return io.ReadAll(out)
+	}
+
+	r := bytes.NewReader(snapBuf.Bytes())
+	meta, err := ReadHeader(r)
+	require.NoError(t, err)
+	restored, err := restore(meta, r)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(srcData, restored), "restored image differs")
+
+	r = bytes.NewReader(snapBuf.Bytes())
+	meta, err = ReadHeader(r)
+	require.NoError(t, err)
+	meta.Checksum = "0000000000000000000000000000000000000000000000000000000000000000"
+	_, err = restore(meta, r)
+	require.ErrorContains(t, err, "checksum mismatch")
+}

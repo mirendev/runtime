@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/pkg/boot"
@@ -45,6 +46,10 @@ func (b *clusterAccessBoot) start(ctx context.Context, foundationOutput foundati
 		Workers:       runner.DefaulWorkers,
 		DataPath:      b.inputs.config.GetDataPath(),
 		DiskMode:      b.inputs.config.GetDiskMode(),
+
+		AcceleratorCheckpointTimeout:      time.Duration(b.inputs.config.GetAcceleratorCheckpointTimeout()) * time.Second,
+		AcceleratorFirstCheckpointTimeout: time.Duration(b.inputs.config.GetAcceleratorFirstCheckpointTimeout()) * time.Second,
+		AcceleratorCheckpointInterval:     time.Duration(b.inputs.config.GetAcceleratorCheckpointInterval()) * time.Second,
 	}
 	var err error
 	config.Config, err = foundation.RunnerConfig(config.ListenAddress)

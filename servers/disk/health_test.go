@@ -120,14 +120,21 @@ func TestDiskHealthPagesSafeLifecycleSummaries(t *testing.T) {
 	require.NoError(t, err)
 	_, err = inmem.Client.Create(ctx, "ready-volume", &storage_v1alpha.DiskVolume{DiskId: "disk/other", ActualState: storage_v1alpha.DV_READY, ErrorMessage: secret})
 	require.NoError(t, err)
+	// A ready volume whose log uploads the cloud refuses over a sequence gap
+	// is still reported, so miren doctor flags it.
+	gapped, err := inmem.Client.Create(ctx, "gapped-volume", &storage_v1alpha.DiskVolume{DiskId: "disk/gapped", ActualState: storage_v1alpha.DV_READY, UploadBlocked: "sequence_gap"})
+	require.NoError(t, err)
 	page, err := client.List(ctx, "disk_volume", "", 10)
 	require.NoError(t, err)
-	require.Len(t, page.Resources(), 2)
+	require.Len(t, page.Resources(), 3)
 	for _, item := range page.Resources() {
 		if item.Id() == volume.String() {
 			assert.Equal(t, "disk/parent", item.DiskId())
 			assert.Equal(t, "actual_state.dv_error", item.State())
 			assert.Equal(t, "volume lifecycle failed; inspect server logs", item.Diagnostic())
+		} else if item.Id() == gapped.String() {
+			assert.Equal(t, "actual_state.dv_ready", item.State())
+			assert.Contains(t, item.Diagnostic(), "sequence gap")
 		} else {
 			assert.Equal(t, "actual_state.dv_ready", item.State())
 			assert.Empty(t, item.Diagnostic())

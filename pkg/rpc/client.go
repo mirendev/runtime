@@ -82,6 +82,7 @@ func (u unreachableClient) Close() error { return nil }
 
 type NetworkClient struct {
 	State *State
+	opts  *stateOptions
 
 	transportKind transportKind
 
@@ -757,6 +758,32 @@ func (c *NetworkClient) derefOID(ctx context.Context, oid OID) error {
 	}
 
 	return nil
+}
+
+// closeSetupTransport tears down a failed connection attempt without releasing
+// a capability (which may not exist yet) or sending another request to the peer.
+// The State's shared transport remains available for the next attempt.
+func (c *NetworkClient) closeSetupTransport() {
+	if c.ops != nil {
+		c.ops.mu.Lock()
+		if c.ops.ctrlSess != nil {
+			_ = c.ops.ctrlSess.Close()
+			c.ops.ctrlSess = nil
+		}
+		c.ops.mu.Unlock()
+	}
+	if c.httpDrain != nil {
+		c.httpDrain.mu.Lock()
+		pool := c.httpDrain.current
+		c.httpDrain.mu.Unlock()
+		if pool != nil {
+			c.httpDrain.retire(pool)
+			_ = pool.transport.Close()
+		}
+	}
+	if c.remoteAddr != nil && c.State.localMP != nil {
+		_ = c.State.localMP.RemoveConn(c.remoteAddr)
+	}
 }
 
 func (c *NetworkClient) Close() error {

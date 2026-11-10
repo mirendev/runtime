@@ -2,9 +2,11 @@ package cloudapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -138,4 +140,41 @@ func TestNewRejectsAnUnusableClient(t *testing.T) {
 
 	_, err = cloudapi.New("https://cloud.example", nil)
 	require.Error(t, err, "a client with no way to authenticate is not usable")
+}
+
+// A takeover names the adopting cluster and only succeeds when cloud says it
+// granted that cluster this volume's lease; anything else is no nonce at all.
+func TestTakeOverVolumeLease(t *testing.T) {
+	before := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	grant := map[string]any{"lease_id": "lease-1", "volume_id": "vol-1", "nonce": "n", "cluster_id": "cluster-new"}
+	for name, response := range map[string]map[string]any{
+		"granted":       grant,
+		"other-cluster": {"lease_id": "lease-1", "volume_id": "vol-1", "nonce": "n", "cluster_id": "cluster-old"},
+		"no-nonce":      {"lease_id": "lease-1", "volume_id": "vol-1", "cluster_id": "cluster-new"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			var request map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodPost || req.URL.Path != "/api/v1/organizations/org-1/volumes/vol-1/lease/takeover" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				r.NoError(json.NewDecoder(req.Body).Decode(&request))
+				r.NoError(json.NewEncoder(w).Encode(response))
+			}))
+			defer srv.Close()
+			client, err := cloudapi.New(srv.URL, staticToken("t"))
+			r.NoError(err)
+
+			lease, err := client.TakeOverVolumeLease(context.Background(), "org-1", "vol-1", "cluster-new", "acquisition-0001", before)
+			r.Equal(map[string]any{"acquisition_id": "acquisition-0001", "take_over_before": "2026-11-08T06:00:00Z", "cluster_id": "cluster-new"}, request)
+			if name != "granted" {
+				r.Error(err)
+				return
+			}
+			r.NoError(err)
+			r.Equal("n", lease.Nonce)
+		})
+	}
 }

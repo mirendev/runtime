@@ -22,26 +22,52 @@ func RestoreImage(dst *os.File, src io.Reader, meta *Meta) error {
 	}
 	defer decoder.Close()
 
+	// Hashing costs as much as decompressing and writing together on CPUs
+	// without SHA extensions, so it runs alongside them: chunk k is hashed
+	// while chunk k+1 is decompressed and written. A buffer goes back to the
+	// decoder only after both its write and its hash are done.
+	const chunkSize, buffers = 4 * 1024 * 1024, 3
 	hasher := sha256.New()
-	buf := make([]byte, 4*1024*1024) // 4MB buffer
+	free := make(chan []byte, buffers)
+	for range buffers {
+		free <- make([]byte, chunkSize)
+	}
+	hashed := make(chan []byte, buffers)
+	hashDone := make(chan struct{})
+	go func() {
+		defer close(hashDone)
+		for chunk := range hashed {
+			hasher.Write(chunk)
+			free <- chunk[:cap(chunk)]
+		}
+	}()
+	finish := func() {
+		close(hashed)
+		<-hashDone
+	}
 
 	for {
+		buf := <-free
 		n, readErr := io.ReadFull(decoder, buf)
 		if n > 0 {
 			chunk := buf[:n]
-			hasher.Write(chunk)
-
 			if err := sparseWrite(dst, chunk); err != nil {
+				finish()
 				return fmt.Errorf("writing image data: %w", err)
 			}
+			hashed <- chunk
+		} else {
+			free <- buf
 		}
 		if readErr != nil {
 			if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
 				break
 			}
+			finish()
 			return fmt.Errorf("decompressing image data: %w", readErr)
 		}
 	}
+	finish()
 
 	checksum := hex.EncodeToString(hasher.Sum(nil))
 	if checksum != meta.Checksum {

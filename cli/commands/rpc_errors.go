@@ -21,6 +21,30 @@ import (
 // user actually typed — "miren route list" is a far better thing to put in an
 // error than the capability "entities" it happens to resolve.
 func (c *Context) wrapRPCError(err error) error {
+	if routes, ok := errors.AsType[*clientconfig.ClusterRouteError](err); ok {
+		var d *ui.Diagnostic
+		if direct, ok := errors.AsType[*rpc.ResolveError](routes.Direct); ok {
+			d = c.diagnoseResolve(direct)
+		}
+		if d == nil {
+			d = &ui.Diagnostic{
+				Detail: "Neither the direct addresses nor the cloud relay could establish a connection.",
+				Actions: []ui.Action{
+					{Command: "miren doctor", Note: "check what's reachable"},
+					{Command: "miren cluster list", Note: "confirm the addresses"},
+				},
+			}
+		}
+		d.Summary = fmt.Sprintf("couldn't reach %s directly or through Miren Cloud", clusterLabel(c.ClusterName))
+		d.Facts = append(d.Facts,
+			ui.Fact{Label: "Direct", Value: routes.Direct.Error()},
+			ui.Fact{Label: "Miren Cloud", Value: routes.Cloud.Error()},
+		)
+		d.Cause = routes
+		d.ShowCause = c.Verbose()
+		return d
+	}
+
 	re, ok := errors.AsType[*rpc.ResolveError](err)
 	if !ok {
 		return err
@@ -283,6 +307,18 @@ func (c *Context) diagnoseResolve(re *rpc.ResolveError) *ui.Diagnostic {
 					{Command: "miren auth ci list -a <app>", Note: "see the configured bindings"},
 					{Command: "miren auth ci add --github OWNER/REPO -a <app>", Note: "replace a stale one"},
 				},
+				Cause: fmt.Errorf("%w: %w", ErrAccessDenied, re),
+			}
+		}
+
+		// Same wrong turn as above: this certificate will never work again, and
+		// nothing about a session or a sign-in is at fault.
+		if re.StatusCode == 401 && re.Code == rpc.AuthErrorCertRevoked {
+			return &ui.Diagnostic{
+				Summary: fmt.Sprintf("this client certificate was revoked on %s", cluster),
+				Detail: "The cluster refuses this certificate for good, so retrying won't " +
+					"help. Ask a cluster operator for a new one.",
+				Facts: []ui.Fact{{Label: "Cluster reported", Value: re.Detail}},
 				Cause: fmt.Errorf("%w: %w", ErrAccessDenied, re),
 			}
 		}

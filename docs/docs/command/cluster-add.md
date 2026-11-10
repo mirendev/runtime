@@ -19,7 +19,7 @@ With `--format json`, the command prints one result document and nothing else on
 {"ok": false, "error": {"code": "cluster_not_found", "message": "no cluster named ..."}}
 ```
 
-`name` is the local name, which is what every other command takes. `cloud_name` appears alongside it only when `--as` stored the cluster under a different name than it has in Miren Cloud, and `address` is absent for a cluster reached through cloud.
+`name` is the local name, which is what every other command takes. `cloud_name` appears alongside it only when `--as` stored the cluster under a different name than it has in Miren Cloud, and `address` is absent for a cluster reached through cloud. `via_cloud` reports the route selected while adding; `force_cloud` reports whether future connections are forced through cloud. With `force_cloud: false`, cloud-authenticated clusters try direct when reachable, otherwise via cloud.
 
 Messages are written for people and will be reworded. The code is the stable part:
 
