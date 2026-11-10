@@ -297,12 +297,6 @@
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/hey/requester",
-      "elapsed_s": 1.0,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
       "package": "miren.dev/runtime/pkg/oidcauth",
       "elapsed_s": 1.0,
       "status": "pass",
