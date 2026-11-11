@@ -111,6 +111,7 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 		AppConfig:      in.AppConfig,
 		ExistingConfig: existing,
 		CLIEnvVars:     in.CLIEnvVars,
+		AppID:          entity.Id(in.AppID),
 	}, status, buildLog)
 	if err != nil {
 		return buildImageOut{}, err
@@ -143,6 +144,9 @@ type runBuildkitBuildInputs struct {
 	AppConfig      *appconfig.AppConfig
 	ExistingConfig core_v1alpha.ConfigSpec
 	CLIEnvVars     []*build_v1alpha.EnvironmentVariable
+	// AppID is the app being built, which is the only app whose own secrets
+	// the build may mount.
+	AppID entity.Id
 }
 
 // runBuildkitBuild connects to BuildKit, runs the actual image build
@@ -194,7 +198,7 @@ func (b *Builder) runBuildkitBuild(
 		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
 	}
 
-	buildSecrets, err := b.resolveBuildSecrets(ctx, in.AppConfig, in.BuildStack.Stack)
+	buildSecrets, err := b.resolveBuildSecrets(ctx, in.AppConfig, in.BuildStack.Stack, in.AppID)
 	if err != nil {
 		b.Log.Error("failed to resolve build secrets", "error", err)
 		status.SendError("Failed to resolve build secrets: %v", err)

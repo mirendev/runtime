@@ -626,6 +626,12 @@ kinds:
       type: ref
       doc: The version a floating (unpinned) reference resolves to. Moves on every write.
 
+    app:
+      type: ref
+      doc: The app that owns this secret, or empty for a secret any app may reference. Set only when the secret is created. A caller bound to another app cannot read or write it, and no other app's config may reference it. Deleting the app deletes the secret.
+      indexed: true
+      tags: [dev.miren.app_ref]
+
   # An immutable, envelope-encrypted payload. Never rewritten after creation.
   # The entity's built-in short id is the version handle used in references
   # (the "x1A" in "payments/stripe-key@x1A") — there is no explicit version field.

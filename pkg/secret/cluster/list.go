@@ -55,6 +55,7 @@ func (b *Backend) summarize(ctx context.Context, sec *core_v1alpha.Secret) (secr
 	summary := secret.Summary{
 		Path:    sec.Path,
 		Backend: b.Name(),
+		Owner:   string(sec.App),
 	}
 
 	res, err := b.ec.List(ctx, entity.Ref(core_v1alpha.SecretVersionSecretId, sec.ID))

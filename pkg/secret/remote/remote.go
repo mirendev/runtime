@@ -27,7 +27,7 @@ type Resolver struct {
 	client *secret_v1alpha.SecretsClient
 }
 
-var _ secret.Resolver = (*Resolver)(nil)
+var _ secret.AppResolver = (*Resolver)(nil)
 
 // NewResolver wraps a secrets client as a Resolver.
 func NewResolver(client *secret_v1alpha.SecretsClient) *Resolver {
@@ -40,16 +40,26 @@ func NewResolver(client *secret_v1alpha.SecretsClient) *Resolver {
 // error's full text, which could quote surrounding context back into a log on a
 // node that has no business holding it.
 func (r *Resolver) ResolveRef(ctx context.Context, backend, ref string) (secret.SecretValue, error) {
+	return r.ResolveRefForApp(ctx, backend, ref, "")
+}
+
+// ResolveRefForApp is ResolveRef for a sandbox of the given app. The
+// coordinator returns a secret that belongs to an app only when app names it.
+func (r *Resolver) ResolveRefForApp(ctx context.Context, backend, ref, app string) (secret.SecretValue, error) {
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
 
-	res, err := r.client.Resolve(ctx, backend, ref)
+	res, err := r.client.Resolve(ctx, backend, ref, app)
 	if err != nil {
 		return secret.SecretValue{}, fmt.Errorf("resolving %s:%s via coordinator: %w", backend, ref, err)
 	}
 
+	// The owner travels back so the runner can refuse to hand an app's secret
+	// to another app's sandbox. A coordinator that predates ownership sends
+	// none, which is right: it has no owned secrets to protect.
 	return secret.SecretValue{
 		Ref:   res.Ref(),
 		Bytes: res.Value(),
+		Owner: res.OwnerId(),
 	}, nil
 }

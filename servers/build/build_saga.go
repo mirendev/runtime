@@ -447,7 +447,7 @@ func createConfigVersion(ctx context.Context, in createConfigVersionIn) (createC
 	// Pinning happens here rather than upstream in the saga because the action
 	// that stores the spec must be the one that records the pin: whichever
 	// version this attempt resolves is the version the config it writes claims.
-	if err := b.pinSecrets(ctx, &spec); err != nil {
+	if err := b.pinSecrets(ctx, &spec, entity.Id(in.AppID)); err != nil {
 		return createConfigVersionOut{}, err
 	}
 

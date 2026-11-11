@@ -26,6 +26,14 @@ import (
 // takes.
 func newTestClient(t *testing.T) *secret_v1alpha.SecretsClient {
 	t.Helper()
+	c, _ := newTestEnv(t)
+	return c
+}
+
+// newTestEnv is newTestClient plus the entity client behind it, for tests that
+// need to create apps or inspect stored rows.
+func newTestEnv(t *testing.T) (*secret_v1alpha.SecretsClient, *entityserver.Client) {
+	t.Helper()
 
 	log := slog.New(slog.DiscardHandler)
 	ctx := t.Context()
@@ -47,8 +55,8 @@ func newTestClient(t *testing.T) *secret_v1alpha.SecretsClient {
 	registry.Register(cluster.NewBackend(log, ec, ring))
 
 	return secret_v1alpha.NewSecretsClient(rpc.LocalClient(
-		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil)),
-	))
+		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil, eac)),
+	)), ec
 }
 
 // An empty backend falls back to the built-in cluster store, so the common case
@@ -57,7 +65,7 @@ func TestSetDefaultsToTheClusterBackend(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	res, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"))
+	res, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"), "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, res.Version())
 	assert.False(t, res.Unchanged())
@@ -74,16 +82,16 @@ func TestSetReportsAnUnchangedValue(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("same"))
+	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("same"), "")
 	require.NoError(t, err)
 	assert.False(t, first.Unchanged())
 
-	second, err := c.Set(ctx, "", "payments/stripe-key", []byte("same"))
+	second, err := c.Set(ctx, "", "payments/stripe-key", []byte("same"), "")
 	require.NoError(t, err)
 	assert.True(t, second.Unchanged())
 	assert.Equal(t, first.Version(), second.Version())
 
-	third, err := c.Set(ctx, "", "payments/stripe-key", []byte("different"))
+	third, err := c.Set(ctx, "", "payments/stripe-key", []byte("different"), "")
 	require.NoError(t, err)
 	assert.False(t, third.Unchanged())
 	assert.NotEqual(t, first.Version(), third.Version())
@@ -92,14 +100,14 @@ func TestSetReportsAnUnchangedValue(t *testing.T) {
 func TestSetRejectsAnEmptyValue(t *testing.T) {
 	c := newTestClient(t)
 
-	_, err := c.Set(t.Context(), "", "payments/stripe-key", nil)
+	_, err := c.Set(t.Context(), "", "payments/stripe-key", nil, "")
 	assert.Error(t, err)
 }
 
 func TestSetRejectsAnUnknownBackend(t *testing.T) {
 	c := newTestClient(t)
 
-	_, err := c.Set(t.Context(), "prod-vault", "payments/stripe-key", []byte("x"))
+	_, err := c.Set(t.Context(), "prod-vault", "payments/stripe-key", []byte("x"), "")
 	assert.Error(t, err)
 }
 
@@ -107,9 +115,9 @@ func TestListVersionsMarksTheCurrentVersion(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("old"))
+	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("old"), "")
 	require.NoError(t, err)
-	second, err := c.Set(ctx, "", "payments/stripe-key", []byte("new"))
+	second, err := c.Set(ctx, "", "payments/stripe-key", []byte("new"), "")
 	require.NoError(t, err)
 
 	res, err := c.ListVersions(ctx, "", "payments/stripe-key")
@@ -134,7 +142,7 @@ func TestSetStateDisablesAVersion(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"))
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"), "")
 	require.NoError(t, err)
 
 	ref := secret.FormatRef("payments/stripe-key", set.Version())
@@ -151,7 +159,7 @@ func TestSetStateRejectsAnUnknownState(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"))
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"), "")
 	require.NoError(t, err)
 
 	ref := secret.FormatRef("payments/stripe-key", set.Version())
@@ -164,7 +172,7 @@ func TestListReturnsSecretsSortedByPath(t *testing.T) {
 	ctx := t.Context()
 
 	for _, path := range []string{"registry/npm-token", "payments/stripe-key", "auth/session-key"} {
-		_, err := c.Set(ctx, "", path, []byte("value-for-"+path))
+		_, err := c.Set(ctx, "", path, []byte("value-for-"+path), "")
 		require.NoError(t, err)
 	}
 
@@ -185,7 +193,7 @@ func TestListingNeverCarriesAValue(t *testing.T) {
 	ctx := t.Context()
 
 	const value = "sk_live_abc123"
-	_, err := c.Set(ctx, "", "payments/stripe-key", []byte(value))
+	_, err := c.Set(ctx, "", "payments/stripe-key", []byte(value), "")
 	require.NoError(t, err)
 
 	listed, err := c.List(ctx, "")
@@ -232,11 +240,11 @@ func TestSetReportsUnchangedForAnUndecryptableCurrentVersion(t *testing.T) {
 	registry.Register(cluster.NewBackend(log, ec, ring))
 
 	c := secret_v1alpha.NewSecretsClient(rpc.LocalClient(
-		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil)),
+		secret_v1alpha.AdaptSecrets(NewServer(log, registry, nil, eac)),
 	))
 
 	const path = "payments/stripe-key"
-	first, err := c.Set(ctx, "", path, []byte("sk_live"))
+	first, err := c.Set(ctx, "", path, []byte("sk_live"), "")
 	require.NoError(t, err)
 
 	// Leave the current version enabled but unreadable, as an incomplete KEK
@@ -246,7 +254,7 @@ func TestSetReportsUnchangedForAnUndecryptableCurrentVersion(t *testing.T) {
 	require.NoError(t, ec.UpdateAttrs(ctx, sec.CurrentVersion,
 		entity.String(core_v1alpha.SecretVersionKekIdId, "a-key-we-do-not-have")))
 
-	second, err := c.Set(ctx, "", path, []byte("sk_live"))
+	second, err := c.Set(ctx, "", path, []byte("sk_live"), "")
 	require.NoError(t, err)
 	assert.True(t, second.Unchanged(), "an identical value reuses, readable or not")
 	assert.Equal(t, first.Version(), second.Version())
@@ -259,7 +267,7 @@ func TestKeyringReportsKeysAndCounts(t *testing.T) {
 	ctx := t.Context()
 
 	for _, path := range []string{"payments/stripe-key", "registry/npm-token"} {
-		_, err := c.Set(ctx, "", path, []byte("value-"+path))
+		_, err := c.Set(ctx, "", path, []byte("value-"+path), "")
 		require.NoError(t, err)
 	}
 
@@ -290,12 +298,12 @@ func TestResolveReturnsTheValueAndAConcreteRef(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live_abc123"))
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live_abc123"), "")
 	require.NoError(t, err)
 
 	// A floating reference comes back fully qualified, so the caller learns
 	// which version it actually got.
-	res, err := c.Resolve(ctx, "", "payments/stripe-key")
+	res, err := c.Resolve(ctx, "", "payments/stripe-key", "")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("sk_live_abc123"), res.Value())
 	assert.Equal(t, secret.FormatRef("payments/stripe-key", set.Version()), res.Ref())
@@ -305,12 +313,12 @@ func TestResolveHonoursAPin(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("old"))
+	first, err := c.Set(ctx, "", "payments/stripe-key", []byte("old"), "")
 	require.NoError(t, err)
-	_, err = c.Set(ctx, "", "payments/stripe-key", []byte("new"))
+	_, err = c.Set(ctx, "", "payments/stripe-key", []byte("new"), "")
 	require.NoError(t, err)
 
-	res, err := c.Resolve(ctx, "", secret.FormatRef("payments/stripe-key", first.Version()))
+	res, err := c.Resolve(ctx, "", secret.FormatRef("payments/stripe-key", first.Version()), "")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("old"), res.Value())
 }
@@ -321,20 +329,20 @@ func TestResolveFailsClosedOnARevokedVersion(t *testing.T) {
 	c := newTestClient(t)
 	ctx := t.Context()
 
-	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"))
+	set, err := c.Set(ctx, "", "payments/stripe-key", []byte("sk_live"), "")
 	require.NoError(t, err)
 
 	ref := secret.FormatRef("payments/stripe-key", set.Version())
 	_, err = c.SetState(ctx, "", ref, string(secret.StateDisabled))
 	require.NoError(t, err)
 
-	_, err = c.Resolve(ctx, "", ref)
+	_, err = c.Resolve(ctx, "", ref, "")
 	assert.Error(t, err)
 }
 
 func TestResolveRejectsAnEmptyRef(t *testing.T) {
 	c := newTestClient(t)
 
-	_, err := c.Resolve(t.Context(), "", "")
+	_, err := c.Resolve(t.Context(), "", "", "")
 	assert.Error(t, err)
 }

@@ -321,7 +321,7 @@ func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, resolver se
 			return "", err
 		}
 
-		if err := pinSecrets(ctx, resolver, &spec); err != nil {
+		if err := coreutil.PinSecrets(ctx, resolver, &spec, appRec.ID); err != nil {
 			return "", err
 		}
 
@@ -449,7 +449,7 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver sec
 
 	// Freeze every backend-sourced variable to the version it resolves to right
 	// now, so this ConfigVersion records exactly which secret it was built with.
-	if err := pinSecrets(ctx, resolver, spec); err != nil {
+	if err := coreutil.PinSecrets(ctx, resolver, spec, appRec.ID); err != nil {
 		return nil, err
 	}
 
@@ -504,25 +504,4 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver sec
 		AppVersion: appVer,
 		VersionID:  appVer.Version,
 	}, nil
-}
-
-// pinSecrets rewrites every backend-sourced variable in the spec to the exact
-// version it resolves to, so a ConfigVersion minted from it records which secret
-// it was built with rather than a floating reference.
-//
-// A config with no backend-sourced variables never needs a resolver, which keeps
-// a cluster with no secret backends registered working exactly as before. One
-// that does reference a backend fails the write rather than activating a version
-// whose credential silently never arrived.
-func pinSecrets(ctx context.Context, resolver secret.Resolver, spec *core_v1alpha.ConfigSpec) error {
-	refs := coreutil.SecretReferences(spec)
-	if len(refs) == 0 {
-		return nil
-	}
-
-	if resolver == nil {
-		return fmt.Errorf("config references secret %s but this cluster has no secret backends configured", refs[0])
-	}
-
-	return coreutil.PinSecrets(ctx, resolver, spec)
 }

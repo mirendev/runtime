@@ -91,7 +91,10 @@ func (b *Backend) LockKeyring(ctx context.Context) (func(), error) {
 	return release, nil
 }
 
-var _ secret.WritableBackend = (*Backend)(nil)
+var (
+	_ secret.WritableBackend = (*Backend)(nil)
+	_ secret.OwnedBackend    = (*Backend)(nil)
+)
 
 // Name returns the instance name this backend registers under.
 func (b *Backend) Name() string { return secret.ClusterBackendName }
@@ -141,7 +144,18 @@ func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, 
 	return secret.SecretValue{
 		Ref:   secret.FormatRef(path, shortID),
 		Bytes: value,
+		Owner: string(sec.App),
 	}, nil
+}
+
+// Owner returns the id of the app that owns the secret at path, or empty when
+// it is unowned.
+func (b *Backend) Owner(ctx context.Context, path string) (string, error) {
+	sec, _, err := b.loadSecret(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	return string(sec.App), nil
 }
 
 // Put stores a new version of the secret at path, reporting whether it reused
@@ -153,6 +167,15 @@ func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, 
 // it from here rather than leaving the caller to compare handles is what keeps
 // the answer honest under a concurrent rotation.
 func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, bool, error) {
+	return b.PutOwned(ctx, path, value, secret.Ownership{})
+}
+
+// PutOwned is Put on behalf of an app. A secret this write creates belongs to
+// owner.App; an existing one keeps its owner, and one owned by a different app
+// is refused before anything is written, as is an unowned one when the owner is
+// required.
+func (b *Backend) PutOwned(ctx context.Context, path string, value []byte, owner secret.Ownership) (string, bool, error) {
+	app := owner.App
 	if err := ValidatePath(path); err != nil {
 		return "", false, err
 	}
@@ -168,9 +191,20 @@ func (b *Backend) Put(ctx context.Context, path string, value []byte) (string, b
 	}
 
 	for attempt := 0; attempt < maxCASAttempts; attempt++ {
-		sec, rev, err := b.ensureSecret(ctx, path)
+		sec, rev, err := b.ensureSecret(ctx, path, entity.Id(app))
 		if err != nil {
 			return "", false, err
+		}
+		if owner.Authorize != nil {
+			if err := owner.Authorize(ctx, string(sec.App)); err != nil {
+				return "", false, err
+			}
+		}
+		if app != "" && sec.App != "" && string(sec.App) != app {
+			return "", false, fmt.Errorf("%w: %s", secret.ErrOwnedByOtherApp, path)
+		}
+		if owner.Require && sec.App == "" {
+			return "", false, fmt.Errorf("%w: %s already exists, and an app is assigned only when a secret is created", secret.ErrNotOwned, path)
 		}
 
 		if sec.CurrentVersion != "" {
@@ -309,8 +343,9 @@ func (b *Backend) loadSecret(ctx context.Context, path string) (*core_v1alpha.Se
 	return &sec, ent.Revision(), nil
 }
 
-// ensureSecret loads a secret's identity row, creating it on first write.
-func (b *Backend) ensureSecret(ctx context.Context, path string) (*core_v1alpha.Secret, int64, error) {
+// ensureSecret loads a secret's identity row, creating it on first write with
+// app as its owner.
+func (b *Backend) ensureSecret(ctx context.Context, path string, app entity.Id) (*core_v1alpha.Secret, int64, error) {
 	sec, rev, err := b.loadSecret(ctx, path)
 	if err == nil {
 		return sec, rev, nil
@@ -319,15 +354,20 @@ func (b *Backend) ensureSecret(ctx context.Context, path string) (*core_v1alpha.
 		return nil, 0, err
 	}
 
-	// The identity row carries no payload, so creating it races harmlessly:
-	// CreateOrUpdate is keyed on the same name both writers derive from the
-	// path, and encoding only the path leaves an existing current_version
-	// untouched.
-	if _, err := b.ec.CreateOrUpdate(ctx, entityName(path), &core_v1alpha.Secret{Path: path}); err != nil {
-		return nil, 0, fmt.Errorf("creating secret %s: %w", path, err)
-	}
+	// Create rather than CreateOrUpdate, because the owner is set only here.
+	// The entity's ident is unique, so of two writers racing to create the same
+	// path exactly one succeeds, and the other reads back the winner's row with
+	// the winner's owner. An upsert would let the loser overwrite that owner.
+	_, createErr := b.ec.Create(ctx, entityName(path), &core_v1alpha.Secret{Path: path, App: app})
 
-	return b.loadSecret(ctx, path)
+	sec, rev, err = b.loadSecret(ctx, path)
+	if err != nil {
+		if createErr != nil {
+			return nil, 0, fmt.Errorf("creating secret %s: %w", path, createErr)
+		}
+		return nil, 0, err
+	}
+	return sec, rev, nil
 }
 
 // loadVersion resolves a version handle against a secret, defaulting to the
