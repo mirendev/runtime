@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/secret"
 )
 
 // newTestDeploymentServer creates a DeploymentServer with test dependencies.
@@ -1703,5 +1704,38 @@ func TestCreateDerivedVersionPreservesConfigVersionSpec(t *testing.T) {
 	}
 	if variables["ADDED"].Value != "override" || !variables["ADDED"].Sensitive || variables["ADDED"].Source != "manual" {
 		t.Fatalf("environment override was not persisted: %#v", variables["ADDED"])
+	}
+}
+
+// A deploy's env comes from the caller, so a literal shaped like a secret
+// reference is refused before it reaches a stored config. The runner would
+// otherwise resolve it at container start without checking which app owns the
+// secret it names.
+func TestCreateDerivedVersionRefusesALiteralPosingAsAReference(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("create deployment server: %v", err)
+	}
+	configID, err := server.EC.Create(ctx, "web-v1-cfg", &core_v1alpha.ConfigVersion{
+		App:  entity.Id("app/web"),
+		Spec: core_v1alpha.ConfigSpec{},
+	})
+	if err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	env := &deployment_v1alpha.EnvironmentVariable{}
+	env.SetKey("SNEAKY")
+	env.SetValue(secret.FormatSentinel("cluster", "other/token"))
+
+	_, err = server.createDerivedVersion(ctx, &core_v1alpha.AppVersion{
+		App:           entity.Id("app/web"),
+		ConfigVersion: configID,
+	}, []*deployment_v1alpha.EnvironmentVariable{env})
+	if err == nil || !strings.Contains(err.Error(), "reserved for secret references") {
+		t.Fatalf("expected the literal to be refused, got %v", err)
 	}
 }

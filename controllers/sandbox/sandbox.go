@@ -2561,7 +2561,9 @@ func (c *SandboxController) buildSubContainerSpec(
 	// A failure stops the container from starting. An app handed a reference
 	// where its credential belongs does not fail in a way anyone can read — it
 	// fails much later, inside whatever the credential was for.
-	envVars, err := secret.MaterializeEnv(ctx, c.Secrets, co.Env)
+	envVars, err := secret.MaterializeEnv(ctx, c.Secrets, co.Env, func(ctx context.Context) (string, error) {
+		return c.sandboxAppID(ctx, sb)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sandbox %s container %s: %w", sb.ID, co.Name, err)
 	}
@@ -3613,6 +3615,23 @@ func sandboxService(meta entity.AttrGetter) string {
 	md.Decode(meta)
 	service, _ := md.Labels.Get("service")
 	return service
+}
+
+// sandboxAppID returns the id of the app a sandbox belongs to, through its app
+// version, or empty for a sandbox not backed by one. Unlike resolveAppAndRole
+// it fails on a lookup error rather than degrading, because its answer decides
+// which secrets the sandbox may receive.
+func (c *SandboxController) sandboxAppID(ctx context.Context, sb *compute.Sandbox) (string, error) {
+	if sb.Spec.Version == "" {
+		return "", nil
+	}
+	resp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return "", fmt.Errorf("loading app version %s: %w", sb.Spec.Version, err)
+	}
+	var version core_v1alpha.AppVersion
+	version.Decode(resp.Entity().Entity())
+	return string(version.App), nil
 }
 
 func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {

@@ -53,7 +53,13 @@ func (r Reference) describe() string {
 //
 // A failure names the variable and the backend, and never the value or the
 // backend's own error text, which can quote surrounding context.
-func Pin(ctx context.Context, resolver Resolver, refs []Reference) ([]string, error) {
+//
+// app is the id of the app whose config is being frozen. A reference to a
+// secret another app owns is refused: whatever a config references ends up in
+// that app's containers, so referencing a secret is reading it. The check is on
+// the config's app rather than on whoever asked for the write, which is what
+// lets it hold for a build a saga resumes long after its caller has gone.
+func Pin(ctx context.Context, resolver Resolver, refs []Reference, app string) ([]string, error) {
 	pinned := make([]string, len(refs))
 
 	for i, ref := range refs {
@@ -68,8 +74,20 @@ func Pin(ctx context.Context, resolver Resolver, refs []Reference) ([]string, er
 		if err != nil {
 			return nil, fmt.Errorf("cannot resolve %s: %w", ref.describe(), err)
 		}
+		if err := CheckOwner(val, app); err != nil {
+			return nil, fmt.Errorf("%s: %w", ref.describe(), err)
+		}
 		pinned[i] = val.Ref
 	}
 
 	return pinned, nil
+}
+
+// CheckOwner refuses a resolved secret that belongs to an app other than app.
+// An unowned secret passes for every app.
+func CheckOwner(val SecretValue, app string) error {
+	if val.Owner == "" || val.Owner == app {
+		return nil
+	}
+	return fmt.Errorf("%w; only that app's config can reference it", ErrOwnedByOtherApp)
 }

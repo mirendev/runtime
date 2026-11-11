@@ -27,18 +27,26 @@ func SecretSet(ctx *Context, opts struct {
 	Path    string `position:"0" usage:"Secret path, e.g. payments/stripe-key" required:"true"`
 	Backend string `short:"b" long:"backend" description:"Backend instance to store into (default: cluster)"`
 	Value   string `long:"value" description:"Secret value, or @file to read one from a file. Prompts with masking when omitted, which is safer — a literal here is recorded in shell history. A trailing newline is trimmed"`
+	App     string `short:"a" long:"app" description:"App the new secret belongs to; only that app's config can then reference it. Applies when the secret is created, and is never read from app.toml"`
 }) error {
 	value, err := readSecretValue(opts.Path, opts.Value)
 	if err != nil {
 		return err
 	}
 
-	client, err := secretsClient(ctx)
+	cl, err := ctx.RPCClient("dev.miren.runtime/secrets")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to secrets service: %w", err)
 	}
 
-	res, err := client.Set(ctx, opts.Backend, opts.Path, value)
+	// A server that predates ownership would ignore the app and store the
+	// secret where any app can reference it, so ask before sending the value.
+	if opts.App != "" && !cl.HasMethodParam(ctx, "set", "app") {
+		return fmt.Errorf("--app requires a newer server; upgrade the server")
+	}
+
+	client := secret_v1alpha.NewSecretsClient(cl)
+	res, err := client.Set(ctx, opts.Backend, opts.Path, value, opts.App)
 	if err != nil {
 		return err
 	}
@@ -82,11 +90,16 @@ func SecretList(ctx *Context, opts struct {
 		return nil
 	}
 
-	headers := []string{"PATH", "BACKEND", "CURRENT", "VERSIONS"}
+	headers := []string{"PATH", "APP", "BACKEND", "CURRENT", "VERSIONS"}
 	var rows []ui.Row
 	for _, s := range secrets {
+		app := s.App()
+		if app == "" {
+			app = "-"
+		}
 		rows = append(rows, ui.Row{
 			s.Path(),
+			app,
 			s.Backend(),
 			versionHandle(s.CurrentVersion()),
 			summarizeVersions(s.Versions()),
@@ -278,7 +291,9 @@ type secretVersionJSON struct {
 }
 
 type secretJSON struct {
-	Path           string              `json:"path"`
+	Path string `json:"path"`
+	// App is the name of the app that owns the secret, empty when unowned.
+	App            string              `json:"app"`
 	Backend        string              `json:"backend"`
 	CurrentVersion string              `json:"current_version"`
 	Versions       []secretVersionJSON `json:"versions"`
@@ -287,6 +302,7 @@ type secretJSON struct {
 func secretToJSON(info *secret_v1alpha.SecretInfo) secretJSON {
 	out := secretJSON{
 		Path:           info.Path(),
+		App:            info.App(),
 		Backend:        info.Backend(),
 		CurrentVersion: info.CurrentVersion(),
 		Versions:       []secretVersionJSON{},

@@ -406,4 +406,26 @@ func TestDeleteAppTransitive(t *testing.T) {
 		require.False(t, entityExists(versionID), "app_version should be deleted")
 		require.False(t, entityExists(appID), "app should be deleted")
 	})
+
+	t.Run("deletes the secrets the app owns, with their versions", func(t *testing.T) {
+		appID, err := client.Create(ctx, "app-with-secrets", &core_v1alpha.App{})
+		require.NoError(t, err)
+
+		owned, err := client.Create(ctx, "app-with-secrets.db", &core_v1alpha.Secret{Path: "app-with-secrets/db", App: appID})
+		require.NoError(t, err)
+		version, err := client.Create(ctx, "sv-owned", &core_v1alpha.SecretVersion{Secret: owned, State: core_v1alpha.ENABLED})
+		require.NoError(t, err)
+
+		unowned, err := client.Create(ctx, "shared.key", &core_v1alpha.Secret{Path: "shared/key"})
+		require.NoError(t, err)
+		unownedVersion, err := client.Create(ctx, "sv-unowned", &core_v1alpha.SecretVersion{Secret: unowned, State: core_v1alpha.ENABLED})
+		require.NoError(t, err)
+
+		require.NoError(t, DeleteAppTransitive(ctx, client, log, appID))
+
+		require.False(t, entityExists(owned), "owned secret should be deleted")
+		require.False(t, entityExists(version), "owned secret's version should be deleted")
+		require.True(t, entityExists(unowned), "unowned secret should survive")
+		require.True(t, entityExists(unownedVersion), "unowned secret's version should survive")
+	})
 }

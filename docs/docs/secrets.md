@@ -192,12 +192,40 @@ miren secret versions payments/stripe-key
 </CliCommand>
 
 ```text
-PATH                 BACKEND  CURRENT  VERSIONS
-payments/stripe-key  cluster  @m4Q     @m4Q @x1A(disabled)
-registry/npm-token   cluster  @p7R     @p7R
+PATH                 APP   BACKEND  CURRENT  VERSIONS
+payments/stripe-key  -     cluster  @m4Q     @m4Q @x1A(disabled)
+registry/npm-token   -     cluster  @p7R     @p7R
+shop/db-password     shop  cluster  @k2T     @k2T
 ```
 
+`APP` names the app a secret belongs to, or `-` for one any app can use. See [Secrets that belong to an app](#secrets-that-belong-to-an-app).
+
 Both support `--format json`.
+
+## Secrets that belong to an app
+
+A secret can belong to one app. Name the app when you create the secret:
+
+<CliCommand context="client">
+
+```miren
+miren secret set shop/db-password --app shop
+```
+
+</CliCommand>
+
+A secret created without `--app` belongs to no app, and works exactly as described above for every caller. The app is assigned only when a secret is created, so `--app` on an existing secret fails unless the secret already belongs to that app. The path is only a name: `shop/` in the example is a convention, and grants nothing.
+
+A secret that belongs to an app is kept to that app in two ways:
+
+- **Only that app's config can reference it.** An `[[env]]` or `[[build.secrets]]` entry, or `miren env set --ref`, that points another app at it fails the deploy or the write. This holds for operators too: to share a secret between apps, leave it unowned.
+- **Only callers allowed to act on that app can reach it.** Secret commands check the caller's access to the owning app as well as to the secret store, so a caller limited to some apps does not see or touch the secrets of the others.
+
+Deleting an app deletes the secrets that belong to it, along with all their versions.
+
+:::note[Distributed runners during an upgrade]
+A secret that belongs to an app is handed only to runners that know which app each sandbox belongs to. The server upgrades first and then upgrades its distributed runners one at a time, so for a few minutes some runners may still be on the older version. Those runners cannot start a sandbox that uses an owned secret until they are upgraded too. Wait for the upgrade to finish before giving secrets an app.
+:::
 
 ## How it is stored
 
