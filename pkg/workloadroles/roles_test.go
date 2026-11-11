@@ -160,6 +160,15 @@ func TestRoleMembershipSpotChecks(t *testing.T) {
 		{RoleClusterDeployer, [2]string{"deployment", "deployversion"}, [2]string{"crud", "destroy"}},
 		{RoleClusterDeployer, [2]string{"crud", "setenvvar"}, [2]string{"crud", "new"}},
 		{RoleClusterDebugger, [2]string{"internalhttp", "dorequest"}, [2]string{"crud", "destroy"}},
+		// Disable and enable travel with deploy: a role that can ship an app
+		// can already take it down.
+		{RoleAppDeployer, [2]string{"crud", "disable"}, [2]string{"crud", "destroy"}},
+		{RoleAppDeployer, [2]string{"crud", "enable"}, [2]string{"crud", "list"}},
+		{RoleClusterDeployer, [2]string{"crud", "disable"}, [2]string{"crud", "destroy"}},
+		{RoleClusterDeployer, [2]string{"crud", "enable"}, [2]string{"crud", "new"}},
+		{RoleAppAdmin, [2]string{"crud", "disable"}, [2]string{"crud", "destroy"}},
+		{RoleClusterAdmin, [2]string{"crud", "enable"}, [2]string{"crud", "setworkloadrole"}},
+		{RoleAppDebugger, [2]string{"sandboxexec", "exec"}, [2]string{"crud", "disable"}},
 	}
 
 	for _, c := range cases {

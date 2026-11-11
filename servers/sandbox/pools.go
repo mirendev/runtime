@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -212,6 +213,17 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 	}
 	if count > concurrency.MaxPoolSize {
 		return fmt.Errorf("count exceeds maximum pool size %d: %d", concurrency.MaxPoolSize, count)
+	}
+	// Lowering stays allowed. Raising would boot sandboxes the flag says
+	// shouldn't exist, and nothing else would stop them from serving work.
+	if owner != "" && count > pool.DesiredInstances {
+		var app core_v1alpha.App
+		if err := s.ec.GetById(ctx, pool.App, &app); err != nil {
+			return err
+		}
+		if err := deploylifecycle.CheckEnabled(owner, &app); err != nil {
+			return err
+		}
 	}
 	revision := ent.Revision()
 	changed := count != pool.DesiredInstances

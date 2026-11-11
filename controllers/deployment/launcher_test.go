@@ -4862,6 +4862,60 @@ func TestConcurrentCreateAndReconcileNoDeadlock(t *testing.T) {
 	assert.Len(t, pools, 1, "concurrent create + reconcile must converge on one pool")
 }
 
+// TestDisabledAppStaysAtZero verifies that the launcher holds every service
+// of a disabled app at zero: the resync doesn't restore a fixed count and a
+// deploy doesn't boot an instance for verification.
+func TestDisabledAppStaysAtZero(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	newVersion := func(name string) *core_v1alpha.AppVersion {
+		t.Helper()
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: "worker:latest",
+			Config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{
+					{
+						Name:               "worker",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "fixed", NumInstances: 2},
+					},
+				},
+			},
+		}
+		verID, createErr := server.Client.Create(ctx, name, ver)
+		require.NoError(t, createErr)
+		ver.ID = verID
+		return ver
+	}
+
+	app.ActiveVersion = newVersion("v1").ID
+	app.Disabled.At = time.Now()
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, newTestLauncher(log, server.EAC).Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(0), pools[0].DesiredInstances, "a disabled app's fixed service must not be restored")
+
+	app.ActiveVersion = newVersion("v2").ID
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, newTestLauncher(log, server.EAC).Reconcile(ctx, app, nil))
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(0), pools[0].DesiredInstances, "a deploy to a disabled app must not boot for verification")
+}
+
 // A deploy that needs a new pool for an autoscaled service starts it at the
 // size the current pool reached, not at one.
 func TestNewAutoPoolSeededFromCurrentPoolSize(t *testing.T) {
@@ -4923,6 +4977,65 @@ func TestNewAutoPoolSeededFromCurrentPoolSize(t *testing.T) {
 	require.NotNil(t, newPool)
 	assert.Contains(t, newPool.ReferencedByVersions, v2.ID)
 	assert.Equal(t, int64(7), newPool.DesiredInstances, "the new pool should start at the current pool's size")
+}
+
+// A sibling pool can still have instances while Disable is mid-way through
+// scaling down. A new pool for the disabled app must not copy that size.
+func TestNewPoolForDisabledAppIgnoresCurrentPoolSize(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	deploy := func(name, image string) {
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: image,
+			Config: core_v1alpha.Config{
+				Port: 3000,
+				Services: []core_v1alpha.Services{{
+					Name:               "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 10},
+				}},
+			},
+		}
+		verID, err := server.Client.Create(ctx, "test-"+name, ver)
+		require.NoError(t, err)
+		app.ActiveVersion = verID
+		require.NoError(t, server.Client.Update(ctx, app))
+	}
+
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+
+	deploy("v1", "oci.miren.cloud/web:1")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	oldPoolID := pools[0].ID
+
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, oldPoolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 7),
+	}, 0)
+	require.NoError(t, err)
+
+	app.Disabled.At = time.Now()
+	deploy("v2", "oci.miren.cloud/web:2")
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	var newPool *compute_v1alpha.SandboxPool
+	for _, p := range listAllPools(t, ctx, server) {
+		if p.ID != oldPoolID {
+			newPool = &p
+		}
+	}
+	require.NotNil(t, newPool)
+	assert.Equal(t, int64(0), newPool.DesiredInstances)
 }
 
 // The old pool is only retired once the new one is fully up, so readiness

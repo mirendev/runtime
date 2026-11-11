@@ -1385,6 +1385,9 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	if err := b.authorizeBuild(ctx, name); err != nil {
 		return err
 	}
+	if err := b.refuseDisabled(ctx, name); err != nil {
+		return err
+	}
 
 	if b.DataPath == "" {
 		return fmt.Errorf("data path not configured")

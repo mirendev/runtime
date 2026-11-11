@@ -62,6 +62,8 @@ miren app --watch
 - [`miren app admin`](./app-admin.md) — Application-defined admin methods
 - [`miren app attach`](./app-attach.md) — Deprecated: use 'miren run attach'
 - [`miren app delete`](./app-delete.md) — Delete an application and all its resources
+- [`miren app disable`](./app-disable.md) — Hold every service of an app at zero instances
+- [`miren app enable`](./app-enable.md) — Start a disabled app again
 - [`miren app history`](./app-history.md) — Show deployment history for an application
 - [`miren app init`](./app-init.md) — Initialize a new application
 - [`miren app list`](./app-list.md) — List all applications
