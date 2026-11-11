@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *release/0.17*
 
+---
+
+## v0.17.4
+*2026-11-10*
+
 **Bug Fixes**
 - **Client certificates can be revoked** - A certificate from `miren auth generate` couldn't be cut off before it expired, so a leaked one stayed good for its whole lifetime. `miren auth revoke <serial>` now makes the cluster refuse a certificate, on the coordinator and on runners, and `miren auth revocation list` shows what's been revoked. The serial can come from the certificate or the audit log, and a revocation can't be undone from the CLI, so check it first. A runner renews its certificate under a new serial, so for a leaked runner certificate also run `miren runner remove` and check the audit log for other serials with that runner's subject. ([#1430](https://github.com/mirendev/runtime/pull/1430))
 
