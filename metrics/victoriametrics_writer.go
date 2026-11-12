@@ -35,8 +35,13 @@ type VictoriaMetricsWriter struct {
 }
 
 const (
-	defaultMetricBufferSize  = 1000
-	maxMetricBufferSize      = 10000 // Maximum buffer size before rejecting writes
+	defaultMetricBufferSize = 1000
+	// maxMetricBufferSize is how many points may wait for a send before new
+	// writes are rejected. It sets how long a runner rides out a coordinator
+	// outage: each sandbox writes CPU, memory and swap once a second, so at 50
+	// sandboxes this lasts about 100s, enough for the minute or two a restart
+	// takes. Grow it with the per-sandbox series count.
+	maxMetricBufferSize      = 15000
 	defaultMetricFlushPeriod = 5 * time.Second
 )
 

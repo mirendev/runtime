@@ -142,7 +142,7 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 
 	out := &sandboxListing{}
 
-	cpu, memory, nodeCores, warnings := s.sandboxSamples(ctx, f, w, dir)
+	cpu, memory, swap, nodeCores, warnings := s.sandboxSamples(ctx, f, w, dir)
 	out.warnings = warnings
 
 	rows := make([]*usage_v1alpha.SandboxUsage, 0, len(dir.sandboxes))
@@ -182,6 +182,9 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 
 		var m usage_v1alpha.MemoryUsage
 		m.SetBytes(int64(bytes))
+		if swapped, ok := swap[id]; ok {
+			m.SetSwapBytes(int64(swapped))
+		}
 		row.SetMemory(&m)
 
 		out.cluster.cpuCores += cores
@@ -257,7 +260,7 @@ func (s *Server) HttpListSandboxes(ctx context.Context, state *usage_v1alpha.Res
 
 // sandboxSamples runs the metric queries behind a listing.
 //
-// Two queries answer the whole cluster, not two per sandbox: grouping by
+// A fixed set of queries answers the whole cluster, not a set per sandbox: grouping by
 // sandbox in the query means the cost of this call does not grow with the
 // number of sandboxes, which is what makes a refreshing view affordable.
 func (s *Server) sandboxSamples(
@@ -265,13 +268,14 @@ func (s *Server) sandboxSamples(
 	f filter,
 	w window,
 	dir *directory,
-) (cpu, memory, nodeCores map[string]float64, warnings []string) {
+) (cpu, memory, swap, nodeCores map[string]float64, warnings []string) {
 	cpu = map[string]float64{}
 	memory = map[string]float64{}
+	swap = map[string]float64{}
 	nodeCores = map[string]float64{}
 
 	if s.Reader == nil {
-		return cpu, memory, nodeCores, []string{"no metrics backend configured; usage figures are unavailable"}
+		return cpu, memory, swap, nodeCores, []string{"no metrics backend configured; usage figures are unavailable"}
 	}
 
 	selector := ""
@@ -297,6 +301,15 @@ func (s *Server) sandboxSamples(
 		memory = vals
 	}
 
+	// A sandbox missing from this map has no swap series, which the row
+	// reports as unmeasured rather than zero.
+	swapQ := swapBytesQuery(labelSandbox, selector, dur, w.aggregate)
+	if vals, err := s.instantByLabel(ctx, swapQ, labelSandbox, w.end); err != nil {
+		warnings = append(warnings, "swap usage unavailable: "+err.Error())
+	} else {
+		swap = vals
+	}
+
 	// Node capacity is what turns "2 cores" into "half the machine". Its
 	// absence degrades a column rather than the answer, so a failure here is a
 	// warning and the percentages simply stay zero.
@@ -307,7 +320,7 @@ func (s *Server) sandboxSamples(
 		nodeCores = vals
 	}
 
-	return cpu, memory, nodeCores, warnings
+	return cpu, memory, swap, nodeCores, warnings
 }
 
 // labeledValue is one row of an instant query: the labels that identify it and

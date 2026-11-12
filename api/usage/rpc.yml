@@ -133,8 +133,12 @@ types:
       percent_of_node, not percent_of_limit: Miren sets no per-sandbox memory
       ceiling, so the host is the only meaningful denominator.
 
-      Peak, swap and OOM-kill counts are not here. The collector reads them from
-      the cgroup but does not publish them, so the service has nothing to report
+      bytes is resident memory (cgroup memory.current), which excludes pages
+      the kernel has swapped out. swap_bytes is reported beside it so pressure
+      that resident memory hides is still visible.
+
+      Peak and OOM-kill counts are not here. The collector reads them from the
+      cgroup but does not publish them, so the service has nothing to report
       and a zero would be a measurement nobody took.
     fields:
       - name: bytes
@@ -143,6 +147,14 @@ types:
       - name: percent_of_node
         type: float64
         index: 1
+      - name: swap_bytes
+        type: int64
+        index: 2
+        doc: |
+          Swapped-out memory (cgroup memory.swap.current), summed across the
+          sandbox's containers. Unset, not zero, when the sandbox's runner does
+          not report swap yet, so an older runner does not read as "no swap".
+          Only set on sandbox rows and sandbox detail, not on rollups.
 
   - type: SandboxUsage
     doc: One row of a top-style listing.
@@ -597,7 +609,7 @@ types:
       - name: metric
         type: string
         index: 0
-        doc: cpu_cores or memory_bytes
+        doc: cpu_cores, memory_bytes, or swap_bytes (sandbox history only)
       - name: points
         type: list
         element: "*UsagePoint"
