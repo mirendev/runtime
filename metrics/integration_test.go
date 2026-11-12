@@ -538,6 +538,34 @@ func TestMemoryUsage_Integration(t *testing.T) {
 		assert.Contains(t, data, " 104857600 ")
 	})
 
+	t.Run("RecordSwap writes swap_usage_bytes metric", func(t *testing.T) {
+		mu.Lock()
+		writtenMetrics = nil
+		mu.Unlock()
+
+		err := memUsage.RecordSwap(
+			context.Background(),
+			"test-app",
+			time.Now(),
+			units.Bytes(7340032),
+			map[string]string{"miren.sandbox": "sandbox/a"},
+		)
+		require.NoError(t, err)
+
+		writer.flush()
+
+		mu.Lock()
+		data := strings.Join(writtenMetrics, "\n")
+		mu.Unlock()
+
+		// The usage server queries swap_usage_bytes by miren_sandbox, so both
+		// the name and the sanitized label have to land as written here.
+		assert.Contains(t, data, "swap_usage_bytes{")
+		assert.NotContains(t, data, "memory_usage_bytes")
+		assert.Contains(t, data, `miren_sandbox="sandbox/a"`)
+		assert.Contains(t, data, " 7340032 ")
+	})
+
 	t.Run("UsageLastHour returns time series", func(t *testing.T) {
 		usage, err := memUsage.UsageLastHour("test-app")
 		require.NoError(t, err)

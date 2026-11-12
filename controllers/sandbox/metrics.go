@@ -223,6 +223,7 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 		var (
 			usage units.Microseconds
 			mem   units.Bytes
+			swap  units.Bytes
 		)
 
 		for k, m := range cg.cgroups {
@@ -236,6 +237,7 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 
 			usage += units.Microseconds(cur.CPU.UsageUsec - prev.CPU.UsageUsec)
 			mem += units.Bytes(cur.Memory.Usage)
+			swap += units.Bytes(cur.Memory.SwapUsage)
 		}
 
 		wallEnd := time.Now()
@@ -247,6 +249,10 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 		err = m.MemUsage.RecordUsage(ctx, name, wallEnd, mem, cg.attrs)
 		if err != nil {
 			m.Log.Error("failed to record memory usage", "err", err)
+		}
+		err = m.MemUsage.RecordSwap(ctx, name, wallEnd, swap, cg.attrs)
+		if err != nil {
+			m.Log.Error("failed to record swap usage", "err", err)
 		}
 
 		cg.lastReading = wallEnd

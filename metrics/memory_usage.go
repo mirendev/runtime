@@ -66,6 +66,34 @@ func (m *MemoryUsage) RecordUsage(
 	return m.Writer.WritePoint(ctx, point)
 }
 
+// RecordSwap writes how much of an entity's memory is swapped out. It is a
+// separate series from memory_usage_bytes because cgroup v2 accounts them
+// separately: memory.current excludes swapped pages, so resident memory alone
+// understates a sandbox that is under pressure.
+func (m *MemoryUsage) RecordSwap(
+	ctx context.Context,
+	entity string,
+	ts time.Time,
+	swap units.Bytes,
+	attrs map[string]string,
+) error {
+	if m.Writer == nil {
+		return nil
+	}
+
+	labels := make(map[string]string)
+	labels["entity"] = entity
+	labels["instance"] = m.instance
+	maps.Copy(labels, attrs)
+
+	return m.Writer.WritePoint(ctx, MetricPoint{
+		Name:      "swap_usage_bytes",
+		Labels:    labels,
+		Value:     float64(swap.Int64()),
+		Timestamp: ts,
+	})
+}
+
 type MemoryUsageAtTime struct {
 	Timestamp time.Time
 	Memory    units.Bytes
