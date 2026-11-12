@@ -69,6 +69,11 @@ func TestMetrics_SwapSeriesOnlyWhenAccounted(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cgroupRoot, "cgroup.controllers")); err != nil {
 		t.Skip("needs a cgroup2 hierarchy at " + cgroupRoot)
 	}
+	// Inside a private cgroup namespace the visible root is a non-root cgroup
+	// with swap accounting, so it can't stand in for an unaccounted one.
+	if _, err := os.Stat(filepath.Join(cgroupRoot, "memory.swap.current")); err == nil {
+		t.Skip("the visible root cgroup has swap accounting; no unaccounted cgroup to test")
+	}
 	self, err := os.ReadFile("/proc/self/cgroup")
 	require.NoError(t, err)
 	selfGroup := strings.TrimSpace(strings.TrimPrefix(string(self), "0::"))
