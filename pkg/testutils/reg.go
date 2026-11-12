@@ -13,6 +13,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	buildkit "github.com/moby/buildkit/client"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/netresolve"
@@ -269,6 +270,7 @@ func NewTestDeps() (*TestDeps, func()) {
 		if err := coord.Stop(shutdownCtx); err != nil {
 			log.Error("failed to stop test coordinator", "error", err)
 		}
+		deleteEtcdPrefix(shutdownCtx, log, prefix)
 		shutdownCancel()
 
 		if netServ != nil {
@@ -288,6 +290,24 @@ func NewTestDeps() (*TestDeps, func()) {
 	}
 
 	return deps, cleanup
+}
+
+// deleteEtcdPrefix removes the keys a test coordinator wrote, so repeated runs
+// against the dev environment's persistent etcd don't accumulate state.
+func deleteEtcdPrefix(ctx context.Context, log *slog.Logger, prefix string) {
+	client, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{"etcd:2379"},
+		DialTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		log.Warn("failed to connect to etcd to clean up test prefix", "prefix", prefix, "error", err)
+		return
+	}
+	defer client.Close()
+
+	if _, err := client.Delete(ctx, prefix, clientv3.WithPrefix()); err != nil {
+		log.Warn("failed to clean up test etcd prefix", "prefix", prefix, "error", err)
+	}
 }
 
 // NewImageImporter creates an ImageImporter using the test dependencies.
