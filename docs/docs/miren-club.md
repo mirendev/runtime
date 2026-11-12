@@ -76,8 +76,7 @@ Miren Club is a shared resource, so a few ground rules keep it pleasant for ever
 
 ## Need Help?
 
-- Questions about **Miren Club specifically** (access, the shared cluster, routing to `miren.club`)? Ask in **#miren** on [Discord](https://miren.dev/discord).
-- Questions about **using Miren generally**? Ask in **#feedback**, or check [Troubleshooting](./troubleshooting.md).
+Ask in **#miren** on [Discord](https://miren.dev/discord), whether it's about Miren Club (access, the shared cluster, routing to `miren.club`) or using Miren generally. You can also check [Troubleshooting](./troubleshooting.md).
 
 ## Next Steps
 
