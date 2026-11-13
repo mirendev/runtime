@@ -12,6 +12,7 @@ import (
 // honours an explicit pin, which is the behaviour every backend guarantees.
 type fixedResolver struct {
 	current map[string]string // path -> current version
+	owners  map[string]string // path -> owning app id
 	err     error
 	calls   int
 }
@@ -34,7 +35,7 @@ func (r *fixedResolver) ResolveRef(ctx context.Context, backend, ref string) (Se
 		}
 	}
 
-	return SecretValue{Ref: FormatRef(path, version), Bytes: []byte("value-of-" + path)}, nil
+	return SecretValue{Ref: FormatRef(path, version), Bytes: []byte("value-of-" + path), Owner: r.owners[path]}, nil
 }
 
 func TestPinResolvesFloatingReferences(t *testing.T) {
@@ -42,7 +43,7 @@ func TestPinResolvesFloatingReferences(t *testing.T) {
 
 	pinned, err := Pin(context.Background(), r, []Reference{
 		{Backend: ClusterBackendName, Ref: "payments/stripe-key", Key: "STRIPE_API_KEY"},
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"payments/stripe-key@x1A"}, pinned)
 }
@@ -55,11 +56,11 @@ func TestPinIsIdempotent(t *testing.T) {
 
 	refs := []Reference{{Backend: ClusterBackendName, Ref: "payments/stripe-key@x1A", Key: "STRIPE_API_KEY"}}
 
-	first, err := Pin(context.Background(), r, refs)
+	first, err := Pin(context.Background(), r, refs, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"payments/stripe-key@x1A"}, first)
 
-	second, err := Pin(context.Background(), r, []Reference{{Backend: ClusterBackendName, Ref: first[0], Key: "STRIPE_API_KEY"}})
+	second, err := Pin(context.Background(), r, []Reference{{Backend: ClusterBackendName, Ref: first[0], Key: "STRIPE_API_KEY"}}, "")
 	require.NoError(t, err)
 	assert.Equal(t, first, second)
 }
@@ -73,7 +74,7 @@ func TestPinPreservesOrder(t *testing.T) {
 		{Backend: ClusterBackendName, Ref: "a", Key: "A"},
 		{Backend: ClusterBackendName, Ref: "b", Key: "B"},
 		{Backend: ClusterBackendName, Ref: "c", Key: "C"},
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a@1", "b@2", "c@3"}, pinned)
 }
@@ -85,7 +86,7 @@ func TestPinErrorNamesTheVariable(t *testing.T) {
 
 	_, err := Pin(context.Background(), r, []Reference{
 		{Backend: ClusterBackendName, Ref: "payments/stripe-key", Key: "STRIPE_API_KEY"},
-	})
+	}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "STRIPE_API_KEY")
 	assert.Contains(t, err.Error(), ClusterBackendName)
@@ -97,7 +98,7 @@ func TestPinErrorNamesTheService(t *testing.T) {
 
 	_, err := Pin(context.Background(), r, []Reference{
 		{Backend: ClusterBackendName, Ref: "payments/stripe-key", Key: "STRIPE_API_KEY", Service: "worker"},
-	})
+	}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "worker")
 }
@@ -106,12 +107,12 @@ func TestPinRejectsIncompleteReferences(t *testing.T) {
 	r := &fixedResolver{current: map[string]string{"a": "1"}}
 
 	t.Run("no backend", func(t *testing.T) {
-		_, err := Pin(context.Background(), r, []Reference{{Ref: "a", Key: "A"}})
+		_, err := Pin(context.Background(), r, []Reference{{Ref: "a", Key: "A"}}, "")
 		assert.Error(t, err)
 	})
 
 	t.Run("no secret", func(t *testing.T) {
-		_, err := Pin(context.Background(), r, []Reference{{Backend: ClusterBackendName, Key: "A"}})
+		_, err := Pin(context.Background(), r, []Reference{{Backend: ClusterBackendName, Key: "A"}}, "")
 		assert.Error(t, err)
 	})
 }
@@ -119,8 +120,31 @@ func TestPinRejectsIncompleteReferences(t *testing.T) {
 func TestPinWithNoReferencesNeverCallsTheResolver(t *testing.T) {
 	r := &fixedResolver{current: map[string]string{}}
 
-	pinned, err := Pin(context.Background(), r, nil)
+	pinned, err := Pin(context.Background(), r, nil, "")
 	require.NoError(t, err)
 	assert.Empty(t, pinned)
 	assert.Zero(t, r.calls)
+}
+
+// Whatever a config references reaches that app's containers, so a config can
+// reference its own app's secrets and unowned ones, but never another app's.
+func TestPinRefusesAnotherAppsSecret(t *testing.T) {
+	r := &fixedResolver{
+		current: map[string]string{"shop/db": "x1", "other/db": "x2", "shared/key": "x3"},
+		owners:  map[string]string{"shop/db": "app/shop", "other/db": "app/other"},
+	}
+	ref := func(path string) []Reference {
+		return []Reference{{Backend: ClusterBackendName, Ref: path, Key: "DB"}}
+	}
+
+	_, err := Pin(context.Background(), r, ref("shop/db"), "app/shop")
+	require.NoError(t, err)
+
+	_, err = Pin(context.Background(), r, ref("shared/key"), "app/shop")
+	require.NoError(t, err)
+
+	_, err = Pin(context.Background(), r, ref("other/db"), "app/shop")
+	require.ErrorIs(t, err, ErrOwnedByOtherApp)
+	assert.Contains(t, err.Error(), "variable DB")
+	assert.NotContains(t, err.Error(), "value-of-")
 }

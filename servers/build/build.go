@@ -1460,22 +1460,8 @@ type ephemeralOpts struct {
 // pinSecrets rewrites every backend-sourced variable in the spec to the exact
 // version it resolves to, so the ConfigVersion about to be minted records what
 // the deploy actually shipped with rather than a floating reference.
-//
-// A config with no such variables never needs a resolver, which keeps a cluster
-// that has no secret backends registered working exactly as before. One that
-// does reference a backend fails the deploy rather than starting an app whose
-// credential silently never arrived.
-func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec) error {
-	refs := coreutil.SecretReferences(spec)
-	if len(refs) == 0 {
-		return nil
-	}
-
-	if b.Secrets == nil {
-		return fmt.Errorf("config references secret %s but this cluster has no secret backends configured", refs[0])
-	}
-
-	return coreutil.PinSecrets(ctx, b.Secrets, spec)
+func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec, app entity.Id) error {
+	return coreutil.PinSecrets(ctx, b.Secrets, spec, app)
 }
 
 // resolveBuildSecrets resolves the [[build.secrets]] declared in app.toml to
@@ -1493,7 +1479,7 @@ func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec)
 // language stack mounts it on its dependency install step at the secret's env or
 // file target, so a secret declared without one is rejected rather than resolved
 // and silently ignored.
-func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConfig, stack string) (map[string][]byte, error) {
+func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConfig, stack string, app entity.Id) (map[string][]byte, error) {
 	if ac == nil || ac.Build == nil || len(ac.Build.Secrets) == 0 {
 		return nil, nil
 	}
@@ -1519,6 +1505,9 @@ func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConf
 		sv, err := b.Secrets.ResolveRef(ctx, backend, bs.Ref)
 		if err != nil {
 			return nil, fmt.Errorf("resolving build secret %q (%s/%s): %w", bs.ID, backend, bs.Ref, err)
+		}
+		if err := secret.CheckOwner(sv, string(app)); err != nil {
+			return nil, fmt.Errorf("build secret %q (%s/%s): %w", bs.ID, backend, bs.Ref, err)
 		}
 		resolved[bs.ID] = sv.Bytes
 	}

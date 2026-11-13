@@ -771,6 +771,13 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			return nil
 		}
 
+		// Pin like every other path that mints a ConfigVersion, which is
+		// also where a reference to another app's secret is refused.
+		if err := coreutil.PinSecrets(ctx, d.Secrets, spec, appEntity.ID); err != nil {
+			results.SetError(fmt.Sprintf("failed to pin preview config: %v", err))
+			return nil
+		}
+
 		ephName := appName + "-eph-" + idgen.Gen("v")
 		ephVersion.Version = ephName
 
@@ -1537,6 +1544,12 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 	spec.Variables = make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
 	for _, v := range varMap {
 		spec.Variables = append(spec.Variables, v)
+	}
+	// The merged env comes from the caller, so it goes through the same
+	// pinning every other ConfigVersion does. That is where a literal posing
+	// as a reference to another app's secret is refused.
+	if err := coreutil.PinSecrets(ctx, d.Secrets, spec, base.App); err != nil {
+		return nil, err
 	}
 	// Keep the legacy inline variables in step for older readers.
 	derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(spec.Variables))

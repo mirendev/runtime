@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/secret"
 )
 
@@ -21,16 +23,21 @@ type Server struct {
 	log      *slog.Logger
 	registry *secret.Registry
 	rotator  KeyRotator
+
+	// eac looks up the app that owns a secret, so a caller can be checked
+	// against it. See ownership.go.
+	eac *entityserver_v1alpha.EntityAccessClient
 }
 
 var _ secret_v1alpha.Secrets = (*Server)(nil)
 
 // NewServer builds the secrets RPC server.
-func NewServer(log *slog.Logger, registry *secret.Registry, rotator KeyRotator) *Server {
+func NewServer(log *slog.Logger, registry *secret.Registry, rotator KeyRotator, eac *entityserver_v1alpha.EntityAccessClient) *Server {
 	return &Server{
 		log:      log.With("module", "secrets-rpc"),
 		registry: registry,
 		rotator:  rotator,
+		eac:      eac,
 	}
 }
 
@@ -62,7 +69,27 @@ func (s *Server) Set(ctx context.Context, state *secret_v1alpha.SecretsSet) erro
 	// not: the read can be stale by the time the write lands, and it decrypts
 	// where the reuse check does not — so an enabled version this server cannot
 	// decrypt would be reused by Put and reported as a fresh one here.
-	version, reused, err := backend.Put(ctx, path, value)
+	var (
+		version string
+		reused  bool
+	)
+	owner, err := s.ownershipForSet(ctx, args.App())
+	if err != nil {
+		return err
+	}
+	// Authorize against the owner of the row the write lands on, read inside
+	// the write itself, so a secret another app creates in the meantime is
+	// refused rather than overwritten.
+	owner.Authorize = func(ctx context.Context, ownedBy string) error {
+		return s.authorizeOwner(ctx, ownedBy, actionWrite)
+	}
+	if owned, ok := backend.(secret.OwnedBackend); ok {
+		version, reused, err = owned.PutOwned(ctx, path, value, owner)
+	} else if owner.Require {
+		return fmt.Errorf("backend %q does not support secrets that belong to an app", backendName)
+	} else {
+		version, reused, err = backend.Put(ctx, path, value)
+	}
 	if err != nil {
 		return err
 	}
@@ -89,9 +116,17 @@ func (s *Server) List(ctx context.Context, state *secret_v1alpha.SecretsList) er
 		return err
 	}
 
+	owners := newOwnerView(s)
 	infos := make([]*secret_v1alpha.SecretInfo, 0, len(summaries))
 	for _, summary := range summaries {
-		infos = append(infos, encodeSummary(summary))
+		app, visible, err := owners.lookup(ctx, summary.Owner)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			continue
+		}
+		infos = append(infos, encodeSummary(summary, app))
 	}
 
 	state.Results().SetSecrets(infos)
@@ -107,7 +142,8 @@ func (s *Server) ListVersions(ctx context.Context, state *secret_v1alpha.Secrets
 		return fmt.Errorf("secret path is required")
 	}
 
-	backend, err := s.listable(backendOrDefault(args.Backend()))
+	backendName := backendOrDefault(args.Backend())
+	backend, err := s.listable(backendName)
 	if err != nil {
 		return err
 	}
@@ -117,7 +153,17 @@ func (s *Server) ListVersions(ctx context.Context, state *secret_v1alpha.Secrets
 		return err
 	}
 
-	state.Results().SetSecret(encodeSummary(summary))
+	// Authorize against the owner of what was actually read, not a lookup
+	// made beforehand that a concurrent create could have outdated.
+	app, visible, err := newOwnerView(s).lookup(ctx, summary.Owner)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return errOtherAppsSecret
+	}
+
+	state.Results().SetSecret(encodeSummary(summary, app))
 	return nil
 }
 
@@ -138,6 +184,10 @@ func (s *Server) SetState(ctx context.Context, state *secret_v1alpha.SecretsSetS
 	backendName := backendOrDefault(args.Backend())
 	backend, err := s.registry.Writable(backendName)
 	if err != nil {
+		return err
+	}
+
+	if err := s.authorizeRef(ctx, backendName, ref, actionWrite); err != nil {
 		return err
 	}
 
@@ -192,11 +242,16 @@ func parseState(s string) (secret.VersionState, error) {
 	return "", fmt.Errorf("unknown secret version state %q, want enabled, disabled or destroyed", s)
 }
 
-func encodeSummary(summary secret.Summary) *secret_v1alpha.SecretInfo {
+// encodeSummary renders a summary for the wire. app is the owning app's name,
+// or empty for an unowned secret.
+func encodeSummary(summary secret.Summary, app string) *secret_v1alpha.SecretInfo {
 	info := &secret_v1alpha.SecretInfo{}
 	info.SetPath(summary.Path)
 	info.SetBackend(summary.Backend)
 	info.SetCurrentVersion(summary.CurrentVersion)
+	if app != "" {
+		info.SetApp(app)
+	}
 
 	versions := make([]*secret_v1alpha.SecretVersionInfo, 0, len(summary.Versions))
 	for _, v := range summary.Versions {
@@ -325,10 +380,10 @@ func (s *Server) RotateKey(ctx context.Context, state *secret_v1alpha.SecretsRot
 // place plaintext leaves the coordinator, and the guarantee is otherwise
 // invisible at the call site.
 //
-// What that does *not* yet give us is per-secret scoping — any authenticated
-// caller can resolve any reference. RFD-90 leaves that open ("Per-secret access
-// scoping"), and it wants deciding before secrets carry anything an operator
-// would not hand every workload in the cluster.
+// On top of that, a secret owned by an app resolves only for callers that may
+// read that app: a caller bound to another app is refused, and under Cloud
+// authorization the caller needs read on the owning app. Unowned secrets and
+// unbound callers, runners among them, are not narrowed. See ownership.go.
 //
 // It is deliberately not logged at Info. Unlike a write or a revocation, a
 // resolve happens on every sandbox start, so recording each one would drown the
@@ -349,7 +404,28 @@ func (s *Server) Resolve(ctx context.Context, state *secret_v1alpha.SecretsResol
 		return err
 	}
 
+	// Authorize against the owner the resolve reported, so the check and the
+	// value come from the same read.
+	if err := s.authorizeOwner(ctx, val.Owner, actionRead); err != nil {
+		return err
+	}
+
+	// Plaintext of an owned secret leaves the coordinator only for a request
+	// that names the app it is for, and only when that is the owner. Runners
+	// name the sandbox's app; one that predates ownership names none and so
+	// is refused, rather than handed a value it would not know to keep from
+	// another app's sandbox.
+	if val.Owner != "" && args.AppId() != val.Owner {
+		if args.AppId() == "" {
+			return fmt.Errorf("%w: secret %s belongs to an app, and resolving it requires naming that app; a runner that predates secret ownership cannot", rpc.ErrUnauthorized, ref)
+		}
+		return fmt.Errorf("%w: %s", secret.ErrOwnedByOtherApp, ref)
+	}
+
 	state.Results().SetRef(val.Ref)
 	state.Results().SetValue(val.Bytes)
+	if val.Owner != "" {
+		state.Results().SetOwnerId(val.Owner)
+	}
 	return nil
 }

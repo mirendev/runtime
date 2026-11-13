@@ -30,6 +30,7 @@ import (
 // that an omitted backend defaults to "cluster").
 type stubSecretResolver struct {
 	values   map[string]string // ref -> plaintext
+	owners   map[string]string // ref -> owning app id
 	backends map[string]string // ref -> backend seen on the resolve call
 	calls    int
 }
@@ -44,7 +45,7 @@ func (r *stubSecretResolver) ResolveRef(_ context.Context, backend, ref string) 
 	if !ok {
 		return secret.SecretValue{}, errors.New("no such secret")
 	}
-	return secret.SecretValue{Ref: ref, Bytes: []byte(v)}, nil
+	return secret.SecretValue{Ref: ref, Bytes: []byte(v), Owner: r.owners[ref]}, nil
 }
 
 func newTestBuilder(secrets secret.Resolver) *Builder {
@@ -74,7 +75,7 @@ func TestResolveBuildSecretsResolvesEachEntry(t *testing.T) {
 		appconfig.BuildSecret{ID: "license", Backend: "cluster", Ref: "licenses/compiler"},
 	)
 
-	got, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile")
+	got, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile", "")
 	r.NoError(err)
 	r.Equal(map[string][]byte{
 		"npm_token": []byte("npm-secret"),
@@ -97,7 +98,7 @@ func TestResolveBuildSecretsDefaultsBackendToCluster(t *testing.T) {
 		appconfig.BuildSecret{ID: "npm_token", Ref: "registry/npm-token"},
 	)
 
-	got, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile")
+	got, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile", "")
 	r.NoError(err)
 	r.Equal(map[string][]byte{"npm_token": []byte("npm-secret")}, got)
 	r.Equal(secret.ClusterBackendName, resolver.backends["registry/npm-token"])
@@ -118,7 +119,7 @@ func TestResolveBuildSecretsWithoutTargetRejectedForAutoStack(t *testing.T) {
 
 	// An auto-detected language stack needs a target to know where to mount the
 	// secret, so one without is rejected before the resolver is ever touched.
-	_, err := b.resolveBuildSecrets(context.Background(), ac, "auto")
+	_, err := b.resolveBuildSecrets(context.Background(), ac, "auto", "")
 	r.Error(err)
 	r.Contains(err.Error(), `build secret "npm_token" has no env or file target`)
 	r.Zero(resolver.calls, "an untargeted secret must fail the build before resolving any secret")
@@ -137,7 +138,7 @@ func TestResolveBuildSecretsForAutoStack(t *testing.T) {
 		appconfig.BuildSecret{ID: "netrc", Ref: "github/netrc", File: "~/.netrc"},
 	)
 
-	got, err := b.resolveBuildSecrets(context.Background(), ac, "auto")
+	got, err := b.resolveBuildSecrets(context.Background(), ac, "auto", "")
 	r.NoError(err)
 	r.Equal(map[string][]byte{
 		"npm_token": []byte("npm-secret"),
@@ -163,7 +164,7 @@ func TestResolveBuildSecretsNilWhenNoneDeclared(t *testing.T) {
 	} {
 		// "auto" stack too: with nothing declared, the short-circuit wins and the
 		// auto-stack guard never fires.
-		got, err := b.resolveBuildSecrets(context.Background(), ac, "auto")
+		got, err := b.resolveBuildSecrets(context.Background(), ac, "auto", "")
 		r.NoError(err)
 		r.Nil(got)
 	}
@@ -178,7 +179,7 @@ func TestResolveBuildSecretsErrorsWhenNoBackendsConfigured(t *testing.T) {
 		appconfig.BuildSecret{ID: "npm_token", Backend: "cluster", Ref: "registry/npm-token"},
 	)
 
-	_, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile")
+	_, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile", "")
 	r.Error(err)
 	r.Contains(err.Error(), "no secret backends configured")
 	r.Contains(err.Error(), "npm_token")
@@ -193,7 +194,7 @@ func TestResolveBuildSecretsPropagatesResolverError(t *testing.T) {
 		appconfig.BuildSecret{ID: "npm_token", Backend: "cluster", Ref: "registry/missing"},
 	)
 
-	_, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile")
+	_, err := b.resolveBuildSecrets(context.Background(), ac, "dockerfile", "")
 	r.Error(err)
 	r.Contains(err.Error(), "npm_token")
 }
@@ -270,4 +271,24 @@ func TestAttachBuildSecretsDeliversByID(t *testing.T) {
 	_, err = client.GetSecret(context.Background(), &bksecrets.GetSecretRequest{ID: "unknown"})
 	r.Error(err)
 	assert.Equal(t, codes.NotFound, status.Code(err), "an undeclared id must not resolve to some other secret")
+}
+
+// A build mounts only its own app's secrets and unowned ones. Another app's
+// secret is refused before its value reaches BuildKit.
+func TestResolveBuildSecretsRefusesAnotherAppsSecret(t *testing.T) {
+	resolver := &stubSecretResolver{
+		values: map[string]string{"shop/npm": "mine", "other/npm": "theirs"},
+		owners: map[string]string{"shop/npm": "app/shop", "other/npm": "app/other"},
+	}
+	b := newTestBuilder(resolver)
+
+	got, err := b.resolveBuildSecrets(context.Background(),
+		buildSecretConfig(appconfig.BuildSecret{ID: "npm", Ref: "shop/npm"}), "dockerfile", "app/shop")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("mine"), got["npm"])
+
+	_, err = b.resolveBuildSecrets(context.Background(),
+		buildSecretConfig(appconfig.BuildSecret{ID: "npm", Ref: "other/npm"}), "dockerfile", "app/shop")
+	require.ErrorIs(t, err, secret.ErrOwnedByOtherApp)
+	assert.NotContains(t, err.Error(), "theirs")
 }

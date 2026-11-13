@@ -77,7 +77,7 @@ func (c *SecretStore) Start(ctx context.Context) error {
 	c.registry = registry
 	c.keyRotation = rotation
 	server := c.state.Server()
-	server.ExposeValue("dev.miren.runtime/secrets", secret_v1alpha.AdaptSecrets(secretsrv.NewServer(c.Log, registry, rotation)))
+	server.ExposeValue("dev.miren.runtime/secrets", secret_v1alpha.AdaptSecrets(secretsrv.NewServer(c.Log, registry, rotation, c.eac)))
 	return nil
 }
 
