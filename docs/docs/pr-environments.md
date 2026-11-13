@@ -28,7 +28,7 @@ When you run `miren deploy --ephemeral <label>`:
 
 1. Miren builds the version but doesn't activate it. The active version keeps serving production traffic.
 2. The new version is reachable at `<label>.<your-app-host>`. A request for any subdomain of an existing route is looked up against ephemeral labels for that route — no separate route entity needed.
-3. After the TTL elapses (default 24 hours), a background controller deletes the version.
+3. After the TTL elapses (default 7 days), a background controller deletes the version.
 
 Ephemeral deploys don't create deployment history records, don't take the deployment lock, and don't block normal deploys.
 
