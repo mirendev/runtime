@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.18.0
+*2026-11-16*
+
 **Upgrade Notes**
 - **Scripts in multi-target apps need an explicit target** - In directories with several targets in `.miren/deploy.toml`, unattended app commands such as `logs` and `env set` now require `-C <target>` or `MIREN_CLUSTER`. Target order no longer selects a default. Deploys without targets also require explicit cluster selection when several clusters are configured, rather than using the global active cluster. Existing command names and deprecated flags remain available during the transition; see [CLI compatibility](./cli-compatibility.md). ([#1419](https://github.com/mirendev/runtime/pull/1419))
 - **Back up the new cluster sealing key** - The coordinator now keeps its CA, secret keyring, registration, and other small metadata in etcd, so an etcd snapshot can bring a coordinator back without its original credential files. That metadata is encrypted under a host-only key that Miren generates on first start at `<data-path>/server/cluster-sealing.key` and never sends anywhere. Back it up separately from your snapshots. Without it, a snapshot can't decrypt your secrets, and a restore with a missing or wrong key refuses to start. See [Coordinator metadata](./server-config.md#coordinator-metadata). ([#1349](https://github.com/mirendev/runtime/pull/1349))
