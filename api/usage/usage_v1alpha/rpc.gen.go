@@ -393,6 +393,7 @@ func (v *CpuUsage) UnmarshalJSON(data []byte) error {
 type memoryUsageData struct {
 	Bytes         *int64   `cbor:"0,keyasint,omitempty" json:"bytes,omitempty"`
 	PercentOfNode *float64 `cbor:"1,keyasint,omitempty" json:"percent_of_node,omitempty"`
+	SwapBytes     *int64   `cbor:"2,keyasint,omitempty" json:"swap_bytes,omitempty"`
 }
 
 type MemoryUsage struct {
@@ -427,6 +428,21 @@ func (v *MemoryUsage) PercentOfNode() float64 {
 
 func (v *MemoryUsage) SetPercentOfNode(percent_of_node float64) {
 	v.data.PercentOfNode = &percent_of_node
+}
+
+func (v *MemoryUsage) HasSwapBytes() bool {
+	return v.data.SwapBytes != nil
+}
+
+func (v *MemoryUsage) SwapBytes() int64 {
+	if v.data.SwapBytes == nil {
+		return 0
+	}
+	return *v.data.SwapBytes
+}
+
+func (v *MemoryUsage) SetSwapBytes(swap_bytes int64) {
+	v.data.SwapBytes = &swap_bytes
 }
 
 func (v *MemoryUsage) MarshalCBOR() ([]byte, error) {

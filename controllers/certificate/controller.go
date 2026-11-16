@@ -25,6 +25,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -36,6 +37,10 @@ type Controller struct {
 	email            string
 	dnsProvider      string
 	clusterHostnames []string
+	// fallbackCert answers handshakes that carry no SNI, as the autocert
+	// ingress does. The local readiness probe connects by IP, so without
+	// it every upgrade on a DNS-01 cluster fails its ready check.
+	fallbackCert *tls.Certificate
 
 	client     *lego.Client
 	user       *legoUser
@@ -121,9 +126,14 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 		return fmt.Errorf("failed to create certs directory: %w", err)
 	}
 
+	fallbackCert, err := autotls.LoadOrGenerateFallbackCert(certsDir)
+	if err != nil {
+		return fmt.Errorf("loading fallback certificate: %w", err)
+	}
+	c.fallbackCert = &fallbackCert
+
 	// Load or create account
 	var user *legoUser
-	var err error
 	if c.shared != nil {
 		user, err = c.ensureSharedAccount(ctx, certsDir)
 	} else {
@@ -502,6 +512,9 @@ func (c *Controller) getCachedCert(domain string) *cachedCert {
 func (c *Controller) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	domain := hello.ServerName
 	if domain == "" {
+		if c.fallbackCert != nil {
+			return c.fallbackCert, nil
+		}
 		return nil, fmt.Errorf("no SNI provided")
 	}
 

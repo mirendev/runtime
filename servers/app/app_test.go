@@ -1609,3 +1609,76 @@ func TestSetConfiguration_DropsAddonBindings(t *testing.T) {
 	assert.NotContains(t, keys, "DATABASE_URL",
 		"an addon binding handed back by the client must not be written into a version")
 }
+
+// ownerResolver reports a fixed owner per path, so a test can point one app's
+// config at another app's secret.
+type ownerResolver map[string]string // path -> owning app id
+
+func (o ownerResolver) ResolveRef(ctx context.Context, backend, ref string) (secret.SecretValue, error) {
+	path, _, err := secret.ParseRef(ref)
+	if err != nil {
+		return secret.SecretValue{}, err
+	}
+	return secret.SecretValue{Ref: path + "@x1", Bytes: []byte("value"), Owner: o[path]}, nil
+}
+
+// Every app write path that stores a reference refuses one to another app's
+// secret, since whatever the config references reaches that app's containers.
+func TestConfigWritePathsRefuseAnotherAppsSecret(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	shop, err := inmem.Client.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	other, err := inmem.Client.Create(ctx, "other", &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	appInfo := &AppInfo{
+		Log:     slog.Default(),
+		EC:      ec,
+		CPU:     &metrics.CPUUsage{},
+		Mem:     &metrics.MemoryUsage{},
+		HTTP:    &metrics.HTTPMetrics{},
+		Secrets: ownerResolver{"shop/db": string(shop), "other/db": string(other)},
+	}
+	client := &app_v1alpha.CrudClient{Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo))}
+
+	reference := func(path string) *app_v1alpha.NamedValue {
+		nv := &app_v1alpha.NamedValue{}
+		nv.SetKey("DATABASE_URL")
+		nv.SetValue(path)
+		nv.SetBackend("cluster")
+		return nv
+	}
+	configWith := func(path string) *app_v1alpha.Configuration {
+		cfg := &app_v1alpha.Configuration{}
+		cfg.SetEnvVars([]*app_v1alpha.NamedValue{reference(path)})
+		return cfg
+	}
+
+	_, err = client.SetConfiguration(ctx, "shop", configWith("shop/db"))
+	require.NoError(t, err)
+	_, err = client.SetEnvVars(ctx, "shop", []*app_v1alpha.NamedValue{reference("shop/db")}, "")
+	require.NoError(t, err)
+
+	_, err = client.SetConfiguration(ctx, "shop", configWith("other/db"))
+	require.ErrorContains(t, err, "belongs to another app")
+	_, err = client.SetEnvVars(ctx, "shop", []*app_v1alpha.NamedValue{reference("other/db")}, "")
+	require.ErrorContains(t, err, "belongs to another app")
+	// A literal shaped like a reference names no backend, so it carries no
+	// reference to pin; it is refused anyway, or the runner would resolve it
+	// at container start with no ownership check at all.
+	literal := &app_v1alpha.NamedValue{}
+	literal.SetKey("DATABASE_URL")
+	literal.SetValue(secret.FormatSentinel("cluster", "other/db"))
+	sneaky := &app_v1alpha.Configuration{}
+	sneaky.SetEnvVars([]*app_v1alpha.NamedValue{literal})
+
+	_, err = client.SetConfiguration(ctx, "shop", sneaky)
+	require.ErrorContains(t, err, "reserved for secret references")
+	_, err = client.SetEnvVars(ctx, "shop", []*app_v1alpha.NamedValue{literal}, "")
+	require.ErrorContains(t, err, "reserved for secret references")
+}

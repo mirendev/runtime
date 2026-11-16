@@ -44,6 +44,14 @@ var (
 	// only implements SecretBackend — an external manager Miren references but
 	// does not own.
 	ErrReadOnlyBackend = errors.New("secret backend is read-only")
+
+	// ErrOwnedByOtherApp means a write on behalf of one app reached a secret
+	// another app owns.
+	ErrOwnedByOtherApp = errors.New("secret belongs to another app")
+
+	// ErrNotOwned means a write that required an owner reached an existing
+	// secret that belongs to no app. An owner is assigned only on creation.
+	ErrNotOwned = errors.New("secret belongs to no app")
 )
 
 // VersionState is the lifecycle state of a single secret version. Only
@@ -68,6 +76,10 @@ type SecretValue struct {
 
 	// Bytes is the raw secret value for Ref. Callers must not persist it.
 	Bytes []byte
+
+	// Owner is the id of the app that owns the secret, or empty when any app
+	// may reference it. Only backends that track ownership set it.
+	Owner string
 }
 
 // A SecretBackend resolves references to secret values. Implementations talk to
@@ -140,6 +152,53 @@ type Summary struct {
 	Backend        string
 	CurrentVersion string
 	Versions       []VersionSummary
+
+	// Owner is the id of the app that owns the secret, or empty.
+	Owner string
+}
+
+// An OwnedBackend records which app, if any, owns each secret.
+//
+// Ownership is what lets one cluster store hold every app's credentials without
+// every app being able to reach every other's. It is a property of the secret,
+// not of its path, so the namespace stays open: an operator's secret keeps
+// whatever path it had, and no path shape grants or denies anything. Enforcement
+// lives with the callers that know who is asking, the secrets RPC and config
+// pinning; the backend only stores the answer and refuses a write that would
+// cross it.
+type OwnedBackend interface {
+	SecretBackend
+
+	// Owner returns the id of the app that owns the secret at path, or empty
+	// when the secret is unowned. It returns ErrNotFound when no secret exists
+	// there.
+	Owner(ctx context.Context, path string) (string, error)
+
+	// PutOwned is Put on behalf of an app. When the write creates the secret,
+	// owner.App becomes its owner; an existing secret keeps the owner it has.
+	// A write for one app to a secret another app owns fails with
+	// ErrOwnedByOtherApp. An empty owner behaves exactly like Put.
+	PutOwned(ctx context.Context, path string, value []byte, owner Ownership) (version string, reused bool, err error)
+}
+
+// Ownership says which app a write is on behalf of.
+type Ownership struct {
+	// App is the id of the app the write is for, or empty for none.
+	App string
+
+	// Require makes the write fail unless the secret ends up owned by App.
+	// Without it, writing to an existing unowned secret leaves it unowned,
+	// which is right for a caller that merely happens to be bound to an app.
+	// With it, that write fails with ErrNotOwned instead, which is right for a
+	// caller that explicitly asked for the secret to belong to App.
+	Require bool
+
+	// Authorize, when set, is called inside the write with the owner of the
+	// secret about to be written (empty for unowned), and the write stops if
+	// it returns an error. It lets a caller authorize the row it actually
+	// writes, rather than a lookup made earlier that a concurrent create
+	// could have outdated.
+	Authorize func(ctx context.Context, owner string) error
 }
 
 // A ListableBackend can enumerate what it holds. It is optional: an external
@@ -162,6 +221,15 @@ type ListableBackend interface {
 // can satisfy it over RPC against the control plane instead.
 type Resolver interface {
 	ResolveRef(ctx context.Context, backend, ref string) (SecretValue, error)
+}
+
+// An AppResolver can say which app a value is for when it resolves one. A
+// resolver that hands plaintext across a trust boundary implements it, so the
+// side holding the keys can refuse an owned secret to any other app, and to a
+// caller that does not say.
+type AppResolver interface {
+	Resolver
+	ResolveRefForApp(ctx context.Context, backend, ref, app string) (SecretValue, error)
 }
 
 // KeyState describes one key in a backend's keyring.

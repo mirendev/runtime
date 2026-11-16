@@ -130,7 +130,7 @@ func (s *Server) sandboxDetail(
 
 	sel := labelSelector(map[string]string{labelSandbox: found.ref.Sandbox()})
 
-	cores, bytes, sampleWarnings := s.singleSandboxSamples(ctx, sel, w)
+	cores, bytes, swap, sampleWarnings := s.singleSandboxSamples(ctx, sel, w)
 	out.warnings = append(out.warnings, sampleWarnings...)
 
 	var cpu usage_v1alpha.CpuUsage
@@ -146,6 +146,9 @@ func (s *Server) sandboxDetail(
 
 	var mem usage_v1alpha.MemoryUsage
 	mem.SetBytes(int64(bytes))
+	if swap != nil {
+		mem.SetSwapBytes(int64(*swap))
+	}
 	row.SetMemory(&mem)
 
 	row.SetStale(cores == 0 && bytes == 0)
@@ -220,9 +223,11 @@ func (s *Server) HttpGetSandbox(ctx context.Context, state *usage_v1alpha.Resour
 	return nil
 }
 
-func (s *Server) singleSandboxSamples(ctx context.Context, selector string, w window) (cores, bytes float64, warnings []string) {
+// swap is nil when the sandbox has no swap series, which is what a runner that
+// predates swap reporting looks like; zero would claim a measurement.
+func (s *Server) singleSandboxSamples(ctx context.Context, selector string, w window) (cores, bytes float64, swap *float64, warnings []string) {
 	if s.Reader == nil {
-		return 0, 0, []string{"no metrics backend configured; usage figures are unavailable"}
+		return 0, 0, nil, []string{"no metrics backend configured; usage figures are unavailable"}
 	}
 
 	dur := w.duration()
@@ -243,10 +248,18 @@ func (s *Server) singleSandboxSamples(ctx context.Context, selector string, w wi
 		}
 	}
 
-	return cores, bytes, warnings
+	if vals, err := s.instantByLabel(ctx, swapBytesQuery(labelSandbox, selector, dur, w.aggregate), labelSandbox, w.end); err != nil {
+		warnings = append(warnings, "swap usage unavailable: "+err.Error())
+	} else {
+		for _, v := range vals {
+			swap = &v
+		}
+	}
+
+	return cores, bytes, swap, warnings
 }
 
-// sandboxSeries fetches CPU and memory over time for charting. step is already
+// sandboxSeries fetches CPU, memory and swap over time for charting. step is already
 // resolved by the caller, which is also what reports it on the window.
 func (s *Server) sandboxSeries(ctx context.Context, selector string, w window, step time.Duration) ([]*usage_v1alpha.UsageSeries, []string) {
 	if s.Reader == nil {
@@ -262,6 +275,7 @@ func (s *Server) sandboxSeries(ctx context.Context, selector string, w window, s
 	}{
 		{"cpu_cores", cpuCoresQuery(labelSandbox, selector, step, aggregateAvg)},
 		{"memory_bytes", memoryBytesQuery(labelSandbox, selector, step, aggregateLast)},
+		{"swap_bytes", swapBytesQuery(labelSandbox, selector, step, aggregateLast)},
 	}
 
 	for _, q := range queries {

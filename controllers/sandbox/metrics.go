@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -18,8 +20,16 @@ import (
 	"miren.dev/runtime/pkg/units"
 )
 
+// cgroupRoot is where cgroup2.Load resolves group paths by default.
+const cgroupRoot = "/sys/fs/cgroup"
+
 type Cgroups struct {
 	cgroups map[string]*cgroup2.Manager
+
+	// swapFiles are each container's memory.swap.current. Stat reports 0 when
+	// the file is missing, which is what a host with swap accounting off looks
+	// like, so swap is only recorded while every one of them exists.
+	swapFiles []string
 
 	attrs       map[string]string
 	lastReading time.Time
@@ -100,6 +110,7 @@ func (m *Metrics) add(name string, pathes map[string]string, attributes map[stri
 		}
 
 		cg.cgroups[k] = man
+		cg.swapFiles = append(cg.swapFiles, filepath.Join(cgroupRoot, v, "memory.swap.current"))
 	}
 
 	m.namedEntries[name] = &cg
@@ -223,6 +234,7 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 		var (
 			usage units.Microseconds
 			mem   units.Bytes
+			swap  units.Bytes
 		)
 
 		for k, m := range cg.cgroups {
@@ -236,6 +248,7 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 
 			usage += units.Microseconds(cur.CPU.UsageUsec - prev.CPU.UsageUsec)
 			mem += units.Bytes(cur.Memory.Usage)
+			swap += units.Bytes(cur.Memory.SwapUsage)
 		}
 
 		wallEnd := time.Now()
@@ -248,11 +261,28 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 		if err != nil {
 			m.Log.Error("failed to record memory usage", "err", err)
 		}
+		// Without accounting the series stays absent, which the usage API
+		// reports as unmeasured rather than as no swap.
+		if cg.swapAccounted() {
+			err = m.MemUsage.RecordSwap(ctx, name, wallEnd, swap, cg.attrs)
+			if err != nil {
+				m.Log.Error("failed to record swap usage", "err", err)
+			}
+		}
 
 		cg.lastReading = wallEnd
 	}
 
 	return nil
+}
+
+func (cg *Cgroups) swapAccounted() bool {
+	for _, f := range cg.swapFiles {
+		if _, err := os.Stat(f); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Metrics) Monitor(ctx context.Context) {

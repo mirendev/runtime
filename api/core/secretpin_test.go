@@ -79,7 +79,7 @@ func TestPinSecretsRewritesReferencesInPlace(t *testing.T) {
 		}},
 	}
 
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 
 	assert.Equal(t, "payments/stripe-key@x1A", spec.Variables[1].Value)
 	assert.Equal(t, "auth/signing@42", spec.Services[0].Env[1].Value)
@@ -102,7 +102,7 @@ func TestPinSecretsRepinsFloatingButHoldsExplicitVersions(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 
 	assert.Equal(t, "payments/stripe-key@m4Q", spec.Variables[0].Value)
 	assert.Equal(t, "payments/stripe-key@x1A", spec.Variables[1].Value)
@@ -119,12 +119,12 @@ func TestPinSecretsIsIdempotent(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 	first := spec.Variables[0].Value
 
 	// The secret rotates underneath, but the now-pinned reference does not move.
 	r.current["payments/stripe-key"] = "m4Q"
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 
 	assert.Equal(t, first, spec.Variables[0].Value)
 }
@@ -138,7 +138,7 @@ func TestPinSecretsSkipsConfigsWithNoReferences(t *testing.T) {
 		Variables: []core_v1alpha.ConfigSpecVariables{{Key: "PLAIN", Value: "10"}},
 	}
 
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 	assert.Zero(t, r.calls)
 }
 
@@ -154,7 +154,7 @@ func TestPinSecretsFailsClosed(t *testing.T) {
 		},
 	}
 
-	err := PinSecrets(context.Background(), r, spec)
+	err := PinSecrets(context.Background(), r, spec, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "STRIPE_API_KEY")
 	assert.Equal(t, "payments/stripe-key", spec.Variables[0].Value)
@@ -172,10 +172,26 @@ func TestPinSecretsRejectsALiteralPosingAsAReference(t *testing.T) {
 		},
 	}
 
-	err := PinSecrets(context.Background(), r, spec)
+	err := PinSecrets(context.Background(), r, spec, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SNEAKY")
 	assert.Zero(t, r.calls, "it should be refused before any resolution")
+}
+
+// A config whose only secret-shaped value is such a literal has no references
+// at all, and must still be refused, even on a cluster with no backends. The
+// runner would otherwise resolve it at container start without the ownership
+// check pinning applies.
+func TestPinSecretsRejectsALiteralInAConfigWithNoReferences(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{
+		Variables: []core_v1alpha.ConfigSpecVariables{
+			{Key: "PLAIN", Value: "hello"},
+			{Key: "SNEAKY", Value: secret.FormatSentinel("cluster", "other/token")},
+		},
+	}
+
+	err := PinSecrets(context.Background(), nil, spec, "app/shop")
+	require.ErrorContains(t, err, "SNEAKY")
 }
 
 func TestPinSecretsRejectsALiteralPosingAsAReferenceInAService(t *testing.T) {
@@ -190,9 +206,46 @@ func TestPinSecretsRejectsALiteralPosingAsAReferenceInAService(t *testing.T) {
 		}},
 	}
 
-	err := PinSecrets(context.Background(), r, spec)
+	err := PinSecrets(context.Background(), r, spec, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "worker")
+}
+
+// Task env has no backend field, so any value there with the scheme is a
+// literal posing as a reference.
+func TestPinSecretsRejectsALiteralPosingAsAReferenceInATask(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{
+		Tasks: []core_v1alpha.ConfigSpecTasks{{
+			Name: "migrate",
+			Env: []core_v1alpha.ConfigSpecTasksEnv{
+				{Key: "SNEAKY", Value: secret.FormatSentinel("cluster", "other/token")},
+			},
+		}},
+	}
+
+	err := PinSecrets(context.Background(), nil, spec, "app/shop")
+	require.ErrorContains(t, err, "task migrate")
+}
+
+// A sandbox's env is split at the first "=", so a key containing one could
+// carry a secret reference into the value. Refuse it wherever it appears.
+func TestPinSecretsRejectsAKeyContainingEquals(t *testing.T) {
+	smuggled := "LEAK=" + secret.FormatSentinel("cluster", "other/db@")
+
+	for name, spec := range map[string]*core_v1alpha.ConfigSpec{
+		"shared": {Variables: []core_v1alpha.ConfigSpecVariables{{Key: smuggled, Value: "/k2T"}}},
+		"service": {Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web", Env: []core_v1alpha.ConfigSpecServicesEnv{{Key: smuggled, Value: "/k2T"}},
+		}}},
+		"task": {Tasks: []core_v1alpha.ConfigSpecTasks{{
+			Name: "migrate", Env: []core_v1alpha.ConfigSpecTasksEnv{{Key: smuggled, Value: "/k2T"}},
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := PinSecrets(context.Background(), nil, spec, "app/shop")
+			require.ErrorContains(t, err, `contains "="`)
+		})
+	}
 }
 
 // A genuine reference carries the same value shape but names its backend, so it
@@ -206,6 +259,6 @@ func TestPinSecretsAllowsARealReference(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, PinSecrets(context.Background(), r, spec))
+	require.NoError(t, PinSecrets(context.Background(), r, spec, ""))
 	assert.Equal(t, "payments/stripe-key@x1A", spec.Variables[0].Value)
 }

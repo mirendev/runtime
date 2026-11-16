@@ -188,6 +188,7 @@ type secretInfoData struct {
 	Backend        *string               `cbor:"1,keyasint,omitempty" json:"backend,omitempty"`
 	CurrentVersion *string               `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
 	Versions       *[]*SecretVersionInfo `cbor:"3,keyasint,omitempty" json:"versions,omitempty"`
+	App            *string               `cbor:"4,keyasint,omitempty" json:"app,omitempty"`
 }
 
 type SecretInfo struct {
@@ -255,6 +256,21 @@ func (v *SecretInfo) SetVersions(versions []*SecretVersionInfo) {
 	v.data.Versions = &x
 }
 
+func (v *SecretInfo) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *SecretInfo) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *SecretInfo) SetApp(app string) {
+	v.data.App = &app
+}
+
 func (v *SecretInfo) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -275,6 +291,7 @@ type secretsSetArgsData struct {
 	Backend *string `cbor:"0,keyasint,omitempty" json:"backend,omitempty"`
 	Path    *string `cbor:"1,keyasint,omitempty" json:"path,omitempty"`
 	Value   *[]byte `cbor:"2,keyasint,omitempty" json:"value,omitempty"`
+	App     *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
 }
 
 type SecretsSetArgs struct {
@@ -313,6 +330,17 @@ func (v *SecretsSetArgs) Value() []byte {
 		return nil
 	}
 	return *v.data.Value
+}
+
+func (v *SecretsSetArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *SecretsSetArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
 }
 
 func (v *SecretsSetArgs) MarshalCBOR() ([]byte, error) {
@@ -636,6 +664,7 @@ func (v *SecretsRotateKeyResults) UnmarshalJSON(data []byte) error {
 type secretsResolveArgsData struct {
 	Backend *string `cbor:"0,keyasint,omitempty" json:"backend,omitempty"`
 	Ref     *string `cbor:"1,keyasint,omitempty" json:"ref,omitempty"`
+	AppId   *string `cbor:"2,keyasint,omitempty" json:"app_id,omitempty"`
 }
 
 type SecretsResolveArgs struct {
@@ -665,6 +694,17 @@ func (v *SecretsResolveArgs) Ref() string {
 	return *v.data.Ref
 }
 
+func (v *SecretsResolveArgs) HasAppId() bool {
+	return v.data.AppId != nil
+}
+
+func (v *SecretsResolveArgs) AppId() string {
+	if v.data.AppId == nil {
+		return ""
+	}
+	return *v.data.AppId
+}
+
 func (v *SecretsResolveArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -682,8 +722,9 @@ func (v *SecretsResolveArgs) UnmarshalJSON(data []byte) error {
 }
 
 type secretsResolveResultsData struct {
-	Ref   *string `cbor:"0,keyasint,omitempty" json:"ref,omitempty"`
-	Value *[]byte `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Ref     *string `cbor:"0,keyasint,omitempty" json:"ref,omitempty"`
+	Value   *[]byte `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	OwnerId *string `cbor:"2,keyasint,omitempty" json:"owner_id,omitempty"`
 }
 
 type SecretsResolveResults struct {
@@ -698,6 +739,10 @@ func (v *SecretsResolveResults) SetRef(ref string) {
 func (v *SecretsResolveResults) SetValue(value []byte) {
 	x := slices.Clone(value)
 	v.data.Value = &x
+}
+
+func (v *SecretsResolveResults) SetOwnerId(owner_id string) {
+	v.data.OwnerId = &owner_id
 }
 
 func (v *SecretsResolveResults) MarshalCBOR() ([]byte, error) {
@@ -1034,7 +1079,7 @@ func AdaptSecrets(t Secrets) *rpc.Interface {
 			InterfaceName: "Secrets",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"backend", "path", "value"},
+			Params:        []string{"backend", "path", "value", "app"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Set(ctx, &SecretsSet{Call: call})
 			},
@@ -1084,7 +1129,7 @@ func AdaptSecrets(t Secrets) *rpc.Interface {
 			InterfaceName: "Secrets",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"backend", "ref"},
+			Params:        []string{"backend", "ref", "app_id"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Resolve(ctx, &SecretsResolve{Call: call})
 			},
@@ -1143,11 +1188,12 @@ func (v *SecretsClientSetResults) Unchanged() bool {
 	return *v.data.Unchanged
 }
 
-func (v SecretsClient) Set(ctx context.Context, backend string, path string, value []byte) (*SecretsClientSetResults, error) {
+func (v SecretsClient) Set(ctx context.Context, backend string, path string, value []byte, app string) (*SecretsClientSetResults, error) {
 	args := SecretsSetArgs{}
 	args.data.Backend = &backend
 	args.data.Path = &path
 	args.data.Value = &value
+	args.data.App = &app
 
 	var ret secretsSetResultsData
 
@@ -1346,10 +1392,22 @@ func (v *SecretsClientResolveResults) Value() []byte {
 	return *v.data.Value
 }
 
-func (v SecretsClient) Resolve(ctx context.Context, backend string, ref string) (*SecretsClientResolveResults, error) {
+func (v *SecretsClientResolveResults) HasOwnerId() bool {
+	return v.data.OwnerId != nil
+}
+
+func (v *SecretsClientResolveResults) OwnerId() string {
+	if v.data.OwnerId == nil {
+		return ""
+	}
+	return *v.data.OwnerId
+}
+
+func (v SecretsClient) Resolve(ctx context.Context, backend string, ref string, app_id string) (*SecretsClientResolveResults, error) {
 	args := SecretsResolveArgs{}
 	args.data.Backend = &backend
 	args.data.Ref = &ref
+	args.data.AppId = &app_id
 
 	var ret secretsResolveResultsData
 

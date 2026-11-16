@@ -29,8 +29,8 @@ type Prober interface {
 // HealthProber reads the "server" block of /.well-known/miren/health.
 type HealthProber struct {
 	URL string
-	// ServerName is the SNI to send. Empty works with the default autocert
-	// ingress, which answers SNI-less handshakes with its self-signed cert.
+	// ServerName is the SNI to send. Empty works because both the autocert
+	// and DNS-01 ingresses answer SNI-less handshakes with a self-signed cert.
 	ServerName string
 	client     *http.Client
 }

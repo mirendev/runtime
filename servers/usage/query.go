@@ -16,6 +16,7 @@ import (
 const (
 	metricCPUSeconds = "cpu_usage_seconds_total"
 	metricMemoryUsed = "memory_usage_bytes"
+	metricSwapUsed   = "swap_usage_bytes"
 
 	metricNodeCPUCoresTotal = "node_cpu_cores_total"
 	metricNodeCPUCoresUsed  = "node_cpu_cores_used"
@@ -178,11 +179,22 @@ func cpuCoresQuery(groupBy string, selector string, window time.Duration, aggreg
 // Memory is a gauge, so unlike CPU it needs an explicit over_time collapse for
 // every aggregate except last.
 func memoryBytesQuery(groupBy string, selector string, window time.Duration, aggregate string) string {
+	return bytesGaugeQuery(metricMemoryUsed, groupBy, selector, window, aggregate)
+}
+
+// swapBytesQuery is memoryBytesQuery for swapped-out memory. Runners that
+// predate the swap series return no rows, which callers report as unmeasured
+// rather than as zero.
+func swapBytesQuery(groupBy string, selector string, window time.Duration, aggregate string) string {
+	return bytesGaugeQuery(metricSwapUsed, groupBy, selector, window, aggregate)
+}
+
+func bytesGaugeQuery(metric, groupBy, selector string, window time.Duration, aggregate string) string {
 	// last_over_time rather than the bare selector: see sampleStaleness. Without
 	// it the lookbehind follows the subquery step, and a dead sandbox is summed
 	// alongside the one that replaced it for hours.
 	inner := fmt.Sprintf("sum by (%s) (last_over_time(%s%s[%s]))",
-		groupBy, metricMemoryUsed, selector, promDuration(sampleStaleness))
+		groupBy, metric, selector, promDuration(sampleStaleness))
 
 	if aggregate == aggregateLast {
 		return inner

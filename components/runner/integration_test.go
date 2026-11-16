@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	entitytestutils "miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/version"
 )
@@ -38,12 +39,17 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	// Use dynamic port to avoid conflicts with parallel tests
 	port := testutils.GetFreePort(t)
 
+	// A fresh prefix per run: the coordinator seals state under it with a key
+	// kept in tempDir, so a prefix reused against a persistent etcd would find
+	// sealed state whose key was deleted with the previous run's tempDir.
+	etcdClient, etcdPrefix := etcdtest.TestEtcdClient(t)
+
 	// Setup coordinator config
 	coordCfg := coordinate.CoordinatorConfig{
 		Address:       fmt.Sprintf("localhost:%d", port),
-		EtcdEndpoints: []string{"etcd:2379"},
-		Prefix:        "/test/miren/" + t.Name(), // Unique prefix for this test
-		DataPath:      tempDir,                   // Use temp directory to prevent file leaks
+		EtcdEndpoints: etcdClient.Endpoints(),
+		Prefix:        etcdPrefix,
+		DataPath:      tempDir,
 	}
 
 	// Setup runner config
