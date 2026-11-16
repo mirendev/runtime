@@ -3068,7 +3068,25 @@ func (c *SandboxController) stampAndSignal(ctx context.Context, info *containerS
 			"id", info.id, "err", err)
 	}
 
-	return info.task.Kill(ctx, unix.SIGTERM)
+	if err := info.task.Kill(ctx, unix.SIGTERM); err != nil {
+		return err
+	}
+
+	// Commands run under `/bin/sh -c`, and a shell at PID 1 without a TERM
+	// trap drops the signal instead of passing it to the app (dash never
+	// execs the command itself). So signal every process in the container
+	// too. containerd.WithKillAll can't do this: runc ignores --all since 1.2.
+	pids, err := info.task.Pids(ctx)
+	if err != nil {
+		c.Log.Warn("failed to list container processes, only PID 1 got SIGTERM", "id", info.id, "err", err)
+		return nil
+	}
+	for _, p := range pids {
+		if p.Pid != info.task.Pid() {
+			_ = unix.Kill(int(p.Pid), unix.SIGTERM)
+		}
+	}
+	return nil
 }
 
 // forceKillTask SIGKILLs and deletes a task, and reports whether the SIGKILL

@@ -27,6 +27,65 @@ const (
 	ignoreOnTerm = `trap 'echo draining' TERM; while true; do sleep 1 & wait; done`
 )
 
+// TestDestroySubContainersSignalsPastShell runs the app the way
+// buildSubContainerOpts does, under `/bin/sh -c`, on an image whose /bin/sh is
+// dash. dash stays at PID 1 without a TERM trap, so a signal sent only to PID 1
+// never reaches the app and the drain waits out its whole timeout.
+func TestDestroySubContainersSignalsPastShell(t *testing.T) {
+	r := require.New(t)
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	ctx := namespaces.WithNamespace(context.Background(), testDeps.Namespace)
+
+	setupCtx, setupCancel := context.WithTimeout(ctx, 120*time.Second)
+	defer setupCancel()
+	img, err := testDeps.CC.Pull(setupCtx, "docker.io/library/debian:bookworm-slim", containerd.WithPullUnpack)
+	r.NoError(err)
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+
+	id := entity.Id(idgen.GenNS("sb"))
+	containerID := containerPrefix(id) + "-app"
+
+	cont, err := testDeps.CC.NewContainer(ctx, containerID,
+		containerd.WithNewSnapshot(containerID, img),
+		containerd.WithRuntime("io.containerd.runc.v2", nil),
+		containerd.WithNewSpec(
+			oci.WithDefaultSpec(),
+			oci.WithImageConfig(img),
+			// The outer shell is PID 1; the app, which exits 0 on SIGTERM, is its child.
+			oci.WithProcessArgs("/bin/sh", "-c", `sh -c "`+exitOnTerm+`"`),
+		),
+		containerd.WithAdditionalContainerLabels(map[string]string{
+			shutdownTimeoutLabel: "10s",
+		}),
+	)
+	r.NoError(err)
+	defer testutils.ClearContainer(context.WithoutCancel(ctx), cont)
+
+	task, err := cont.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, nil, nil)))
+	r.NoError(err)
+	r.NoError(task.Start(ctx))
+	exitCh, err := task.Wait(ctx)
+	r.NoError(err)
+
+	time.Sleep(500 * time.Millisecond)
+
+	start := time.Now()
+	r.NoError(co.DestroySubContainers(ctx, id))
+	r.Less(time.Since(start), 5*time.Second, "the app never got SIGTERM, so the drain ran to its timeout")
+
+	select {
+	case status := <-exitCh:
+		r.Equal(uint32(0), status.ExitCode(), "the app should exit on SIGTERM, not be killed")
+	case <-time.After(5 * time.Second):
+		r.Fail("task never exited")
+	}
+}
+
 // TestDestroySubContainersAcrossRestart covers a drain that outlives the server
 // process driving it (MIR-1994): the old server must leave it running, and the
 // next one must resume it on the original deadline without signalling again.
