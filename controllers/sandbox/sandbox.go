@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	stderrors "errors"
 	"fmt"
@@ -3071,22 +3072,58 @@ func (c *SandboxController) stampAndSignal(ctx context.Context, info *containerS
 	if err := info.task.Kill(ctx, unix.SIGTERM); err != nil {
 		return err
 	}
+	c.signalShellChildren(ctx, info)
+	return nil
+}
 
-	// Commands run under `/bin/sh -c`, and a shell at PID 1 without a TERM
-	// trap drops the signal instead of passing it to the app (dash never
-	// execs the command itself). So signal every process in the container
-	// too. containerd.WithKillAll can't do this: runc ignores --all since 1.2.
+// signalShellChildren passes SIGTERM on to the children of a `/bin/sh -c` that
+// is still PID 1. Commands run under that shell, and when it doesn't exec the
+// command itself (dash never does) it has no TERM handler, so the kernel drops
+// the signal and the app never sees it. Only direct children are signalled, as
+// a forwarding shell would; a child that forwards signals to its own children
+// would otherwise hand them a second SIGTERM. containerd.WithKillAll can't do
+// this: runc has ignored --all since 1.2.
+func (c *SandboxController) signalShellChildren(ctx context.Context, info *containerShutdownInfo) {
+	pid1 := int(info.task.Pid())
+	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid1))
+	if err != nil || !bytes.HasPrefix(cmdline, []byte("/bin/sh\x00-c\x00")) {
+		return
+	}
+
 	pids, err := info.task.Pids(ctx)
 	if err != nil {
-		c.Log.Warn("failed to list container processes, only PID 1 got SIGTERM", "id", info.id, "err", err)
-		return nil
+		c.Log.Warn("failed to list container processes, only the shell at PID 1 got SIGTERM", "id", info.id, "err", err)
+		return
 	}
 	for _, p := range pids {
-		if p.Pid != info.task.Pid() {
-			_ = unix.Kill(int(p.Pid), unix.SIGTERM)
+		pid := int(p.Pid)
+		if pid == pid1 || parentPid(pid) != pid1 {
+			continue
+		}
+		if err := unix.Kill(pid, unix.SIGTERM); err != nil && !stderrors.Is(err, unix.ESRCH) {
+			c.Log.Debug("failed to pass SIGTERM to shell child", "id", info.id, "pid", pid, "err", err)
 		}
 	}
-	return nil
+}
+
+// parentPid returns pid's parent from /proc, or 0 once pid has exited.
+func parentPid(pid int) int {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	// The command name can hold spaces and parens, so parse from its closing
+	// paren: the fields after it are state, then the parent pid.
+	i := bytes.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0
+	}
+	fields := strings.Fields(string(stat[i+1:]))
+	if len(fields) < 2 {
+		return 0
+	}
+	ppid, _ := strconv.Atoi(fields[1])
+	return ppid
 }
 
 // forceKillTask SIGKILLs and deletes a task, and reports whether the SIGKILL
