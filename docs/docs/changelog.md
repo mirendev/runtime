@@ -11,6 +11,12 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Upgrade Notes**
+- **Commands that forward SIGTERM themselves can drop the trap** - If a `command` works around the shell with its own forwarding trap, such as `trap 'kill $child' TERM; app & child=$!; wait`, the app now gets SIGTERM twice: once from the trap and once from Miren. Remove the trap. ([#1451](https://github.com/mirendev/runtime/pull/1451))
+
+**Bug Fixes**
+- **Apps behind a shell get SIGTERM on stop** - Miren runs a `command` as `/bin/sh -c`, and on Debian-based images that shell is dash, which stays at PID 1 and drops SIGTERM. Apps never heard about shutdowns and were killed when `shutdown_timeout` ran out. That included the valkey and memcached addons, so stopping a valkey addon skipped its final snapshot and could lose up to a minute of writes. Miren now passes SIGTERM on to the shell's direct children. ([#1451](https://github.com/mirendev/runtime/pull/1451))
+
 ---
 
 ## v0.18.0

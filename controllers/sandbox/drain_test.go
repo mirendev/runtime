@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -26,6 +27,84 @@ const (
 	exitOnTerm   = `trap 'exit 0' TERM; while true; do sleep 1 & wait; done`
 	ignoreOnTerm = `trap 'echo draining' TERM; while true; do sleep 1 & wait; done`
 )
+
+// TestDestroySubContainersSignalsPastShell runs the app the way
+// buildSubContainerOpts does, under `/bin/sh -c`, on an image whose /bin/sh is
+// dash. dash stays at PID 1 without a TERM trap, so a signal sent only to PID 1
+// never reaches the app and the drain waits out its whole timeout.
+func TestDestroySubContainersSignalsPastShell(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	ctx := namespaces.WithNamespace(context.Background(), testDeps.Namespace)
+
+	setupCtx, setupCancel := context.WithTimeout(ctx, 120*time.Second)
+	defer setupCancel()
+	img, err := testDeps.CC.Pull(setupCtx, imagerefs.DebianSlim, containerd.WithPullUnpack)
+	require.NoError(t, err)
+
+	co, err := newSandboxController(testDeps)
+	require.NoError(t, err)
+	defer co.Close()
+
+	// stop runs command under a dash PID 1, stops it, and returns its exit code.
+	stop := func(t *testing.T, command string, env []string) uint32 {
+		r := require.New(t)
+		id := entity.Id(idgen.GenNS("sb"))
+		containerID := containerPrefix(id) + "-app"
+
+		cont, err := testDeps.CC.NewContainer(ctx, containerID,
+			containerd.WithNewSnapshot(containerID, img),
+			containerd.WithRuntime("io.containerd.runc.v2", nil),
+			containerd.WithNewSpec(
+				oci.WithDefaultSpec(),
+				oci.WithImageConfig(img),
+				oci.WithEnv(env),
+				oci.WithProcessArgs("/bin/sh", "-c", command),
+			),
+			containerd.WithAdditionalContainerLabels(map[string]string{
+				shutdownTimeoutLabel: "10s",
+			}),
+		)
+		r.NoError(err)
+		t.Cleanup(func() { testutils.ClearContainer(context.WithoutCancel(ctx), cont) })
+
+		task, err := cont.NewTask(ctx, cio.NewCreator(cio.WithStreams(nil, nil, nil)))
+		r.NoError(err)
+		r.NoError(task.Start(ctx))
+		exitCh, err := task.Wait(ctx)
+		r.NoError(err)
+
+		time.Sleep(500 * time.Millisecond)
+
+		start := time.Now()
+		r.NoError(co.DestroySubContainers(ctx, id))
+		r.Less(time.Since(start), 5*time.Second, "the app never got SIGTERM, so the drain ran to its timeout")
+
+		select {
+		case status := <-exitCh:
+			return status.ExitCode()
+		case <-time.After(5 * time.Second):
+			r.Fail("task never exited")
+			return 0
+		}
+	}
+
+	t.Run("the shell's child gets SIGTERM", func(t *testing.T) {
+		code := stop(t, `sh -c "`+exitOnTerm+`"`, nil)
+		require.Equal(t, uint32(0), code, "the app should exit on SIGTERM, not be killed")
+	})
+
+	// The app forwards shutdown to its worker as USR1. A worker that also got
+	// SIGTERM straight from Miren would exit 7.
+	t.Run("grandchildren are left to their parent", func(t *testing.T) {
+		code := stop(t, `sh -c "$APP"`, []string{
+			`APP=trap 'kill -USR1 $w; wait $w; exit $?' TERM; sh -c "$WORKER" & w=$!; while true; do sleep 1 & wait $!; done`,
+			`WORKER=trap 'exit 0' USR1; trap 'exit 7' TERM; while true; do sleep 1 & wait $!; done`,
+		})
+		require.Equal(t, uint32(0), code, "the worker should hear about shutdown only from its parent")
+	})
+}
 
 // TestDestroySubContainersAcrossRestart covers a drain that outlives the server
 // process driving it (MIR-1994): the old server must leave it running, and the
