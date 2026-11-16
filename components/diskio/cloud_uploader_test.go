@@ -236,6 +236,13 @@ type uploadProtocolServer struct {
 	failures                       map[string]int // stage:ordering-key, each injected failure consumed once
 	prepareLatency                 time.Duration
 	activeTransfers, peakTransfers int
+	// generation identifies the client process; connGen pins each connection
+	// to the generation that opened it so abandoned prepares from a failed
+	// client are never counted against a restarted client's limit.
+	generation int
+	connGen    map[string]int
+	genActive  map[int]int
+	genPeak    map[int]int
 }
 
 type protocolUpdate struct {
@@ -264,6 +271,16 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Size    int64  `json:"size"`
 		Prepare bool   `json:"prepare_only"`
 	}
+	s.mu.Lock()
+	if s.connGen == nil {
+		s.connGen, s.genActive, s.genPeak = map[string]int{}, map[int]int{}, map[int]int{}
+	}
+	gen, seen := s.connGen[r.RemoteAddr]
+	if !seen {
+		gen = s.generation
+		s.connGen[r.RemoteAddr] = gen
+	}
+	s.mu.Unlock()
 	if r.Method == "POST" {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -277,11 +294,14 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if body.Prepare && s.prepareLatency > 0 {
 		s.mu.Lock()
 		s.activeTransfers++
-		s.peakTransfers = max(s.peakTransfers, s.activeTransfers)
+		s.genActive[gen]++
+		s.genPeak[gen] = max(s.genPeak[gen], s.genActive[gen])
+		s.peakTransfers = max(s.peakTransfers, s.genActive[gen])
 		s.mu.Unlock()
 		time.Sleep(s.prepareLatency)
 		s.mu.Lock()
 		s.activeTransfers--
+		s.genActive[gen]--
 		s.mu.Unlock()
 	}
 	s.mu.Lock()
@@ -472,8 +492,8 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 				return remote.activeTransfers == 0
 			}, 5*time.Second, time.Millisecond)
 			remote.mu.Lock()
-			firstPeak := remote.peakTransfers
-			remote.peakTransfers = 0
+			firstPeak := remote.genPeak[0]
+			remote.generation++ // connections opened from here on belong to the restarted client
 			remote.mu.Unlock()
 			require.LessOrEqual(t, firstPeak, 8)
 			// Rebuild state, client and watcher as after a process restart.
@@ -490,8 +510,8 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			require.Equal(t, keys[len(keys)-1], horizon)
 			require.Equal(t, keys, remote.order)
 			require.Len(t, remote.rows, count, "retries must reuse remote identities")
-			require.LessOrEqual(t, remote.peakTransfers, 8)
-			require.Greater(t, max(firstPeak, remote.peakTransfers), 1)
+			require.LessOrEqual(t, remote.genPeak[1], 8)
+			require.Greater(t, max(firstPeak, remote.genPeak[1]), 1)
 			// Restore into a distinct empty image through authenticated list/download
 			// and the real LBD replay parser, not from the upload fixture's memory.
 			restore := t.TempDir()
