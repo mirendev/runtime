@@ -11,6 +11,7 @@ import (
 	"hash/crc32"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +37,10 @@ import (
 // testAPIHandler wraps a mutable handler that also serves auth endpoints.
 type testAPIHandler struct {
 	handler http.HandlerFunc
+	// connState, when set, sees every connection's state changes before any
+	// request on it is handled. Atomic because a test sets it after the
+	// server has started.
+	connState atomic.Pointer[func(net.Conn, http.ConnState)]
 }
 
 func (h *testAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +69,13 @@ func (h *testAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newTestUploaderServer(t *testing.T) (*httptest.Server, *testAPIHandler, *cloudauth.AuthClient) {
 	t.Helper()
 	h := &testAPIHandler{}
-	ts := httptest.NewServer(h)
+	ts := httptest.NewUnstartedServer(h)
+	ts.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		if f := h.connState.Load(); f != nil {
+			(*f)(c, s)
+		}
+	}
+	ts.Start()
 	t.Cleanup(ts.Close)
 
 	kp, err := cloudauth.GenerateKeyPair()
@@ -229,13 +240,21 @@ func TestCloudSegmentUploaderPropagatesUploadFailure(t *testing.T) {
 // calculation are independent of the client DTOs. Cloud service/storage tests
 // must separately prove these server guarantees against the database and GCS.
 type uploadProtocolServer struct {
-	mu                             sync.Mutex
-	url                            string
-	rows                           map[string]*protocolUpdate
-	order                          []string
-	failures                       map[string]int // stage:ordering-key, each injected failure consumed once
-	prepareLatency                 time.Duration
-	activeTransfers, peakTransfers int
+	mu              sync.Mutex
+	url             string
+	rows            map[string]*protocolUpdate
+	order           []string
+	failures        map[string]int // stage:ordering-key, each injected failure consumed once
+	prepareLatency  time.Duration
+	activeTransfers int
+	// generation identifies the client process. connState pins each
+	// connection to the generation current when it was accepted, before any
+	// request on it runs, so abandoned prepares from a failed client are
+	// never counted against a restarted client's limit.
+	generation int
+	connGen    map[string]int
+	genActive  map[int]int
+	genPeak    map[int]int
 }
 
 type protocolUpdate struct {
@@ -255,6 +274,22 @@ func (s *uploadProtocolServer) fail(stage, key string) bool {
 	return true
 }
 
+func (s *uploadProtocolServer) connState(c net.Conn, state http.ConnState) {
+	if state != http.StateNew {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initGens()
+	s.connGen[c.RemoteAddr().String()] = s.generation
+}
+
+func (s *uploadProtocolServer) initGens() {
+	if s.connGen == nil {
+		s.connGen, s.genActive, s.genPeak = map[string]int{}, map[int]int{}, map[int]int{}
+	}
+}
+
 func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Kind    string `json:"kind"`
@@ -264,6 +299,14 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Size    int64  `json:"size"`
 		Prepare bool   `json:"prepare_only"`
 	}
+	s.mu.Lock()
+	s.initGens()
+	gen, seen := s.connGen[r.RemoteAddr] // seen unless connState wasn't hooked up
+	if !seen {
+		gen = s.generation
+		s.connGen[r.RemoteAddr] = gen
+	}
+	s.mu.Unlock()
 	if r.Method == "POST" {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -277,11 +320,13 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if body.Prepare && s.prepareLatency > 0 {
 		s.mu.Lock()
 		s.activeTransfers++
-		s.peakTransfers = max(s.peakTransfers, s.activeTransfers)
+		s.genActive[gen]++
+		s.genPeak[gen] = max(s.genPeak[gen], s.genActive[gen])
 		s.mu.Unlock()
 		time.Sleep(s.prepareLatency)
 		s.mu.Lock()
 		s.activeTransfers--
+		s.genActive[gen]--
 		s.mu.Unlock()
 	}
 	s.mu.Lock()
@@ -419,6 +464,8 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
 			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}, prepareLatency: time.Millisecond}
 			h.handler = remote.ServeHTTP
+			connState := remote.connState
+			h.connState.Store(&connState)
 			diskPath := t.TempDir()
 			logDir := filepath.Join(diskPath, "logs")
 			require.NoError(t, os.Mkdir(logDir, 0755))
@@ -464,16 +511,16 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			remote.mu.Unlock()
 			require.Equal(t, keys[:len(prefix)], prefix, "replay must never see a hole")
 			// The failed scan abandons its in-flight prepares, but their handlers
-			// outlive it. peakTransfers measures one client's limit, so let them
-			// drain rather than counting them against the restarted client.
+			// outlive it. genPeak measures each client's limit separately; the
+			// drain keeps the first client's straggling handlers out of the way.
 			require.Eventually(t, func() bool {
 				remote.mu.Lock()
 				defer remote.mu.Unlock()
 				return remote.activeTransfers == 0
 			}, 5*time.Second, time.Millisecond)
 			remote.mu.Lock()
-			firstPeak := remote.peakTransfers
-			remote.peakTransfers = 0
+			firstPeak := remote.genPeak[0]
+			remote.generation++ // connections accepted from here on belong to the restarted client
 			remote.mu.Unlock()
 			require.LessOrEqual(t, firstPeak, 8)
 			// Rebuild state, client and watcher as after a process restart.
@@ -490,8 +537,13 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			require.Equal(t, keys[len(keys)-1], horizon)
 			require.Equal(t, keys, remote.order)
 			require.Len(t, remote.rows, count, "retries must reuse remote identities")
-			require.LessOrEqual(t, remote.peakTransfers, 8)
-			require.Greater(t, max(firstPeak, remote.peakTransfers), 1)
+			// A first-client straggler can still be writing these maps, so read
+			// under the lock.
+			remote.mu.Lock()
+			secondPeak := remote.genPeak[1]
+			remote.mu.Unlock()
+			require.LessOrEqual(t, secondPeak, 8)
+			require.Greater(t, max(firstPeak, secondPeak), 1)
 			// Restore into a distinct empty image through authenticated list/download
 			// and the real LBD replay parser, not from the upload fixture's memory.
 			restore := t.TempDir()
