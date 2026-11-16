@@ -303,6 +303,12 @@ func TestNewStrategyForVersion_WebDefaultsScaleDownDelay(t *testing.T) {
 	require.IsType(t, &AutoStrategy{}, web)
 	assert.Equal(t, 15*time.Minute, web.ScaleDownDelay())
 
+	// A [services.web] block with no concurrency table reaches the runtime
+	// with an empty Mode, which NewStrategy treats as auto.
+	noTable := NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{})
+	require.IsType(t, &AutoStrategy{}, noTable)
+	assert.Equal(t, 15*time.Minute, noTable.ScaleDownDelay())
+
 	explicit := NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{Mode: "auto", ScaleDownDelay: "3m"})
 	assert.Equal(t, 3*time.Minute, explicit.ScaleDownDelay(), "configured delay wins")
 
