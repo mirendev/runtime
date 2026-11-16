@@ -242,17 +242,32 @@ func NewStrategy(svc *core_v1alpha.ServiceConcurrency) ConcurrencyStrategy {
 // same ephemeral version (databases, workers, etc.) honor their configured
 // ServiceConcurrency like a normal deploy.
 func NewStrategyForVersion(ver *core_v1alpha.AppVersion, service string, svc *core_v1alpha.ServiceConcurrency) ConcurrencyStrategy {
-	if ver != nil && ver.EphemeralLabel != "" && service == "web" {
-		// Default to a generous 15-minute idle window so a browser tab left
-		// open doesn't churn through cold starts. Configured ScaleDownDelay
-		// on the service still wins if set.
-		scaleDownDelay := 15 * time.Minute
-		if svc != nil && svc.ScaleDownDelay != "" {
-			if d, err := time.ParseDuration(svc.ScaleDownDelay); err == nil {
-				scaleDownDelay = d
-			}
+	if service != "web" {
+		return NewStrategy(svc)
+	}
+
+	// The web service gets a 15-minute idle window when ScaleDownDelay is
+	// unset, matching the build-time default that only applies when app.toml
+	// has no [services.web] section, so a web block that sets other keys
+	// doesn't silently fall back to NewStrategy's 2-minute default.
+	scaleDownDelay := webScaleDownDelay
+	if svc != nil && svc.ScaleDownDelay != "" {
+		if d, err := time.ParseDuration(svc.ScaleDownDelay); err == nil {
+			scaleDownDelay = d
 		}
+	}
+
+	if ver != nil && ver.EphemeralLabel != "" {
 		return &EphemeralStrategy{scaleDownDelay: scaleDownDelay}
 	}
-	return NewStrategy(svc)
+
+	strategy := NewStrategy(svc)
+	if auto, ok := strategy.(*AutoStrategy); ok {
+		auto.scaleDownDelay = scaleDownDelay
+	}
+	return strategy
 }
+
+// webScaleDownDelay is the default idle window for the web service, long
+// enough that a browser tab left open doesn't churn through cold starts.
+const webScaleDownDelay = 15 * time.Minute
