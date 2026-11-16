@@ -77,6 +77,7 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 
 	var referencingEntities []entity.Id
 	disks := map[entity.Id]bool{}
+	secrets := map[entity.Id]bool{}
 
 	for _, schema := range appRefResult.Schemas() {
 		if !schema.Indexed() {
@@ -90,6 +91,12 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 
 		list, err := client.List(ctx, entity.Ref(attrId, appId))
 		if err != nil {
+			// Owned secrets must not survive the app: its id is reused by the
+			// next app created under the same name, which would inherit them.
+			// Everything else stays best-effort, as it always has been.
+			if attrId == core_v1alpha.SecretAppId {
+				return fmt.Errorf("listing secrets owned by app %s: %w", appId, err)
+			}
 			log.Warn("failed to list entities", "attr", attrId, "error", err)
 			continue
 		}
@@ -99,6 +106,7 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 				if id := ent.Id(); id != "" {
 					referencingEntities = append(referencingEntities, id)
 					disks[id] = entity.Is(ent, storage_v1alpha.KindDisk)
+					secrets[id] = entity.Is(ent, core_v1alpha.KindSecret)
 				}
 			}
 		}
@@ -126,6 +134,16 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 			}
 			continue
 		}
+		if secrets[id] {
+			// A secret the app owns goes with it. App ids are derived from the
+			// app's name, so a secret left behind would belong to whatever app
+			// is next created under that name. Its versions point at the
+			// secret, not the app, so they are deleted here first; nothing else
+			// would ever find them.
+			if err := deleteSecretVersions(ctx, client, id); err != nil {
+				return err
+			}
+		}
 		log.Info("deleting entity", "id", id)
 		if err := client.Delete(ctx, id); err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
@@ -146,5 +164,27 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 		"appId", appId,
 		"deletedEntities", len(referencingEntities))
 
+	return nil
+}
+
+// deleteSecretVersions deletes every stored version of a secret.
+func deleteSecretVersions(ctx context.Context, client *entityserver.Client, secretID entity.Id) error {
+	list, err := client.List(ctx, entity.Ref(core_v1alpha.SecretVersionSecretId, secretID))
+	if err != nil {
+		return fmt.Errorf("listing versions of secret %s: %w", secretID, err)
+	}
+
+	var versions []entity.Id
+	for list.Next() {
+		if ent := list.Entity(); ent != nil && ent.Id() != "" {
+			versions = append(versions, entity.Id(ent.Id()))
+		}
+	}
+
+	for _, id := range versions {
+		if err := client.Delete(ctx, id); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+			return fmt.Errorf("failed to delete secret version %s: %w", id, err)
+		}
+	}
 	return nil
 }

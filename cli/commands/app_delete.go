@@ -51,7 +51,7 @@ func AppDelete(ctx *Context, opts AppDeleteOptions) error {
 
 	crud := app_v1alpha.NewCrudClient(crudcl)
 
-	confirmed, err := confirmDeletion(fmt.Sprintf("Delete app '%s' and all its versions, artifacts, pools, and routes?", appName), opts.Yes, opts.Force, false)
+	confirmed, err := confirmDeletion(fmt.Sprintf("Delete app '%s' and all its versions, artifacts, pools, routes, and the secrets it owns?", appName), opts.Yes, opts.Force, false)
 	if err != nil {
 		return err
 	}

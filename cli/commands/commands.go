@@ -525,6 +525,10 @@ miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 			Name: "Store a secret read from a file",
 			Body: "miren secret set tls/cert --value @cert.pem",
 		}),
+		WithExample(mflags.Example{
+			Name: "Store a secret that only one app can use",
+			Body: "miren secret set shop/db-password --app shop",
+		}),
 	))
 	d.Dispatch("secret list", Infer("secret list", "List stored secrets", SecretList,
 		WithExample(mflags.Example{
@@ -1551,7 +1555,9 @@ Each write mints a new immutable version and prints its handle, e.g. ` + "`" + `
 
 :::note[Rotation does not touch running apps]
 Rotating a secret mints a new version but leaves anything already running on the value it started with. Old versions stay resolvable, so a rollback comes back on the value it originally shipped with.
-:::`
+:::
+
+With ` + "`" + `--app` + "`" + `, a new secret belongs to that app, and no other app's config can reference it. The app is assigned only when the secret is created; naming one for an existing secret fails unless the secret already belongs to it.`
 
 const secretKeyringDescription = `Shows the keys that encrypt this cluster's stored secrets: which one new writes use, how old each is, and how many stored versions are still wrapped by each.
 

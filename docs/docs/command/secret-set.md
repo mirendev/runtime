@@ -16,6 +16,8 @@ Each write mints a new immutable version and prints its handle, e.g. `payments/s
 Rotating a secret mints a new version but leaves anything already running on the value it started with. Old versions stay resolvable, so a rollback comes back on the value it originally shipped with.
 :::
 
+With `--app`, a new secret belongs to that app, and no other app's config can reference it. The app is assigned only when the secret is created; naming one for an existing secret fails unless the secret already belongs to it.
+
 ## Usage
 
 ```bash
@@ -28,6 +30,7 @@ miren secret set <path> [flags]
 
 ## Flags
 
+- `--app, -a` — App the new secret belongs to; only that app's config can then reference it. Applies when the secret is created, and is never read from app.toml
 - `--backend, -b` — Backend instance to store into (default: cluster)
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
@@ -51,6 +54,12 @@ miren secret set payments/stripe-key
 
 ```bash
 miren secret set tls/cert --value @cert.pem
+```
+
+**Store a secret that only one app can use:**
+
+```bash
+miren secret set shop/db-password --app shop
 ```
 
 ## See also

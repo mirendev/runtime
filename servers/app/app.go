@@ -1108,6 +1108,14 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 
 // createConfigVersion creates a ConfigVersion entity from a ConfigSpec.
 func (r *AppInfo) createConfigVersion(ctx context.Context, spec *core_v1alpha.ConfigSpec, appID entity.Id, versionName string) (entity.Id, error) {
+	// Pin here like every other path that mints a ConfigVersion. Beyond freezing
+	// which version the config records, pinning is where a reference to another
+	// app's secret is refused, and a write path that skipped it would be a way
+	// around that check.
+	if err := coreutil.PinSecrets(ctx, r.Secrets, spec, appID); err != nil {
+		return "", err
+	}
+
 	configVer := &core_v1alpha.ConfigVersion{
 		App:  appID,
 		Spec: *spec,
