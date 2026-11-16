@@ -294,6 +294,25 @@ func TestNewStrategyForVersion_NonEphemeralDelegates(t *testing.T) {
 	assert.True(t, ok, "non-ephemeral auto version must produce an AutoStrategy")
 }
 
+func TestNewStrategyForVersion_WebDefaultsScaleDownDelay(t *testing.T) {
+	// A [services.web] block that omits scale_down_delay must get the same
+	// 15m default as an app with no web config, not NewStrategy's 2m.
+	ver := &core_v1alpha.AppVersion{Version: "v1"}
+
+	web := NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 20})
+	require.IsType(t, &AutoStrategy{}, web)
+	assert.Equal(t, 15*time.Minute, web.ScaleDownDelay())
+
+	explicit := NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{Mode: "auto", ScaleDownDelay: "3m"})
+	assert.Equal(t, 3*time.Minute, explicit.ScaleDownDelay(), "configured delay wins")
+
+	worker := NewStrategyForVersion(ver, "worker", &core_v1alpha.ServiceConcurrency{Mode: "auto"})
+	assert.Equal(t, 2*time.Minute, worker.ScaleDownDelay(), "non-web services keep their default")
+
+	fixed := NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{Mode: "fixed", NumInstances: 2})
+	assert.Equal(t, time.Duration(0), fixed.ScaleDownDelay(), "fixed mode never scales down")
+}
+
 func TestNewStrategyForVersion_NilVersionDelegates(t *testing.T) {
 	// Defensive: callers without an AppVersion handy fall through to NewStrategy.
 	svc := &core_v1alpha.ServiceConcurrency{
