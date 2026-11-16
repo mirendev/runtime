@@ -13,8 +13,10 @@ All notable changes to Miren Runtime will be documented in this file.
 
 **Upgrade Notes**
 - **Scripts in multi-target apps need an explicit target** - In directories with several targets in `.miren/deploy.toml`, unattended app commands such as `logs` and `env set` now require `-C <target>` or `MIREN_CLUSTER`. Target order no longer selects a default. Deploys without targets also require explicit cluster selection when several clusters are configured, rather than using the global active cluster. Existing command names and deprecated flags remain available during the transition; see [CLI compatibility](./cli-compatibility.md). ([#1419](https://github.com/mirendev/runtime/pull/1419))
+- **Commands that forward SIGTERM themselves can drop the trap** - If a `command` works around the shell with its own forwarding trap, such as `trap 'kill $child' TERM; app & child=$!; wait`, the app now gets SIGTERM twice: once from the trap and once from Miren. Remove the trap. ([#1451](https://github.com/mirendev/runtime/pull/1451))
 
 **Bug Fixes**
+- **Apps behind a shell get SIGTERM on stop** - Miren runs a `command` as `/bin/sh -c`, and on Debian-based images that shell is dash, which stays at PID 1 and drops SIGTERM. Apps never heard about shutdowns and were killed when `shutdown_timeout` ran out. That included the valkey and memcached addons, so stopping a valkey addon skipped its final snapshot and could lose up to a minute of writes. Miren now passes SIGTERM on to the shell's direct children. ([#1451](https://github.com/mirendev/runtime/pull/1451))
 - **`-C` no longer changes later app commands** - Selecting a cluster applies only to that invocation instead of silently rewriting a per-app cluster pin. Existing pins are ignored but left on disk; `miren cluster switch` changes only the global active cluster. ([#1419](https://github.com/mirendev/runtime/pull/1419))
 
 **Security**

@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -39,7 +40,7 @@ func TestDestroySubContainersSignalsPastShell(t *testing.T) {
 
 	setupCtx, setupCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer setupCancel()
-	img, err := testDeps.CC.Pull(setupCtx, "docker.io/library/debian:bookworm-slim", containerd.WithPullUnpack)
+	img, err := testDeps.CC.Pull(setupCtx, imagerefs.DebianSlim, containerd.WithPullUnpack)
 	require.NoError(t, err)
 
 	co, err := newSandboxController(testDeps)
