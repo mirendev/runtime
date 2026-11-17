@@ -2844,6 +2844,13 @@ func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
 	log := testutils.TestLogger(t)
 	key := verKey{testVer.ID.String(), "web"}
 
+	// Give the activator its own copies of the pool. If it shared the test's
+	// pointer, setting pool.DesiredInstances = 2 below would make the caches
+	// read 2 before any watch event arrives, and a later, stale event
+	// (DesiredInstances=5) could then overwrite them.
+	cachedPool := *pool
+	sandboxesPool := *pool
+
 	activator := &localActivator{
 		log: log,
 		eac: server.EAC,
@@ -2857,13 +2864,13 @@ func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
 		},
 		poolSandboxes: map[entity.Id]*poolSandboxes{
 			poolID: {
-				pool:    pool,
+				pool:    &sandboxesPool,
 				service: "web",
 			},
 		},
 		pools: map[verKey]*poolState{
 			key: {
-				pool:     pool,
+				pool:     &cachedPool,
 				revision: poolResp.Entity().Revision(),
 			},
 		},
@@ -2890,9 +2897,13 @@ func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
 		activator.mu.RLock()
 		defer activator.mu.RUnlock()
 		state, ok := activator.pools[key]
-		return ok && state.pool != nil && state.pool.DesiredInstances == 2
+		if !ok || state.pool == nil || state.pool.DesiredInstances != 2 {
+			return false
+		}
+		ps, ok := activator.poolSandboxes[poolID]
+		return ok && ps.pool != nil && ps.pool.DesiredInstances == 2
 	}, 5*time.Second, 50*time.Millisecond,
-		"pool cache should be updated by watch to DesiredInstances=2")
+		"pool caches should be updated by watch to DesiredInstances=2")
 
 	// Also verify poolSandboxes pool pointer was updated
 	activator.mu.RLock()
