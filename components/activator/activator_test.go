@@ -2880,8 +2880,12 @@ func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
 	// Start the watch in a goroutine
 	go activator.watchPools(ctx)
 
-	// Give the watch a moment to establish
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the pool watch to be registered. WatchIndex only streams ops
+	// made after registration, so updating before then would be missed.
+	watchCtx, watchCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer watchCancel()
+	require.NoError(t, server.Store.WaitForIndexWatcher(watchCtx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool)),
+		"pool watch should be established")
 
 	// Update DesiredInstances in the entity store externally
 	err = server.Client.Update(ctx, pool)
