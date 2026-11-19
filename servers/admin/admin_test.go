@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"miren.dev/runtime/observability"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +71,19 @@ type testEnv struct {
 	inmem   *testutils.InMemEntityServer
 	ingress *mockIngress
 	client  *admin_v1alpha.AdminClient
+	logs    *recordingLogWriter
+}
+
+type recordingLogWriter struct {
+	mu      sync.Mutex
+	entries []observability.LogEntry
+}
+
+func (w *recordingLogWriter) WriteEntry(_ string, le observability.LogEntry) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.entries = append(w.entries, le)
+	return nil
 }
 
 func setup(t *testing.T) *testEnv {
@@ -83,7 +98,8 @@ func setup(t *testing.T) *testEnv {
 
 	ing := &mockIngress{}
 
-	server := NewServer(log, ec, ing, nil)
+	logs := &recordingLogWriter{}
+	server := NewServer(log, ec, ing, logs)
 
 	client := admin_v1alpha.NewAdminClient(
 		rpc.LocalClient(admin_v1alpha.AdaptAdmin(server)),
@@ -95,6 +111,7 @@ func setup(t *testing.T) *testEnv {
 		inmem:   inmem,
 		ingress: ing,
 		client:  client,
+		logs:    logs,
 	}
 }
 
@@ -466,7 +483,7 @@ func TestDescribeMethods_AppNotFound(t *testing.T) {
 	assert.NotEmpty(t, result.Error())
 }
 
-func TestListMethods_SafeReadOnlyForTrue(t *testing.T) {
+func TestListMethods_SafeRead(t *testing.T) {
 	env := setup(t)
 	env.createApp(t, "myapp", "tok123")
 
@@ -474,7 +491,6 @@ func TestListMethods_SafeReadOnlyForTrue(t *testing.T) {
 		methods := []map[string]any{
 			{"name": "list-users", "safe_read": true},
 			{"name": "delete-user", "safe_read": false},
-			{"name": "quoted", "safe_read": "true"},
 			{"name": "unmarked"},
 		}
 		return httpResponse(200, jsonrpcResponse(methods)), nil
@@ -482,10 +498,52 @@ func TestListMethods_SafeReadOnlyForTrue(t *testing.T) {
 
 	result, err := env.client.ListMethods(env.ctx, "myapp")
 	require.NoError(t, err)
-	assert.Empty(t, result.Error(), "a malformed mark must not break discovery")
-	require.Len(t, result.Methods(), 4)
+	assert.Empty(t, result.Error())
+	require.Len(t, result.Methods(), 3)
 	assert.True(t, result.Methods()[0].SafeRead())
 	for _, m := range result.Methods()[1:] {
 		assert.False(t, m.HasSafeRead(), m.Name())
 	}
+}
+
+// A non-boolean mark fails discovery loudly, like a non-string description
+// does, so an author sending "true" finds out rather than silently prompting.
+func TestListMethods_SafeReadMustBeBool(t *testing.T) {
+	env := setup(t)
+	env.createApp(t, "myapp", "tok123")
+
+	env.ingress.doRequest = func(ctx context.Context, req *httpingress_v1alpha.InternalHttpRequest) (*httpingress_v1alpha.InternalHttpResponse, error) {
+		return httpResponse(200, jsonrpcResponse([]map[string]any{{"name": "quoted", "safe_read": "true"}})), nil
+	}
+
+	result, err := env.client.ListMethods(env.ctx, "myapp")
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Error())
+	assert.Empty(t, result.Methods())
+}
+
+func TestInvoke_LogsFailedCalls(t *testing.T) {
+	env := setup(t)
+	env.createApp(t, "myapp", "tok123")
+
+	env.ingress.doRequest = func(ctx context.Context, req *httpingress_v1alpha.InternalHttpRequest) (*httpingress_v1alpha.InternalHttpResponse, error) {
+		body := []byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"user not found"}}`)
+		return httpResponse(200, body), nil
+	}
+	result, err := env.client.Invoke(env.ctx, "myapp", "delete-user", `{"id":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, "user not found", result.Result().Error())
+
+	env.ingress.doRequest = func(ctx context.Context, req *httpingress_v1alpha.InternalHttpRequest) (*httpingress_v1alpha.InternalHttpResponse, error) {
+		return httpResponse(500, nil), nil
+	}
+	_, err = env.client.Invoke(env.ctx, "myapp", "delete-user", `{"id":2}`)
+	require.NoError(t, err)
+
+	env.logs.mu.Lock()
+	defer env.logs.mu.Unlock()
+	require.Len(t, env.logs.entries, 2)
+	assert.Contains(t, env.logs.entries[0].Body, `error="user not found"`)
+	assert.Contains(t, env.logs.entries[1].Body, `error="admin endpoint returned status 500"`)
+	assert.Equal(t, "delete-user", env.logs.entries[0].Attributes["method"])
 }

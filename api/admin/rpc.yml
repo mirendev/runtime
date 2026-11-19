@@ -38,7 +38,7 @@ types:
       - name: safe_read
         type: bool
         index: 4
-        doc: The app declares this method only reads state and has no side effects, so tools may call it without asking a person first
+        doc: The app's own claim that this method is safe to run without asking - no side effects with any parameters, and no secrets or personal data in its result. The runtime does not check it; consumers decide what to trust it for
 
   - type: AdminMethodParam
     doc: Parameter information for an admin method
