@@ -394,6 +394,9 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		Description string `json:"description,omitempty"`
 		Category    string `json:"category,omitempty"`
 		Params      any    `json:"params,omitempty"`
+		// Decoded loosely so a malformed value cannot fail discovery of the
+		// whole method list; only a JSON true marks a method as a safe read.
+		SafeRead any `json:"safe_read,omitempty"`
 	}
 
 	resultJSON := rpcResp.Result
@@ -419,6 +422,9 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		}
 		if m.Category != "" {
 			method.SetCategory(m.Category)
+		}
+		if m.SafeRead == true {
+			method.SetSafeRead(true)
 		}
 
 		// A present "params" key (even if empty) means the method explicitly
