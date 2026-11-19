@@ -248,7 +248,7 @@ func (s *Server) logAdminCall(appEntityID, appName, method string, paramsSize in
 
 	var logMsg string
 	if errorMsg != "" {
-		logMsg = fmt.Sprintf("rpc=%s params=%d error=\"%s\" duration_ms=%d",
+		logMsg = fmt.Sprintf("rpc=%s params=%d error=%q duration_ms=%d",
 			method, paramsSize, errorMsg, duration.Milliseconds())
 	} else {
 		logMsg = fmt.Sprintf("rpc=%s params=%d status=ok duration_ms=%d",

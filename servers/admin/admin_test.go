@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"miren.dev/runtime/observability"
 	"sync"
 	"testing"
 
@@ -14,6 +13,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/httpingress/httpingress_v1alpha"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -546,4 +546,21 @@ func TestInvoke_LogsFailedCalls(t *testing.T) {
 	assert.Contains(t, env.logs.entries[0].Body, `error="user not found"`)
 	assert.Contains(t, env.logs.entries[1].Body, `error="admin endpoint returned status 500"`)
 	assert.Equal(t, "delete-user", env.logs.entries[0].Attributes["method"])
+}
+
+// App-controlled error text is quoted, so it can't forge a status=ok line.
+func TestInvoke_LogQuotesErrorMessages(t *testing.T) {
+	env := setup(t)
+	env.createApp(t, "myapp", "tok123")
+	env.ingress.doRequest = func(ctx context.Context, req *httpingress_v1alpha.InternalHttpRequest) (*httpingress_v1alpha.InternalHttpResponse, error) {
+		body := []byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"x\" status=ok"}}`)
+		return httpResponse(200, body), nil
+	}
+	_, err := env.client.Invoke(env.ctx, "myapp", "delete-user", `{}`)
+	require.NoError(t, err)
+
+	env.logs.mu.Lock()
+	defer env.logs.mu.Unlock()
+	require.Len(t, env.logs.entries, 1)
+	assert.Contains(t, env.logs.entries[0].Body, `error="x\" status=ok"`)
 }
