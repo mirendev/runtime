@@ -103,11 +103,26 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 		return nil
 	}
 
+	// Every call that reaches a known app is audited, failures included, so a
+	// call that errors still leaves a record of who asked for what.
+	paramsLen := 0
+	if args.HasParams() {
+		paramsLen = len(args.Params())
+	}
+	respond := func(result *admin_v1alpha.AdminCallResult) {
+		results.SetResult(result)
+		errorMsg := ""
+		if result.HasError() {
+			errorMsg = result.Error()
+		}
+		s.logAdminCall(app.ID.String(), appName, methodName, paramsLen, startTime, errorMsg)
+	}
+
 	// Get admin token from version
 	if appVersion.AdminToken == "" {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError("app does not have admin token configured (redeploy may be required)")
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -123,7 +138,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 		if err := json.Unmarshal([]byte(args.Params()), &params); err != nil {
 			result := &admin_v1alpha.AdminCallResult{}
 			result.SetError(fmt.Sprintf("invalid params JSON: %v", err))
-			results.SetResult(result)
+			respond(result)
 			return nil
 		}
 	}
@@ -140,7 +155,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	if err != nil {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(fmt.Sprintf("failed to marshal request: %v", err))
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -165,7 +180,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	if err != nil {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(fmt.Sprintf("failed to call admin endpoint: %v", err))
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -173,7 +188,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	if httpResp.HasError() && httpResp.Error() != "" {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(httpResp.Error())
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -181,7 +196,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	if httpResp.StatusCode() != 200 {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(fmt.Sprintf("admin endpoint returned status %d", httpResp.StatusCode()))
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -191,13 +206,13 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	if respBody == nil {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError("empty response from admin endpoint")
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 	if err := json.Unmarshal(*respBody, &rpcResp); err != nil {
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(fmt.Sprintf("failed to parse response: %v", err))
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -206,7 +221,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 		result := &admin_v1alpha.AdminCallResult{}
 		result.SetError(rpcResp.Error.Message)
 		result.SetErrorCode(int32(rpcResp.Error.Code))
-		results.SetResult(result)
+		respond(result)
 		return nil
 	}
 
@@ -218,14 +233,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	} else {
 		result.SetResult(string(resultJSON))
 	}
-	results.SetResult(result)
-
-	// Log the admin call
-	paramsLen := 0
-	if args.HasParams() {
-		paramsLen = len(args.Params())
-	}
-	s.logAdminCall(app.ID.String(), appName, methodName, paramsLen, startTime, "")
+	respond(result)
 
 	return nil
 }
@@ -240,7 +248,7 @@ func (s *Server) logAdminCall(appEntityID, appName, method string, paramsSize in
 
 	var logMsg string
 	if errorMsg != "" {
-		logMsg = fmt.Sprintf("rpc=%s params=%d error=\"%s\" duration_ms=%d",
+		logMsg = fmt.Sprintf("rpc=%s params=%d error=%q duration_ms=%d",
 			method, paramsSize, errorMsg, duration.Milliseconds())
 	} else {
 		logMsg = fmt.Sprintf("rpc=%s params=%d status=ok duration_ms=%d",
@@ -394,6 +402,7 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		Description string `json:"description,omitempty"`
 		Category    string `json:"category,omitempty"`
 		Params      any    `json:"params,omitempty"`
+		SafeRead    bool   `json:"safe_read,omitempty"`
 	}
 
 	resultJSON := rpcResp.Result
@@ -419,6 +428,9 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		}
 		if m.Category != "" {
 			method.SetCategory(m.Category)
+		}
+		if m.SafeRead {
+			method.SetSafeRead(true)
 		}
 
 		// A present "params" key (even if empty) means the method explicitly
