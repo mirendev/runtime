@@ -218,8 +218,7 @@ Response:
       "name": "list-users",
       "description": "List all users in the system",
       "category": "users",
-      "params": {"limit": "number", "offset": "number"},
-      "safe_read": true
+      "params": {"limit": "number", "offset": "number"}
     },
     {
       "name": "get-user",
@@ -231,6 +230,12 @@ Response:
       "name": "clear-cache",
       "description": "Clear the application cache",
       "category": "maintenance"
+    },
+    {
+      "name": "cache-stats",
+      "description": "Report cache hit rate and size",
+      "category": "maintenance",
+      "safe_read": true
     }
   ],
   "id": 1
@@ -245,9 +250,9 @@ Method metadata fields:
 | `description` | No | Human-readable description |
 | `category` | No | Grouping for display (e.g., "users", "maintenance") |
 | `params` | No | Parameter definitions as `{"name": "type"}` |
-| `safe_read` | No | `true` declares that the method only reads state and changes nothing, so automated tools such as Workbench may call it without asking for approval. Any other value, or omitting it, means the call needs approval. |
+| `safe_read` | No | `true` declares the method a read that is safe to run without asking: it has no side effects with any parameters, and its result contains nothing a person should see before a tool does, such as secrets or personal data. Automated tools such as Workbench may call these methods, and read their results, without approval. Must be a boolean; any other type fails discovery. |
 
-Mark a method `safe_read` only when calling it has no side effects with any parameters. Tools trust this declaration: an incorrectly marked method that writes or deletes data will run without anyone being asked. Successful calls are recorded in the app's log, but calls that fail, including a method that writes and then returns an error, are not.
+Mark a method `safe_read` only when it meets both conditions. Tools trust this declaration: an incorrectly marked method that writes or deletes data will run without anyone being asked, and one that returns personal data hands it straight to the tool. Every call, successful or not, is still recorded in the [audit log](#auditing).
 
 ## Complete Example (Go)
 
