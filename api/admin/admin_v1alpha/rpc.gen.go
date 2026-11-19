@@ -85,6 +85,7 @@ type adminMethodData struct {
 	Description *string              `cbor:"1,keyasint,omitempty" json:"description,omitempty"`
 	Params      *[]*AdminMethodParam `cbor:"2,keyasint,omitempty" json:"params,omitempty"`
 	Category    *string              `cbor:"3,keyasint,omitempty" json:"category,omitempty"`
+	SafeRead    *bool                `cbor:"4,keyasint,omitempty" json:"safe_read,omitempty"`
 }
 
 type AdminMethod struct {
@@ -150,6 +151,21 @@ func (v *AdminMethod) Category() string {
 
 func (v *AdminMethod) SetCategory(category string) {
 	v.data.Category = &category
+}
+
+func (v *AdminMethod) HasSafeRead() bool {
+	return v.data.SafeRead != nil
+}
+
+func (v *AdminMethod) SafeRead() bool {
+	if v.data.SafeRead == nil {
+		return false
+	}
+	return *v.data.SafeRead
+}
+
+func (v *AdminMethod) SetSafeRead(safe_read bool) {
+	v.data.SafeRead = &safe_read
 }
 
 func (v *AdminMethod) MarshalCBOR() ([]byte, error) {

@@ -465,3 +465,27 @@ func TestDescribeMethods_AppNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Error())
 }
+
+func TestListMethods_SafeReadOnlyForTrue(t *testing.T) {
+	env := setup(t)
+	env.createApp(t, "myapp", "tok123")
+
+	env.ingress.doRequest = func(ctx context.Context, req *httpingress_v1alpha.InternalHttpRequest) (*httpingress_v1alpha.InternalHttpResponse, error) {
+		methods := []map[string]any{
+			{"name": "list-users", "safe_read": true},
+			{"name": "delete-user", "safe_read": false},
+			{"name": "quoted", "safe_read": "true"},
+			{"name": "unmarked"},
+		}
+		return httpResponse(200, jsonrpcResponse(methods)), nil
+	}
+
+	result, err := env.client.ListMethods(env.ctx, "myapp")
+	require.NoError(t, err)
+	assert.Empty(t, result.Error(), "a malformed mark must not break discovery")
+	require.Len(t, result.Methods(), 4)
+	assert.True(t, result.Methods()[0].SafeRead())
+	for _, m := range result.Methods()[1:] {
+		assert.False(t, m.HasSafeRead(), m.Name())
+	}
+}
