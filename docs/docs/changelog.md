@@ -14,6 +14,9 @@ All notable changes to Miren Runtime will be documented in this file.
 **Upgrade Notes**
 - **Scripts in multi-target apps need an explicit target** - In directories with several targets in `.miren/deploy.toml`, unattended app commands such as `logs` and `env set` now require `-C <target>` or `MIREN_CLUSTER`. Target order no longer selects a default. Deploys without targets also require explicit cluster selection when several clusters are configured, rather than using the global active cluster. Existing command names and deprecated flags remain available during the transition; see [CLI compatibility](./cli-compatibility.md). ([#1419](https://github.com/mirendev/runtime/pull/1419))
 
+**Features**
+- **Coding agents can sign you in without being told when you're done** - `miren login start` prints the login URL and returns at once, and `miren login wait` finishes the login as soon as you approve it, exiting 75 while it's still waiting so an agent can simply run it again. `miren login status` shows whether you're signed in without needing a cluster. Run without a terminal, `miren login` now leaves a working login alone and signs in again only when the cloud has rejected it, instead of demanding `--force`. ([#1454](https://github.com/mirendev/runtime/pull/1454))
+
 **Bug Fixes**
 - **`-C` no longer changes later app commands** - Selecting a cluster applies only to that invocation instead of silently rewriting a per-app cluster pin. Existing pins are ignored but left on disk; `miren cluster switch` changes only the global active cluster. ([#1419](https://github.com/mirendev/runtime/pull/1419))
 
