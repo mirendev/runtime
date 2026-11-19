@@ -34,6 +34,11 @@ type mockCloud struct {
 	revoked sync.Map
 	// noMe makes the cloud predate the /api/v1/me endpoint.
 	noMe bool
+	// keyRevoked makes the cloud refuse every persistent key, as if each had
+	// been deleted from the account.
+	keyRevoked bool
+	// failKeyRegister makes key registration fail with a server error.
+	failKeyRegister bool
 }
 
 func freshLoginJWT(t *testing.T) string {
@@ -82,6 +87,10 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 	// "already registered" shortcut, so tests can prove a key was fully
 	// registered and not merely that begin was called.
 	mux.HandleFunc("/api/v1/users/keys/begin", func(w http.ResponseWriter, r *http.Request) {
+		if m.failKeyRegister {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		m.keyBeginHits.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"envelope":  "test-envelope",
@@ -104,6 +113,15 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 	// token has expired can no longer authenticate.
 	mux.HandleFunc("/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	mux.HandleFunc("/auth/user-key/begin", func(w http.ResponseWriter, r *http.Request) {
+		if m.keyRevoked {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unknown key"})
+			return
+		}
+		http.NotFound(w, r)
 	})
 
 	mux.HandleFunc("/api/v1/me", func(w http.ResponseWriter, r *http.Request) {

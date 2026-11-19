@@ -44,13 +44,28 @@ func authResponseError(resp *http.Response, body []byte) error {
 		return &CloudRateLimitError{RetryAt: retryAt(resp.Header, time.Now())}
 	}
 
+	var err error
 	var errResp map[string]string
 	_ = json.Unmarshal(body, &errResp)
 	if errMsg, ok := errResp["error"]; ok {
-		return fmt.Errorf("authentication failed: %s", errMsg)
+		err = fmt.Errorf("authentication failed: %s", errMsg)
+	} else {
+		err = fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
-	return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	// The cloud refusing the credential itself, such as a key deleted from the
+	// account, means signing in again, as it does for a rejected refresh token.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return &credentialRejectedError{err: err}
+	}
+	return err
 }
+
+// credentialRejectedError keeps the cloud's message while matching
+// ErrLoginRequired.
+type credentialRejectedError struct{ err error }
+
+func (e *credentialRejectedError) Error() string   { return e.err.Error() }
+func (e *credentialRejectedError) Unwrap() []error { return []error{e.err, ErrLoginRequired} }
 
 // retryAt reads when a rate-limited request may be retried. Retry-After is
 // the standard header and wins when present; cloud's limiter has historically

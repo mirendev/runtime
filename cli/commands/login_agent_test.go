@@ -296,8 +296,71 @@ func TestIdentityLabelWithoutUser(t *testing.T) {
 	cfg, err := clientconfig.LoadConfig()
 	require.NoError(t, err)
 
-	who, err := identityUser(context.Background(), cfg, "cloud")
+	who, err := identityUser(context.Background(), cfg, "cloud", true)
 	require.NoError(t, err)
 	require.Equal(t, "cloud", who)
 	require.Empty(t, getIdentityUserInfo(newTestContext(), cfg, "cloud"))
+}
+
+// TestLoginOtherCloud: an identity signed in to one cloud says nothing about
+// another, so neither start nor a non-interactive login may report it as
+// signed in there, or replace it without --force.
+func TestLoginOtherCloud(t *testing.T) {
+	r := require.New(t)
+	mc := &mockCloud{withRefresh: true}
+	srv := mc.server(t)
+	defer srv.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+
+	r.NoError(login(newTestContext(), srv.URL, "cloud", "miren-cli", false, false, false))
+
+	other := "https://staging.example.com"
+	err := login(newTestContext(), other, "cloud", "miren-cli", false, false, false)
+	r.ErrorContains(err, "already exists for "+srv.URL)
+	_, err = RunCommand(LoginStart, "--url", other, "--json")
+	r.ErrorContains(err, "already exists for "+srv.URL)
+	r.Equal(int32(1), mc.deviceCodeHits.Load())
+
+	// A trailing slash on the same cloud still matches.
+	_, err = RunCommand(LoginStart, "--url", srv.URL+"/", "--json")
+	r.NoError(err)
+}
+
+// TestLoginRevokedPersistentKey: a persistent key the cloud no longer accepts
+// reads as expired and is signed in again, like a revoked token, instead of
+// "couldn't check; use --force".
+func TestLoginRevokedPersistentKey(t *testing.T) {
+	r := require.New(t)
+	mc := &mockCloud{withRefresh: true, keyRevoked: true}
+	srv := mc.server(t)
+	defer srv.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+	t.Setenv("HOME", t.TempDir()) // no cached key token
+
+	r.NoError(login(newTestContext(), srv.URL, "cloud", "miren-cli", false, false, true))
+
+	out, err := RunCommand(LoginStatus, "--json")
+	r.Equal(ErrExitCode(1), err)
+	r.Equal("expired", decodeJSON[loginStatusJSON](t, out).Identities[0].Status)
+
+	r.NoError(login(newTestContext(), srv.URL, "cloud", "miren-cli", false, false, false))
+	r.Equal(int32(2), mc.deviceCodeHits.Load())
+}
+
+// TestLoginWaitSaveFails: once the device code is exchanged it's spent, so a
+// failure saving the login drops the pending login, letting a retried start
+// begin a fresh one, and still reports a JSON outcome.
+func TestLoginWaitSaveFails(t *testing.T) {
+	mc := &mockCloud{withRefresh: true, failKeyRegister: true}
+	srv := mc.server(t)
+	defer srv.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	_, err := RunCommand(LoginStart, "--url", srv.URL, "--persistent-key")
+	require.NoError(t, err)
+	out, err := RunCommand(LoginWait, "--json")
+	require.Error(t, err)
+	require.Equal(t, "failed", decodeJSON[loginWaitJSON](t, out).Status)
+	require.False(t, pendingExists(t, "cloud"))
 }

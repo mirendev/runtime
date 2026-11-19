@@ -189,7 +189,7 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 					identityName = newName
 				}
 			} else {
-				who, err := checkExistingLogin(ctx, config, identityName)
+				who, err := checkExistingLogin(ctx, config, identityName, cloudURL)
 				if err != nil {
 					return err
 				}
@@ -249,8 +249,17 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 // the cloud definitively rejected them, so re-authenticating the same identity
 // is safe. Any other failure is returned: re-login would then risk replacing a
 // working identity because of a network blip.
-func checkExistingLogin(ctx context.Context, config *clientconfig.Config, identityName string) (string, error) {
-	who, err := identityUser(ctx, config, identityName)
+//
+// An identity signed in to a different cloud than cloudURL is neither: it
+// says nothing about cloudURL, and re-authenticating would replace it.
+func checkExistingLogin(ctx context.Context, config *clientconfig.Config, identityName, cloudURL string) (string, error) {
+	if identity, err := config.GetIdentity(identityName); err == nil && identity != nil && identity.Issuer != "" {
+		have, want := clientconfig.NormalizeIssuerURL(identity.Issuer), clientconfig.NormalizeIssuerURL(cloudURL)
+		if have != want {
+			return "", fmt.Errorf("identity '%s' already exists for %s, not %s; use --identity to add another or --force to replace it", identityName, have, want)
+		}
+	}
+	who, err := identityUser(ctx, config, identityName, true)
 	if err == nil {
 		return who, nil
 	}
@@ -968,7 +977,9 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity 
 // by authenticating with the identity's key and parsing the JWT claims.
 // Returns empty string if unable to fetch.
 func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName string) string {
-	who, _ := identityUser(ctx, config, identityName)
+	// Labels don't ask the cloud: a picker lists several identities one
+	// after another, and an unreachable cloud shouldn't blank them all.
+	who, _ := identityUser(ctx, config, identityName, false)
 	if who == identityName {
 		// identityUser's fallback; repeating the name adds nothing to a label.
 		return ""
@@ -981,7 +992,10 @@ func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName
 // expired or revoked token identity returns an error wrapping
 // clientconfig.ErrLoginRequired. A token the cloud accepted always yields a
 // non-empty name, falling back to the identity name when it carries no claims.
-func identityUser(ctx context.Context, config *clientconfig.Config, identityName string) (string, error) {
+//
+// With verify, it also asks the cloud whether it still accepts the token;
+// without, it trusts a locally unexpired one.
+func identityUser(ctx context.Context, config *clientconfig.Config, identityName string, verify bool) (string, error) {
 	identity, err := config.GetIdentity(identityName)
 	if err != nil {
 		return "", err
@@ -1007,7 +1021,12 @@ func identityUser(ctx context.Context, config *clientconfig.Config, identityName
 	// A token identity's access token comes from the local cache until it
 	// expires, so ask the cloud whether it still accepts it: a session revoked
 	// there must not read as signed in.
-	info, err := fetchCloudUserInfo(ctx, clientconfig.NormalizeIssuerURL(authServer), token)
+	var info *cloudUserInfo
+	if verify {
+		info, err = fetchCloudUserInfo(ctx, clientconfig.NormalizeIssuerURL(authServer), token)
+	} else {
+		err = errNoUserInfoEndpoint
+	}
 	switch {
 	case errors.Is(err, errNoUserInfoEndpoint):
 	case err != nil:

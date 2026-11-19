@@ -159,7 +159,7 @@ func LoginStart(ctx *Context, opts struct {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 		if config != nil && config.HasIdentity(opts.IdentityName) {
-			who, err := checkExistingLogin(ctx, config, opts.IdentityName)
+			who, err := checkExistingLogin(ctx, config, opts.IdentityName, opts.CloudURL)
 			if err != nil {
 				return err
 			}
@@ -337,11 +337,14 @@ func loginWait(ctx *Context, identity string, waitFor time.Duration, asJSON bool
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
+	// The device code is spent once exchanged, so the pending login goes
+	// whether or not saving succeeds; a retried start then begins afresh.
+	_ = os.Remove(pendingLoginPath(pending.Identity))
 	ctx.Completed("Authentication successful!")
 	if err := finishLogin(ctx, pending.CloudURL, pending.Identity, pending.KeyName, false, pending.PersistentKey, tokens); err != nil {
+		report(loginWaitJSON{Status: "failed", Identity: pending.Identity, Error: err.Error()})
 		return err
 	}
-	_ = os.Remove(pendingLoginPath(pending.Identity))
 
 	if asJSON {
 		result := loginWaitJSON{Status: "logged_in", Identity: pending.Identity}
@@ -405,7 +408,7 @@ func LoginStatus(ctx *Context, opts struct {
 				// no cloud session to check.
 				entry.Status = "certificate"
 			} else {
-				who, err := identityUser(ctx, config, name)
+				who, err := identityUser(ctx, config, name, true)
 				switch {
 				case err == nil:
 					entry.Status = "logged_in"
