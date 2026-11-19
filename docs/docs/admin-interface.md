@@ -247,7 +247,7 @@ Method metadata fields:
 | `params` | No | Parameter definitions as `{"name": "type"}` |
 | `safe_read` | No | `true` declares that the method only reads state and changes nothing, so automated tools such as Workbench may call it without asking for approval. Any other value, or omitting it, means the call needs approval. |
 
-Mark a method `safe_read` only when calling it has no side effects with any parameters. Tools trust this declaration: an incorrectly marked method that writes or deletes data will run without anyone being asked. Calls are still recorded in the audit log.
+Mark a method `safe_read` only when calling it has no side effects with any parameters. Tools trust this declaration: an incorrectly marked method that writes or deletes data will run without anyone being asked. Successful calls are recorded in the app's log, but calls that fail, including a method that writes and then returns an error, are not.
 
 ## Complete Example (Go)
 
