@@ -163,7 +163,7 @@ func (o *AppCentric) clusterNameForTarget(target *appconfig.DeployTarget) (strin
 	cfg, err := o.LoadConfig()
 	if err != nil {
 		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
-			return "", fmt.Errorf("no client configuration available; run '%s' to authenticate and 'miren cluster add' to configure the cluster for deploy target %q", loginCommand(), target.Name)
+			return "", fmt.Errorf("no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target %q", target.Name)
 		}
 		return "", err
 	}
@@ -347,7 +347,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	}
 
 	if ctx.ClientConfig == nil {
-		return fmt.Errorf("no client configuration available; run '%s' to authenticate or install a server locally", loginCommand())
+		return fmt.Errorf("no client configuration available; run `miren login` to authenticate or install a server locally")
 	}
 
 	// A machine-readable format is by definition driven by a program, even if
@@ -397,7 +397,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 
 	// Re-check after potential cluster add
 	if ctx.ClientConfig.GetClusterCount() == 0 {
-		return fmt.Errorf("no clusters configured; run '%s' to authenticate and configure a cluster, or install a server locally", loginCommand())
+		return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and configure a cluster, or install a server locally")
 	}
 	// The interactive path above may have just chosen the cluster; the summary
 	// was created before that and must name the one actually used.

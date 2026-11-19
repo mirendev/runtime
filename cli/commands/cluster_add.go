@@ -580,7 +580,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	} else {
 		ctx.Completed("Successfully added cluster %q at %s", clusterName, address)
 		ctx.Info("No identity is attached, so this cluster authenticates with whatever the environment supplies.")
-		ctx.Info("Outside CI that's usually not what you want. Run '%s' and add it again.", loginCommand())
+		ctx.Info("Outside CI that's usually not what you want. Run 'miren login' and add it again.")
 	}
 	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", clusterName)
 

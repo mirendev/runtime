@@ -167,7 +167,7 @@ func checkAuthentication(env *doctorEnv) checkResult {
 					"could be obtained for it. Commands that need authentication will " +
 					"fail even though the server is reachable.",
 				Actions: []ui.Action{
-					{Command: loginCommand(), Note: "sign in again"},
+					{Command: "miren login", Note: "sign in again"},
 					{Command: "miren whoami", Note: "inspect the current identity"},
 				},
 				// Shown by default: "your token expired" and "that identity

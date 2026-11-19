@@ -171,7 +171,7 @@ const clusterAddJSONDoc = "With `--format json`, the command prints one result d
 	"|------|---------|\n" +
 	"| `invalid_flags` | The flags given can't mean anything together. |\n" +
 	"| `interactive_required` | Answering needs a person. Name a cluster with `--cluster`, or use `--force` to overwrite. |\n" +
-	"| `no_identities` | Nobody is logged in. Run `miren login start`, then `miren login wait`. |\n" +
+	"| `no_identities` | Nobody is logged in. Run `miren login`. |\n" +
 	"| `identity_error` | The identity named wasn't found, or one has to be named with `--identity`. |\n" +
 	"| `cloud_request_failed` | Miren Cloud didn't answer. Worth retrying. |\n" +
 	"| `cluster_not_found` | No cluster by that name, or none on the account. |\n" +

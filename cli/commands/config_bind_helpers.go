@@ -191,7 +191,7 @@ func isPrivateAddress(host string) bool {
 // something to offer besides logging in, so each command can point at its own
 // way out while the rest of the message stays the same.
 func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, suggestion string) (string, error) {
-	noIdentities := codedErrorf(codeNoIdentities, "no identities configured. Please run '%s' first%s", loginCommand(), suggestion)
+	noIdentities := codedErrorf(codeNoIdentities, "no identities configured. Please run 'miren login' first%s", suggestion)
 
 	if config == nil || !config.HasIdentities() {
 		return "", noIdentities

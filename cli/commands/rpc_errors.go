@@ -165,7 +165,7 @@ func (c *Context) unusableClusterError(name string, err error) error {
 		Detail:  "The cluster is configured, but we couldn't turn its entry into a connection.",
 		Actions: []ui.Action{
 			{Command: "miren cluster list", Note: "see how it's configured"},
-			{Command: loginCommand(), Note: "if its credentials have expired"},
+			{Command: "miren login", Note: "if its credentials have expired"},
 		},
 		Cause:     err,
 		ShowCause: true,
@@ -329,7 +329,7 @@ func (c *Context) diagnoseResolve(re *rpc.ResolveError) *ui.Diagnostic {
 				Detail: "You don't have permission to access this cluster. If you were " +
 					"signed in previously, your session may have expired.",
 				Actions: []ui.Action{
-					{Command: loginCommand(), Note: "sign in again"},
+					{Command: "miren login", Note: "sign in again"},
 					{Command: "miren whoami", Note: "check your current identity"},
 				},
 				// Both are reachable via errors.Is, so callers matching the

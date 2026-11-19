@@ -91,7 +91,7 @@ func DebugConnection(ctx *Context, opts struct {
 			identityName = opts.Identity
 			ctx.Info("Using identity: %s", opts.Identity)
 		} else {
-			ctx.Warn("No configuration found. Please run '%s' first.", loginCommand())
+			ctx.Warn("No configuration found. Please run 'miren login' first.")
 			return fmt.Errorf("no configuration found")
 		}
 	} else if opts.Cluster != "" {
@@ -128,7 +128,7 @@ func DebugConnection(ctx *Context, opts struct {
 				ctx.Info("Using certificate auth from cluster '%s'", opts.Cluster)
 			}
 		} else {
-			ctx.Warn("No configuration found. Please run '%s' first.", loginCommand())
+			ctx.Warn("No configuration found. Please run 'miren login' first.")
 			return fmt.Errorf("no configuration found")
 		}
 	} else {
@@ -150,7 +150,7 @@ func DebugConnection(ctx *Context, opts struct {
 			if config == nil {
 				// On-the-fly identities (legacy CloudAuth) require a config to
 				// resolve keys; without one there is nothing to authenticate with.
-				ctx.Warn("No configuration found. Please run '%s' first.", loginCommand())
+				ctx.Warn("No configuration found. Please run 'miren login' first.")
 				return fmt.Errorf("no configuration found")
 			}
 

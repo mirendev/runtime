@@ -27,7 +27,7 @@ Messages are written for people and will be reworded. The code is the stable par
 |------|---------|
 | `invalid_flags` | The flags given can't mean anything together. |
 | `interactive_required` | Answering needs a person. Name a cluster with `--cluster`, or use `--force` to overwrite. |
-| `no_identities` | Nobody is logged in. Run `miren login start`, then `miren login wait`. |
+| `no_identities` | Nobody is logged in. Run `miren login`. |
 | `identity_error` | The identity named wasn't found, or one has to be named with `--identity`. |
 | `cloud_request_failed` | Miren Cloud didn't answer. Worth retrying. |
 | `cluster_not_found` | No cluster by that name, or none on the account. |

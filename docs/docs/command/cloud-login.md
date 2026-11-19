@@ -17,11 +17,14 @@ miren cloud login [flags]
 ## Flags
 
 - `--force, -f` — Overwrite existing identity without prompting
+- `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Name for this identity in config (default: `cloud`)
+- `--json` — Shorthand for --format json
 - `--key-name, -k` — Name for the authentication key (default: `miren-cli`)
 - `--no-save` — Don't save credentials to config file
 - `--persistent-key` — Register a persistent key instead of the default renewable token login
 - `--url, -u` — Cloud URL (default: `https://miren.cloud`)
+- `--wait` — How long to wait for the login to be approved (default 10m at a terminal; without one, check once and exit 75 while it is pending)
 
 ## Global Options
 
@@ -43,11 +46,12 @@ miren cloud login
 miren cloud login --url https://cloud.example.com
 ```
 
-## Subcommands
+**From a script or agent: print the URL, then finish once approved:**
 
-- [`miren cloud login start`](./cloud-login-start.md) — Begin a login without waiting for it; finish with 'login wait'
-- [`miren cloud login status`](./cloud-login-status.md) — Show whether each cloud identity is signed in (exits 1 when none is, 2 when none could be checked)
-- [`miren cloud login wait`](./cloud-login-wait.md) — Finish a login begun with 'login start' (exits 75 while still awaiting approval)
+```bash
+miren login --json
+miren login --wait 50s --json
+```
 
 ## See also
 

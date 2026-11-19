@@ -26,28 +26,10 @@ func RegisterAll(d *mflags.Dispatcher) {
 		WithLocalOnly(),
 		WithExample(mflags.Example{Name: "Login", Body: "miren cloud login"}),
 		WithExample(mflags.Example{Name: "Login to a specific cloud instance", Body: "miren cloud login --url https://cloud.example.com"}),
+		WithExample(mflags.Example{Name: "From a script or agent: print the URL, then finish once approved", Body: "miren login --json\nmiren login --wait 50s --json"}),
 	)
 	d.Dispatch("cloud login", login)
 	d.Dispatch("login", login.Alias("login", WithGroup(GroupClient)))
-	loginStart := Infer("cloud login start", "Begin a login without waiting for it; finish with 'login wait'", LoginStart,
-		WithLocalOnly(),
-		WithExample(mflags.Example{Name: "Start a login and print the URL as JSON", Body: "miren login start --json"}),
-	)
-	d.Dispatch("cloud login start", loginStart)
-	d.Dispatch("login start", loginStart.Alias("login start"))
-	loginWait := Infer("cloud login wait", "Finish a login begun with 'login start' (exits 75 while still awaiting approval)", LoginWait,
-		WithLocalOnly(),
-		WithExample(mflags.Example{Name: "Wait up to 50 seconds for approval", Body: "miren login wait"}),
-		WithExample(mflags.Example{Name: "Wait until the login expires", Body: "miren login wait --timeout 0"}),
-	)
-	d.Dispatch("cloud login wait", loginWait)
-	d.Dispatch("login wait", loginWait.Alias("login wait"))
-	loginStatus := Infer("cloud login status", "Show whether each cloud identity is signed in (exits 1 when none is, 2 when none could be checked)", LoginStatus,
-		WithLocalOnly(),
-		WithExample(mflags.Example{Name: "Check login state as JSON", Body: "miren login status --json"}),
-	)
-	d.Dispatch("cloud login status", loginStatus)
-	d.Dispatch("login status", loginStatus.Alias("login status"))
 	logout := Infer("cloud logout", "Remove local authentication credentials", Logout,
 		WithLocalOnly(),
 		WithExample(mflags.Example{Name: "Logout", Body: "miren cloud logout"}),

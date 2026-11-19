@@ -98,9 +98,6 @@
     },
     "items": [
       "command/cloud-login",
-      "command/cloud-login-start",
-      "command/cloud-login-status",
-      "command/cloud-login-wait",
       "command/cloud-logout",
       "command/cloud-whoami"
     ]
@@ -279,20 +276,7 @@
   },
   "command/help",
   "command/init",
-  {
-    "type": "category",
-    "label": "login",
-    "collapsed": true,
-    "link": {
-      "type": "doc",
-      "id": "command/login"
-    },
-    "items": [
-      "command/login-start",
-      "command/login-status",
-      "command/login-wait"
-    ]
-  },
+  "command/login",
   "command/logout",
   {
     "type": "category",
