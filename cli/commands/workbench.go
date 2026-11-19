@@ -80,7 +80,7 @@ func Detective(ctx *Context, opts workbenchOptions) error {
 		return err
 	}
 	if identity.Type == clientconfig.IdentityCertificate {
-		return fmt.Errorf("detective needs a Cloud login, not a certificate identity; run 'miren login'")
+		return fmt.Errorf("detective needs a Cloud login, not a certificate identity; run '%s'", loginCommand())
 	}
 	cloudURL := cluster.CloudURL
 	if cloudURL == "" {

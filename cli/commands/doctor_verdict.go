@@ -126,7 +126,7 @@ func checkServer(env *doctorEnv) checkResult {
 					Detail: "The server is healthy and reachable. It just won't accept who " +
 						"you're signed in as.",
 					Actions: []ui.Action{
-						{Command: "miren login", Note: "sign in again"},
+						{Command: loginCommand(), Note: "sign in again"},
 						{Command: "miren whoami", Note: "check your current identity"},
 					},
 					Cause: env.connErr,

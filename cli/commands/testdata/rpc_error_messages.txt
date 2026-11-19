@@ -69,8 +69,8 @@ ERROR: access denied on cluster "local"
   previously, your session may have expired.
 
   Try
-    miren login     sign in again
-    miren whoami    check your current identity
+    miren login start    sign in again
+    miren whoami         check your current identity
 
 # CI token verified but matched no binding
 
@@ -147,7 +147,7 @@ ERROR: can't connect using the configuration for cluster "homelab"
 
   Try
     miren cluster list    see how it's configured
-    miren login           if its credentials have expired
+    miren login start     if its credentials have expired
 
   Cause: cluster has a client certificate but no client key
 

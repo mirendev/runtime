@@ -301,7 +301,7 @@ cluster_id = "cluster-prod-id"
 		Target:     "prod",
 	}
 	err := opts.Validate(&GlobalFlags{})
-	require.EqualError(t, err, "no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target \"prod\"")
+	require.EqualError(t, err, "no client configuration available; run 'miren login start' to authenticate and 'miren cluster add' to configure the cluster for deploy target \"prod\"")
 }
 
 func TestDeployOptsValidateTargetWithoutConfig(t *testing.T) {

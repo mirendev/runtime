@@ -47,7 +47,7 @@ func checkConfiguration(env *doctorEnv) checkResult {
 				Summary: "no clusters are configured",
 				Detail:  "miren doesn't know which cluster to talk to yet.",
 				Actions: []ui.Action{
-					{Command: "miren login", Note: "authenticate with miren.cloud"},
+					{Command: loginCommand(), Note: "authenticate with miren.cloud"},
 					{Command: "miren cluster add", Note: "add a cluster manually"},
 				},
 			},

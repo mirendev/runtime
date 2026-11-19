@@ -43,6 +43,12 @@ miren cloud login
 miren cloud login --url https://cloud.example.com
 ```
 
+## Subcommands
+
+- [`miren cloud login start`](./cloud-login-start.md) — Begin a login without waiting for it; finish with 'login wait'
+- [`miren cloud login status`](./cloud-login-status.md) — Show whether each cloud identity is signed in (exits 1 when none is, 2 when none could be checked)
+- [`miren cloud login wait`](./cloud-login-wait.md) — Finish a login begun with 'login start' (exits 75 while still awaiting approval)
+
 ## See also
 
 - [`miren cloud`](./cloud.md)

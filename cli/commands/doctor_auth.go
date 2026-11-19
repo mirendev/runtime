@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,6 +23,11 @@ type cloudUserInfo struct {
 	} `json:"user"`
 }
 
+// errNoUserInfoEndpoint means the cloud predates /api/v1/me.
+var errNoUserInfoEndpoint = errors.New("cloud has no user info endpoint")
+
+// fetchCloudUserInfo asks the cloud who a token belongs to. A token the cloud
+// rejects returns an error wrapping clientconfig.ErrLoginRequired.
 func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
 	meURL, err := url.JoinPath(cloudURL, "/api/v1/me")
 	if err != nil {
@@ -41,7 +47,13 @@ func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUser
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized:
+		return nil, fmt.Errorf("status %d: %w", resp.StatusCode, clientconfig.ErrLoginRequired)
+	case http.StatusNotFound:
+		return nil, errNoUserInfoEndpoint
+	default:
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
@@ -155,7 +167,7 @@ func checkAuthentication(env *doctorEnv) checkResult {
 					"could be obtained for it. Commands that need authentication will " +
 					"fail even though the server is reachable.",
 				Actions: []ui.Action{
-					{Command: "miren login", Note: "sign in again"},
+					{Command: loginCommand(), Note: "sign in again"},
 					{Command: "miren whoami", Note: "inspect the current identity"},
 				},
 				// Shown by default: "your token expired" and "that identity

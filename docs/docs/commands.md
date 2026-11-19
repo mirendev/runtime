@@ -93,6 +93,9 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren cloud`](./command/cloud.md) | Miren Cloud authentication |
 | [`miren cloud login`](./command/cloud-login.md) | Authenticate with miren.cloud |
+| [`miren cloud login start`](./command/cloud-login-start.md) | Begin a login without waiting for it; finish with 'login wait' |
+| [`miren cloud login status`](./command/cloud-login-status.md) | Show whether each cloud identity is signed in (exits 1 when none is, 2 when none could be checked) |
+| [`miren cloud login wait`](./command/cloud-login-wait.md) | Finish a login begun with 'login start' (exits 75 while still awaiting approval) |
 | [`miren cloud logout`](./command/cloud-logout.md) | Remove local authentication credentials |
 | [`miren cloud whoami`](./command/cloud-whoami.md) | Display information about the current authenticated user |
 
@@ -199,6 +202,9 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren login`](./command/login.md) | Alias for 'miren cloud login' |
+| [`miren login start`](./command/login-start.md) | Alias for 'miren cloud login start' |
+| [`miren login status`](./command/login-status.md) | Alias for 'miren cloud login status' |
+| [`miren login wait`](./command/login-wait.md) | Alias for 'miren cloud login wait' |
 
 ## logout
 

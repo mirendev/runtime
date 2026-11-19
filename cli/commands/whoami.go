@@ -16,7 +16,7 @@ func Whoami(ctx *Context, opts struct {
 }) error {
 	// Check if we have a configured cluster
 	if ctx.ClusterConfig == nil {
-		return fmt.Errorf("no cluster configured - use 'miren cluster add' to add a cluster")
+		return fmt.Errorf("no cluster configured - use 'miren cluster add' to add a cluster, or 'miren login status' to check your cloud login")
 	}
 
 	// Where this cluster is reached. A cloud-routed one has no address of its

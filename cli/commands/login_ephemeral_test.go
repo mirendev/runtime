@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,7 +24,16 @@ import (
 type mockCloud struct {
 	keyBeginHits    atomic.Int32
 	keyCompleteHits atomic.Int32
+	deviceCodeHits  atomic.Int32
 	withRefresh     bool
+	// held keeps the device flow pending until it is cleared, standing in for
+	// a person who hasn't approved the login yet.
+	held atomic.Bool
+	// revoked holds access tokens the cloud no longer accepts, though they
+	// haven't expired locally.
+	revoked sync.Map
+	// noMe makes the cloud predate the /api/v1/me endpoint.
+	noMe bool
 }
 
 func freshLoginJWT(t *testing.T) string {
@@ -40,6 +51,7 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v1/device/code", func(w http.ResponseWriter, r *http.Request) {
+		m.deviceCodeHits.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"device_code":      "dev-code",
 			"user_code":        "ABCD-1234",
@@ -50,6 +62,10 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/v1/device/token", func(w http.ResponseWriter, r *http.Request) {
+		if m.held.Load() {
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "pending"})
+			return
+		}
 		resp := map[string]any{
 			"status":       "authorized",
 			"access_token": freshLoginJWT(t),
@@ -82,6 +98,24 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 		require.NotEmpty(t, req.Signature, "complete must carry a signature over the challenge")
 		m.keyCompleteHits.Add(1)
 		w.WriteHeader(http.StatusOK)
+	})
+
+	// Every refresh token is treated as revoked, so an identity whose access
+	// token has expired can no longer authenticate.
+	mux.HandleFunc("/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	mux.HandleFunc("/api/v1/me", func(w http.ResponseWriter, r *http.Request) {
+		if m.noMe {
+			http.NotFound(w, r)
+			return
+		}
+		if _, ok := m.revoked.Load(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"user": map[string]any{"email": "user@example.com"}})
 	})
 
 	mux.HandleFunc("/api/v1/users/clusters", func(w http.ResponseWriter, r *http.Request) {

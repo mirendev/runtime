@@ -42,3 +42,9 @@ miren cloud login
 ```bash
 miren cloud login --url https://cloud.example.com
 ```
+
+## Subcommands
+
+- [`miren login start`](./login-start.md) — Alias for 'miren cloud login start'
+- [`miren login status`](./login-status.md) — Alias for 'miren cloud login status'
+- [`miren login wait`](./login-wait.md) — Alias for 'miren cloud login wait'

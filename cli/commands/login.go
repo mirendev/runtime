@@ -189,24 +189,20 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 					identityName = newName
 				}
 			} else {
-				// Non-interactive: require explicit --force or --identity
-				return fmt.Errorf("identity '%s' already exists; use --force to overwrite or --identity to specify a different name", identityName)
+				who, err := checkExistingLogin(ctx, config, identityName)
+				if err != nil {
+					return err
+				}
+				if who != "" {
+					ctx.Completed("Already logged in as %s (identity '%s'); use --force to re-authenticate", who, identityName)
+					return nil
+				}
+				ctx.Info("Identity '%s' has expired; re-authenticating.", identityName)
 			}
 		}
 	}
 
-	// Decide whether to use the persistent-key flow. Ephemeral token login is the
-	// default; --persistent-key opts back in. An existing keypair identity keeps
-	// its key on re-login so we never silently orphan a registered server-side key.
-	usePersistentKey := persistentKey
-	if !usePersistentKey {
-		if existing, err := clientconfig.LoadConfig(); err == nil && existing != nil {
-			if id, err := existing.GetIdentity(identityName); err == nil && id != nil && id.Type == clientconfig.IdentityKeypair {
-				usePersistentKey = true
-				ctx.Info("Identity '%s' already uses a persistent key; keeping it.", identityName)
-			}
-		}
-	}
+	usePersistentKey := resolvePersistentKey(ctx, identityName, persistentKey)
 
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
@@ -215,25 +211,7 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 		return fmt.Errorf("failed to initiate device flow: %w", err)
 	}
 
-	// Display instructions to user
-	if initResp.VerificationURLComplete != "" {
-		ctx.Completed("Please authenticate using one of these methods:")
-		ctx.Info("")
-		ctx.Info("Option 1: Visit this URL (code included):")
-		ctx.Info("  %s", initResp.VerificationURLComplete)
-		ctx.Info("")
-		ctx.Info("Option 2: Visit this URL and enter the code manually:")
-		ctx.Info("  URL: %s", initResp.VerificationURL)
-		ctx.Info("  Code: %s", initResp.UserCode)
-		ctx.Info("")
-	} else {
-		ctx.Completed("Please visit the following URL to authenticate:")
-		ctx.Info("  %s", initResp.VerificationURL)
-		ctx.Info("")
-		ctx.Info("Enter this code when prompted:")
-		ctx.Info("  %s", initResp.UserCode)
-		ctx.Info("")
-	}
+	printVerificationInstructions(ctx, initResp)
 
 	// Start polling for authentication
 	ctx.Info("Waiting for authentication...")
@@ -262,6 +240,67 @@ func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force, 
 
 	ctx.Completed("Authentication successful!")
 
+	return finishLogin(ctx, cloudURL, identityName, keyName, noSave, usePersistentKey, tokens)
+}
+
+// checkExistingLogin decides what a non-interactive login does about an
+// identity that already exists. It returns who the identity is signed in as
+// when its credentials still work, so the login can be skipped, and "" when
+// the cloud definitively rejected them, so re-authenticating the same identity
+// is safe. Any other failure is returned: re-login would then risk replacing a
+// working identity because of a network blip.
+func checkExistingLogin(ctx context.Context, config *clientconfig.Config, identityName string) (string, error) {
+	who, err := identityUser(ctx, config, identityName)
+	if err == nil {
+		return who, nil
+	}
+	if errors.Is(err, clientconfig.ErrLoginRequired) {
+		return "", nil
+	}
+	return "", fmt.Errorf("identity '%s' already exists and could not be verified (%v); use --force to re-authenticate or --identity to specify a different name", identityName, err)
+}
+
+// resolvePersistentKey decides whether to use the persistent-key flow.
+// Ephemeral token login is the default; --persistent-key opts back in. An
+// existing keypair identity keeps its key on re-login so we never silently
+// orphan a registered server-side key.
+func resolvePersistentKey(ctx *Context, identityName string, persistentKey bool) bool {
+	if persistentKey {
+		return true
+	}
+	if existing, err := clientconfig.LoadConfig(); err == nil && existing != nil {
+		if id, err := existing.GetIdentity(identityName); err == nil && id != nil && id.Type == clientconfig.IdentityKeypair {
+			ctx.Info("Identity '%s' already uses a persistent key; keeping it.", identityName)
+			return true
+		}
+	}
+	return false
+}
+
+func printVerificationInstructions(ctx *Context, initResp *DeviceFlowInitResponse) {
+	if initResp.VerificationURLComplete != "" {
+		ctx.Completed("Please authenticate using one of these methods:")
+		ctx.Info("")
+		ctx.Info("Option 1: Visit this URL (code included):")
+		ctx.Info("  %s", initResp.VerificationURLComplete)
+		ctx.Info("")
+		ctx.Info("Option 2: Visit this URL and enter the code manually:")
+		ctx.Info("  URL: %s", initResp.VerificationURL)
+		ctx.Info("  Code: %s", initResp.UserCode)
+		ctx.Info("")
+	} else {
+		ctx.Completed("Please visit the following URL to authenticate:")
+		ctx.Info("  %s", initResp.VerificationURL)
+		ctx.Info("")
+		ctx.Info("Enter this code when prompted:")
+		ctx.Info("  %s", initResp.UserCode)
+		ctx.Info("")
+	}
+}
+
+// finishLogin stores the credentials from a completed device flow, or prints
+// them under --no-save.
+func finishLogin(ctx *Context, cloudURL, identityName, keyName string, noSave, usePersistentKey bool, tokens *deviceFlowTokens) error {
 	// An ephemeral login needs a refresh token to renew without re-login. If the
 	// cloud is too old to return one, fall back to the persistent-key flow so
 	// login still produces durable credentials.
@@ -434,6 +473,24 @@ func initiateDeviceFlow(cloudURL string) (*DeviceFlowInitResponse, error) {
 	return &initResp, nil
 }
 
+// pollTimeoutError is pollForToken's deadline expiring before the login was
+// approved, denied, or expired. It matches context.DeadlineExceeded.
+type pollTimeoutError struct {
+	after        time.Duration
+	reachedCloud bool  // some poll got an answer from the cloud itself
+	lastErr      error // why the latest poll didn't, if it didn't
+}
+
+func (e *pollTimeoutError) Error() string {
+	msg := fmt.Sprintf("authentication timed out after %v", e.after)
+	if e.lastErr != nil {
+		msg += fmt.Sprintf(" (last poll failed: %v)", e.lastErr)
+	}
+	return msg
+}
+
+func (e *pollTimeoutError) Unwrap() error { return context.DeadlineExceeded }
+
 func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, maxDuration time.Duration, progress func(string)) (*deviceFlowTokens, error) {
 	url, err := url.JoinPath(cloudURL, "/api/v1/device/token")
 	if err != nil {
@@ -452,8 +509,16 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// The first poll goes out at once: a login approved before the call began
+	// must not be missed by a deadline shorter than the polling interval.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	wait := interval
+
+	// Whether any poll got an answer from the cloud itself, and why the latest
+	// one didn't, so a timeout can tell "not approved yet" from "unreachable".
+	reachedCloud := false
+	var lastErr error
 
 	// Create a timeout context with the maximum duration
 	timeoutCtx, cancel := context.WithTimeout(ctx, maxDuration)
@@ -463,10 +528,11 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 		select {
 		case <-timeoutCtx.Done():
 			if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
-				return nil, fmt.Errorf("authentication timed out after %v: %w", maxDuration, timeoutCtx.Err())
+				return nil, &pollTimeoutError{after: maxDuration, reachedCloud: reachedCloud, lastErr: lastErr}
 			}
 			return nil, timeoutCtx.Err()
-		case <-ticker.C:
+		case <-timer.C:
+			timer.Reset(wait)
 			// Bind each poll request to the timeout context so a hung server
 			// cannot outlive the overall deadline.
 			req, err := http.NewRequestWithContext(timeoutCtx, "POST", url, bytes.NewBuffer(jsonData))
@@ -479,6 +545,7 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 			resp, err := client.Do(req)
 			if err != nil {
 				// Network error, continue polling
+				lastErr = err
 				progress("pending")
 				continue
 			}
@@ -486,6 +553,7 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
+				lastErr = err
 				progress("pending")
 				continue
 			}
@@ -494,9 +562,12 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 			// non-200 with non-JSON bodies during transient outages; wait out
 			// the polling window like a transport error. Bounded by timeoutCtx.
 			if resp.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("cloud returned status %d", resp.StatusCode)
 				progress("pending")
 				continue
 			}
+			reachedCloud = true
+			lastErr = nil
 
 			// 200 + valid JSON is dispatched by the switch below. 200 + non-JSON
 			// is a genuine origin contract violation -- surface it immediately
@@ -531,7 +602,8 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 				switch exchangeResp.Error {
 				case "slow_down":
 					// Increase polling interval
-					ticker.Reset(interval * 2)
+					wait = interval * 2
+					timer.Reset(wait)
 					progress("pending")
 				case "authorization_pending":
 					progress("pending")
@@ -896,39 +968,67 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity 
 // by authenticating with the identity's key and parsing the JWT claims.
 // Returns empty string if unable to fetch.
 func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName string) string {
-	identity, err := config.GetIdentity(identityName)
-	if err != nil || identity == nil {
+	who, _ := identityUser(ctx, config, identityName)
+	if who == identityName {
+		// identityUser's fallback; repeating the name adds nothing to a label.
 		return ""
+	}
+	return who
+}
+
+// identityUser authenticates as a cloud identity and returns who it is signed
+// in as, confirming with the cloud that it still accepts the credential. An
+// expired or revoked token identity returns an error wrapping
+// clientconfig.ErrLoginRequired. A token the cloud accepted always yields a
+// non-empty name, falling back to the identity name when it carries no claims.
+func identityUser(ctx context.Context, config *clientconfig.Config, identityName string) (string, error) {
+	identity, err := config.GetIdentity(identityName)
+	if err != nil {
+		return "", err
+	}
+	if identity == nil {
+		return "", fmt.Errorf("identity %q not found", identityName)
 	}
 
 	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
-		return ""
+		return "", fmt.Errorf("identity %q is a %s identity, not a cloud login", identityName, identity.Type)
 	}
 
-	// Get auth server URL
 	authServer := identity.Issuer
 	if authServer == "" {
-		return ""
+		return "", fmt.Errorf("identity %q has no issuer", identityName)
 	}
 
-	// Authenticate and get JWT token
 	token, err := config.TokenForIdentity(ctx, identityName, identity, authServer)
 	if err != nil {
-		return ""
+		return "", err
 	}
 
-	// Parse claims to get user info
-	claims, err := auth.ParseUnverifiedClaims(token)
-	if err != nil || claims == nil {
-		return ""
-	}
-
+	// A token identity's access token comes from the local cache until it
+	// expires, so ask the cloud whether it still accepts it: a session revoked
+	// there must not read as signed in.
+	info, err := fetchCloudUserInfo(ctx, clientconfig.NormalizeIssuerURL(authServer), token)
 	switch {
+	case errors.Is(err, errNoUserInfoEndpoint):
+	case err != nil:
+		return "", err
+	case info.User.Email != "":
+		return info.User.Email, nil
+	case info.User.Name != "":
+		return info.User.Name, nil
+	}
+
+	claims, err := auth.ParseUnverifiedClaims(token)
+	switch {
+	case err != nil || claims == nil:
+		return identityName, nil
 	case claims.Email != "":
-		return claims.Email
+		return claims.Email, nil
 	case claims.Name != "":
-		return claims.Name
+		return claims.Name, nil
+	case claims.Subject != "":
+		return claims.Subject, nil
 	default:
-		return claims.Subject
+		return identityName, nil
 	}
 }
