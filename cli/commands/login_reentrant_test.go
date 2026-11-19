@@ -357,3 +357,82 @@ func TestLoginSaveFails(t *testing.T) {
 	require.Equal(t, "failed", decodeJSON[loginJSON](t, out).Status)
 	require.False(t, pendingExists(t, "cloud"))
 }
+
+// TestLoginForceUnattended: a forced login run without a terminal must be
+// resumable, or every rerun would mint a new URL and an agent could never
+// finish one unless the user approved within a single check.
+func TestLoginForceUnattended(t *testing.T) {
+	r := require.New(t)
+	mc := &mockCloud{withRefresh: true}
+	srv := mc.server(t)
+	defer srv.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+
+	r.NoError(testLogin(newTestContext(), srv.URL, false, false))
+	mc.held.Store(true)
+
+	out, err := RunCommand(Login, "--url", srv.URL, "--force", "--json")
+	r.Equal(ErrExitCode(exitLoginPending), err)
+	r.Contains(decodeJSON[loginJSON](t, out).Next, "--force", "next must continue the forced login")
+
+	_, err = RunCommand(Login, "--url", srv.URL, "--force", "--wait", "1500ms")
+	r.Equal(ErrExitCode(exitLoginPending), err)
+	r.Equal(int32(2), mc.deviceCodeHits.Load(), "a forced rerun must resume, not mint a new code")
+
+	// Once approved, the next forced rerun finishes the same login.
+	mc.held.Store(false)
+	out, err = RunCommand(Login, "--url", srv.URL, "--force", "--json")
+	r.NoError(err)
+	r.Equal("logged_in", decodeJSON[loginJSON](t, out).Status)
+	r.Equal(int32(2), mc.deviceCodeHits.Load())
+	r.False(pendingExists(t, "cloud"))
+}
+
+// TestLoginRotationKeepsSharedKey: two identities on different clouds share
+// one key by name. When only one cloud revokes it, rotating that identity's
+// key must leave the other identity's key alone.
+func TestLoginRotationKeepsSharedKey(t *testing.T) {
+	r := require.New(t)
+	mcA, mcB := &mockCloud{withRefresh: true}, &mockCloud{withRefresh: true}
+	srvA, srvB := mcA.server(t), mcB.server(t)
+	defer srvA.Close()
+	defer srvB.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	loginTo := func(url, identity string) error {
+		return login(newTestContext(), loginRequest{
+			CloudURL: url, Identity: identity, KeyName: defaultKeyName,
+			PersistentKey: true, Wait: 10 * time.Second,
+		})
+	}
+	r.NoError(loginTo(srvA.URL, "a"))
+	r.NoError(loginTo(srvB.URL, "b"))
+	mcA.revokeKeys()
+
+	r.NoError(loginTo(srvA.URL, "a"))
+
+	status := func() map[string]string {
+		who, err := runWhoamiJSON(t)
+		r.NoError(err)
+		m := map[string]string{}
+		for _, id := range who.Identities {
+			m[id.Name] = id.Status
+		}
+		return m
+	}
+	r.Equal(map[string]string{"a": "logged_in", "b": "logged_in"}, status())
+
+	cfg, err := clientconfig.LoadConfig()
+	r.NoError(err)
+	a, err := cfg.GetIdentity("a")
+	r.NoError(err)
+	r.NotEqual(defaultKeyName, a.KeyRef, "the rotated key gets its own name")
+
+	// A later forced re-login of a keeps its rotated key rather than going
+	// back to the revoked shared one.
+	r.NoError(login(newTestContext(), loginRequest{
+		CloudURL: srvA.URL, Identity: "a", KeyName: defaultKeyName, Force: true, Wait: 10 * time.Second,
+	}))
+	r.Equal(map[string]string{"a": "logged_in", "b": "logged_in"}, status())
+}

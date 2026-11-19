@@ -123,7 +123,7 @@ func TestSaveKeyPairToConfig(t *testing.T) {
 		keyName := "test-key"
 
 		// Save to config
-		err = saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName, false)
+		err = saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName)
 		require.NoError(t, err)
 
 		// Load config and verify
@@ -162,11 +162,11 @@ func TestSaveKeyPairToConfig(t *testing.T) {
 		keyName := "test-key"
 
 		// Save first identity with the key
-		err = saveKeyPairToConfig("identity1", "https://test.miren.cloud", keyPair, keyName, false)
+		err = saveKeyPairToConfig("identity1", "https://test.miren.cloud", keyPair, keyName)
 		require.NoError(t, err)
 
 		// Save second identity with the same key name
-		err = saveKeyPairToConfig("identity2", "https://test.miren.cloud", keyPair, keyName, false)
+		err = saveKeyPairToConfig("identity2", "https://test.miren.cloud", keyPair, keyName)
 		require.NoError(t, err)
 
 		// Verify only one key exists
@@ -290,7 +290,7 @@ func TestKeyManagementIntegration(t *testing.T) {
 		fingerprint1 := keyPair1.Fingerprint()
 
 		// Step 2: Save the key to config
-		err = saveKeyPairToConfig(identityName, cloudURL, keyPair1, keyName, false)
+		err = saveKeyPairToConfig(identityName, cloudURL, keyPair1, keyName)
 		require.NoError(t, err)
 
 		// Step 3: Simulate a new login attempt - should reuse the key
@@ -337,13 +337,13 @@ func TestKeyManagementIntegration(t *testing.T) {
 		keyName := "shared-key"
 
 		// Create multiple identities with the same key
-		err = saveKeyPairToConfig("identity1", "https://cloud1.miren.cloud", keyPair, keyName, false)
+		err = saveKeyPairToConfig("identity1", "https://cloud1.miren.cloud", keyPair, keyName)
 		require.NoError(t, err)
 
-		err = saveKeyPairToConfig("identity2", "https://cloud2.miren.cloud", keyPair, keyName, false)
+		err = saveKeyPairToConfig("identity2", "https://cloud2.miren.cloud", keyPair, keyName)
 		require.NoError(t, err)
 
-		err = saveKeyPairToConfig("identity3", "https://cloud3.miren.cloud", keyPair, keyName, false)
+		err = saveKeyPairToConfig("identity3", "https://cloud3.miren.cloud", keyPair, keyName)
 		require.NoError(t, err)
 
 		// Verify all identities reference the same key

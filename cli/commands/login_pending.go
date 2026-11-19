@@ -34,7 +34,11 @@ type pendingLogin struct {
 	PersistentKey bool   `json:"persistent_key"`
 	// RotateKey: the cloud refused the identity's stored key, so finishing
 	// this login generates a new one.
-	RotateKey               bool      `json:"rotate_key,omitempty"`
+	RotateKey bool `json:"rotate_key,omitempty"`
+	// Force: started by `login --force`. Only a forced run resumes it, and a
+	// forced run resumes only it, so --force still escapes a stale login but
+	// stays re-entrant.
+	Force                   bool      `json:"force,omitempty"`
 	DeviceCode              string    `json:"device_code"`
 	UserCode                string    `json:"user_code"`
 	VerificationURL         string    `json:"verification_uri"`
@@ -151,18 +155,16 @@ func beginOrResumeLogin(ctx *Context, req loginRequest, rotateKey bool) (*pendin
 	}
 	defer func() { _ = lock.Unlock() }()
 
-	if !req.Force {
-		// Reuse an outstanding login so a retry doesn't orphan a URL the user
-		// may already have opened.
-		pending, err := loadPendingLogin(req.Identity)
-		if err != nil {
-			return nil, err
-		}
-		if pending != nil && clientconfig.NormalizeIssuerURL(pending.CloudURL) == cloudURL &&
-			pending.KeyName == req.KeyName && pending.PersistentKey == persistentKey {
-			pending.RotateKey = pending.RotateKey || rotateKey
-			return pending, nil
-		}
+	// Reuse an outstanding login so a retry doesn't orphan a URL the user may
+	// already have opened.
+	pending, err := loadPendingLogin(req.Identity)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil && clientconfig.NormalizeIssuerURL(pending.CloudURL) == cloudURL &&
+		pending.KeyName == req.KeyName && pending.PersistentKey == persistentKey && pending.Force == req.Force {
+		pending.RotateKey = pending.RotateKey || rotateKey
+		return pending, nil
 	}
 
 	ctx.Info("Initiating device flow authentication...")
@@ -175,12 +177,13 @@ func beginOrResumeLogin(ctx *Context, req loginRequest, rotateKey bool) (*pendin
 	if initResp.ExpiresIn > 0 {
 		expiresIn = time.Duration(initResp.ExpiresIn) * time.Second
 	}
-	pending := &pendingLogin{
+	pending = &pendingLogin{
 		CloudURL:                cloudURL,
 		Identity:                req.Identity,
 		KeyName:                 req.KeyName,
 		PersistentKey:           persistentKey,
 		RotateKey:               rotateKey,
+		Force:                   req.Force,
 		DeviceCode:              initResp.DeviceCode,
 		UserCode:                initResp.UserCode,
 		VerificationURL:         initResp.VerificationURL,

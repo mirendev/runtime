@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/clientconfig"
@@ -204,6 +205,9 @@ func (r loginRequest) nextCommand() string {
 	if r.NoSave {
 		cmd += " --no-save"
 	}
+	if r.Force {
+		cmd += " --force"
+	}
 	if r.JSON {
 		cmd += " --json"
 	}
@@ -318,6 +322,14 @@ func login(ctx *Context, req loginRequest) error {
 				}
 				ctx.Info("Identity '%s' has expired; re-authenticating.", req.Identity)
 				rotateKey = keyRejected(ctx, config, req.Identity)
+			}
+		}
+
+		// Re-authenticating a keypair identity keeps using the key it already
+		// references, which may not be the default name after a rotation.
+		if config != nil && req.KeyName == defaultKeyName {
+			if id, err := config.GetIdentity(req.Identity); err == nil && id != nil && id.Type == clientconfig.IdentityKeypair && id.KeyRef != "" {
+				req.KeyName = id.KeyRef
 			}
 		}
 	}
@@ -506,6 +518,15 @@ func finishLogin(ctx *Context, cloudURL, identityName, keyName string, noSave, u
 	return persistTokenIdentity(ctx, identityName, cloudURL, tokens)
 }
 
+// rotatedKeyName names the key replacing a rejected one, keeping the base name
+// so `miren-cli` becomes `miren-cli-20261119T234500`.
+func rotatedKeyName(keyName string) string {
+	if i := strings.LastIndex(keyName, "-20"); i > 0 && len(keyName)-i == len("-20060102T150405") {
+		keyName = keyName[:i]
+	}
+	return keyName + "-" + time.Now().UTC().Format("20060102T150405")
+}
+
 // persistKeypairIdentity runs the persistent-key flow: register (or reuse) an
 // ed25519 key with the cloud, store a keypair identity, and auto-configure a
 // cluster. accessToken is the device-flow JWT used only to authorize key
@@ -514,7 +535,10 @@ func persistKeypairIdentity(ctx *Context, identityName, cloudURL, keyName string
 	var keyPair *cloudauth.KeyPair
 	var err error
 	if rotateKey {
-		ctx.Info("The cloud no longer accepts this identity's key; generating a new one...")
+		// A new name, not the old one overwritten: other identities, possibly
+		// on clouds that still accept it, may reference the same key.
+		keyName = rotatedKeyName(keyName)
+		ctx.Info("The cloud no longer accepts this identity's key; generating a new one, %q...", keyName)
 		keyPair, err = cloudauth.GenerateKeyPair()
 	} else {
 		keyPair, err = getOrCreateKey(ctx, keyName)
@@ -529,7 +553,7 @@ func persistKeypairIdentity(ctx *Context, identityName, cloudURL, keyName string
 	}
 	ctx.Info("Public key registered successfully")
 
-	if err := saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName, rotateKey); err != nil {
+	if err := saveKeyPairToConfig(identityName, cloudURL, keyPair, keyName); err != nil {
 		return fmt.Errorf("failed to save identity to config: %w", err)
 	}
 	ctx.Info("Identity '%s' saved to config", identityName)
@@ -944,8 +968,7 @@ func registerPublicKey(cloudURL, token string, keyPair *cloudauth.KeyPair, keyNa
 
 // saveKeyPairToConfig saves a keypair as a key in clientconfig.d and creates
 // an identity that references it
-// replaceKey overwrites a stored key of the same name.
-func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair, keyName string, replaceKey bool) error {
+func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPair, keyName string) error {
 	// Get private key in PEM format
 	privateKeyPEM, err := keyPair.PrivateKeyPEM()
 	if err != nil {
@@ -969,7 +992,7 @@ func saveKeyPairToConfig(identityName, cloudURL string, keyPair *cloudauth.KeyPa
 	}
 
 	// Save the key separately (if it doesn't already exist)
-	if replaceKey || !mainConfig.HasKey(keyName) {
+	if !mainConfig.HasKey(keyName) {
 		// Get hostname for metadata
 		hostname, err := os.Hostname()
 		if err != nil {

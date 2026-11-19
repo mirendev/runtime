@@ -126,6 +126,13 @@ func (m *mockCloud) server(t *testing.T) *httptest.Server {
 		var req BeginKeyRegistrationRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		m.keyBeginHits.Add(1)
+		m.keysMu.Lock()
+		active := m.keys[publicKeyFingerprint(t, req.PublicKey)] == "active"
+		m.keysMu.Unlock()
+		if active {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"envelope":  publicKeyFingerprint(t, req.PublicKey),
 			"challenge": base64.StdEncoding.EncodeToString([]byte("challenge-bytes")),
