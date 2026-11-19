@@ -138,7 +138,8 @@ func savePendingLogin(p *pendingLogin) error {
 }
 
 // beginOrResumeLogin returns the pending login for req, starting a device flow
-// only when there is none to resume. --force always starts afresh.
+// only when there is none to resume. A forced run resumes only a forced
+// pending login, so --force still replaces a login started without it.
 func beginOrResumeLogin(ctx *Context, req loginRequest, rotateKey bool) (*pendingLogin, error) {
 	persistentKey := resolvePersistentKey(ctx, req.Identity, req.PersistentKey)
 	cloudURL := clientconfig.NormalizeIssuerURL(req.CloudURL)
