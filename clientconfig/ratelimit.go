@@ -52,9 +52,11 @@ func authResponseError(resp *http.Response, body []byte) error {
 	} else {
 		err = fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
-	// The cloud refusing the credential itself, such as a key deleted from the
-	// account, means signing in again, as it does for a rejected refresh token.
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	// The cloud refusing the credential itself, such as a revoked key, means
+	// signing in again, as it does for a rejected refresh token. Only a 401:
+	// a 403 is also what an intermediary such as a WAF answers, and a transient
+	// failure must never read as a logout.
+	if resp.StatusCode == http.StatusUnauthorized {
 		return &credentialRejectedError{err: err}
 	}
 	return err
