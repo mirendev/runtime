@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/clientconfig"
@@ -157,7 +158,10 @@ func clusterIdentity(ctx *Context) (hostname, authMethod, identityName string, c
 	return hostname, authMethod, identityName, claims, nil
 }
 
-// cloudIdentityStatuses checks each configured identity with its cloud.
+// cloudIdentityStatuses checks each configured identity with its cloud. The
+// checks run in parallel so an unreachable cloud costs one timeout rather than
+// one per identity. They aren't cancelled early: a token refresh cut off after
+// the cloud rotated the token, but before it was saved, would sign the user out.
 func cloudIdentityStatuses(ctx *Context, config *clientconfig.Config) []whoamiIdentityJSON {
 	out := []whoamiIdentityJSON{}
 	if config == nil {
@@ -173,8 +177,18 @@ func cloudIdentityStatuses(ctx *Context, config *clientconfig.Config) []whoamiId
 			// Certificates authenticate to one cluster directly; there is no
 			// cloud session to check.
 			entry.Status = "certificate"
-		} else {
-			who, err := identityUser(ctx, config, name, true)
+		}
+		out = append(out, entry)
+	}
+
+	var wg sync.WaitGroup
+	for i := range out {
+		if out[i].Status != "" {
+			continue
+		}
+		entry := &out[i]
+		wg.Go(func() {
+			who, err := identityUser(ctx, config, entry.Name, true)
 			switch {
 			case err == nil:
 				entry.Status = "logged_in"
@@ -185,9 +199,9 @@ func cloudIdentityStatuses(ctx *Context, config *clientconfig.Config) []whoamiId
 				entry.Status = "error"
 				entry.Error = err.Error()
 			}
-		}
-		out = append(out, entry)
+		})
 	}
+	wg.Wait()
 	return out
 }
 
