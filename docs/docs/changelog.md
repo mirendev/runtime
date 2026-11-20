@@ -14,6 +14,9 @@ All notable changes to Miren Runtime will be documented in this file.
 **Upgrade Notes**
 - **Commands that forward SIGTERM themselves can drop the trap** - If a `command` works around the shell with its own forwarding trap, such as `trap 'kill $child' TERM; app & child=$!; wait`, the app now gets SIGTERM twice: once from the trap and once from Miren. Remove the trap. ([#1451](https://github.com/mirendev/runtime/pull/1451))
 
+**Features**
+- **Coding agents can sign you in without being told when you're done** - Without a terminal, `miren login` now prints the login URL and returns at once, exiting 75 while the login awaits approval; running it again resumes the same login, and `--wait 50s` waits up to that long for approval. At a terminal it still waits as before. It also leaves a login that still works alone, and signs in again with a fresh key when the cloud has revoked a persistent key, instead of demanding `--force`. `miren whoami` now always lists your cloud logins and any pending login, even with no cluster configured. ([#1454](https://github.com/mirendev/runtime/pull/1454))
+
 **Bug Fixes**
 - **Apps behind a shell get SIGTERM on stop** - Miren runs a `command` as `/bin/sh -c`, and on Debian-based images that shell is dash, which stays at PID 1 and drops SIGTERM. Apps never heard about shutdowns and were killed when `shutdown_timeout` ran out. That included the valkey and memcached addons, so stopping a valkey addon skipped its final snapshot and could lose up to a minute of writes. Miren now passes SIGTERM on to the shell's direct children. ([#1451](https://github.com/mirendev/runtime/pull/1451))
 

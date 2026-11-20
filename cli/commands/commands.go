@@ -26,6 +26,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 		WithLocalOnly(),
 		WithExample(mflags.Example{Name: "Login", Body: "miren cloud login"}),
 		WithExample(mflags.Example{Name: "Login to a specific cloud instance", Body: "miren cloud login --url https://cloud.example.com"}),
+		WithExample(mflags.Example{Name: "From a script or agent: print the URL, then finish once approved", Body: "miren login --json\nmiren login --wait 50s --json"}),
 	)
 	d.Dispatch("cloud login", login)
 	d.Dispatch("login", login.Alias("login", WithGroup(GroupClient)))
