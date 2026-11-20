@@ -313,6 +313,7 @@ func login(ctx *Context, req loginRequest) error {
 			default:
 				who, err := checkExistingLogin(ctx, config, req.Identity, req.CloudURL)
 				if err != nil {
+					report(loginJSON{Status: "failed", Error: err.Error()})
 					return err
 				}
 				if who != "" {
@@ -336,6 +337,7 @@ func login(ctx *Context, req loginRequest) error {
 
 	pending, err := beginOrResumeLogin(ctx, req, rotateKey)
 	if err != nil {
+		report(loginJSON{Status: "failed", Error: err.Error()})
 		return err
 	}
 

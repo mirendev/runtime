@@ -304,12 +304,13 @@ func TestLoginOtherCloud(t *testing.T) {
 
 	other := "https://staging.example.com"
 	r.ErrorContains(testLogin(newTestContext(), other, false, false), "already exists for "+srv.URL)
-	_, err := RunCommand(Login, "--url", other, "--json")
+	out, err := RunCommand(Login, "--url", other, "--json")
 	r.ErrorContains(err, "already exists for "+srv.URL)
+	r.Equal("failed", decodeJSON[loginJSON](t, out).Status, "--json must always print its document")
 	r.Equal(int32(1), mc.deviceCodeHits.Load())
 
 	// A trailing slash on the same cloud still matches.
-	out, err := RunCommand(Login, "--url", srv.URL+"/", "--json")
+	out, err = RunCommand(Login, "--url", srv.URL+"/", "--json")
 	r.NoError(err)
 	r.Equal("logged_in", decodeJSON[loginJSON](t, out).Status)
 }
@@ -435,4 +436,17 @@ func TestLoginRotationKeepsSharedKey(t *testing.T) {
 		CloudURL: srvA.URL, Identity: "a", KeyName: defaultKeyName, Force: true, Wait: 10 * time.Second,
 	}))
 	r.Equal(map[string]string{"a": "logged_in", "b": "logged_in"}, status())
+}
+
+// TestLoginJSONCloudDown: a first login against a cloud that can't be reached
+// still prints a JSON outcome.
+func TestLoginJSONCloudDown(t *testing.T) {
+	mc := &mockCloud{withRefresh: true}
+	srv := mc.server(t)
+	srv.Close()
+	t.Setenv("MIREN_CONFIG", t.TempDir())
+
+	out, err := RunCommand(Login, "--url", srv.URL, "--json")
+	require.Error(t, err)
+	require.Equal(t, "failed", decodeJSON[loginJSON](t, out).Status)
 }
